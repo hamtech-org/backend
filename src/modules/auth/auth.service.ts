@@ -291,9 +291,9 @@ export const authService = {
   },
 
   /**
-   * Đăng nhập
+   * Đăng nhập - Step 1: Gửi OTP
    */
-  login: async (data: ILoginDto, meta: IRequestMeta): Promise<ILoginResponse> => {
+  login: async (data: ILoginDto): Promise<{ message: string }> => {
     // 1. Tìm user theo email
     const user = await authRepository.findUserByEmail(data.email);
     if (!user) {
@@ -306,7 +306,79 @@ export const authService = {
       throw new UnauthorizedError('Email hoặc mật khẩu không đúng');
     }
 
-    // 3. Tạo tokens + session
+    // 3. Lưu thông tin user tạm thời vào Redis
+    const redis = getRedis();
+    const loginData = {
+      userId: user.userId,
+      email: user.email,
+      role: user.role,
+      tokenVersion: user.tokenVersion,
+    };
+    await redis.setex(
+      `login_data:${data.email}`,
+      REGISTRATION_EXPIRY_SECONDS,
+      JSON.stringify(loginData),
+    );
+
+    // 4. Tạo OTP và lưu vào Redis
+    const otp = generateOTP();
+    const otpHash = await bcrypt.hash(otp, SALT_ROUNDS);
+    await redis.setex(
+      `${REDIS_VERIFY_PREFIX}${data.email}`,
+      OTP_EXPIRY_SECONDS,
+      otpHash,
+    );
+
+    // 5. Gửi OTP qua email
+    try {
+      await sendVerificationEmail(data.email, otp);
+      logger.info(`Login verification email sent to ${data.email}`);
+    } catch (error) {
+      logger.error(`Failed to send login verification email to ${data.email}:`, error);
+    }
+
+    return { message: 'OTP sent to email for login verification.' };
+  },
+
+  /**
+   * Đăng nhập - Step 2: Verify OTP và hoàn tất đăng nhập
+   */
+  verifyLoginOtp: async (
+    email: string,
+    otp: string,
+    meta: IRequestMeta,
+  ): Promise<ILoginResponse> => {
+    const redis = getRedis();
+
+    // 1. Lấy và xác thực OTP
+    const storedOtpHash = await redis.get(`${REDIS_VERIFY_PREFIX}${email}`);
+    if (!storedOtpHash) {
+      throw new ValidationError('OTP đã hết hạn hoặc không hợp lệ.');
+    }
+
+    const isOtpValid = await bcrypt.compare(otp, storedOtpHash);
+    if (!isOtpValid) {
+      throw new ValidationError('OTP không đúng.');
+    }
+
+    // 2. Lấy lại thông tin login từ Redis
+    const loginDataString = await redis.get(`login_data:${email}`);
+    if (!loginDataString) {
+      throw new ValidationError('Phiên đăng nhập đã hết hạn. Vui lòng thử lại.');
+    }
+    const loginData = JSON.parse(loginDataString);
+
+    // 3. Tìm user để lấy đầy đủ thông tin
+    const user = await authRepository.findUserById(loginData.userId);
+    if (!user) {
+      throw new UnauthorizedError('Tài khoản không tồn tại');
+    }
+
+    // 4. Xóa data tạm trong Redis
+    await redis.del(`${REDIS_VERIFY_PREFIX}${email}`);
+    await redis.del(`login_data:${email}`);
+
+    // 5. Tạo tokens + session
     const sessionId = uuidv4();
     const tokens = generateTokens({
       userId: user.userId,
@@ -317,7 +389,7 @@ export const authService = {
     });
 
     await createNewSession(user, tokens.refreshToken, meta);
-    logger.info(`User logged in: ${user.userId}`);
+    logger.info(`User logged in with OTP verification: ${user.userId}`);
 
     return { ...tokens, userId: user.userId };
   },

@@ -12,6 +12,7 @@ import {
   changePasswordSchema,
   faceLoginSchema,
   verifyEmailSchema,
+  verifyLoginOtpSchema,
 } from './auth.validator.js';
 
 const router = Router();
@@ -20,6 +21,7 @@ const router = Router();
 router.post('/register', validate(registerSchema), authController.register);
 router.post('/verify-email', validate(verifyEmailSchema), authController.verifyEmail);
 router.post('/login', loginLimiter, validate(loginSchema), authController.login);
+router.post('/verify-login-otp', validate(verifyLoginOtpSchema), authController.verifyLoginOtp);
 router.post('/refresh-token', validate(refreshTokenSchema), authController.refreshToken);
 router.post('/forgot-password', validate(forgotPasswordSchema), authController.forgotPassword);
 router.post('/reset-password', validate(resetPasswordSchema), authController.resetPassword);

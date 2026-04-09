@@ -14,7 +14,7 @@ const getRequestMeta = (req: Request): IRequestMeta => ({
 export const authController = {
   register: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const result = await authService.register(req.body, getRequestMeta(req));
+      const result = await authService.register(req.body);
       sendCreated(res, result, 'Đăng ký thành công');
     } catch (error) {
       next(error);
@@ -23,7 +23,7 @@ export const authController = {
 
   login: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const result = await authService.login(req.body, getRequestMeta(req));
+      const result = await authService.login(req.body);
       sendSuccess(res, result, 'Đăng nhập thành công');
     } catch (error) {
       next(error);
@@ -72,7 +72,17 @@ export const authController = {
     try {
       const { email, otp } = req.body as { email: string; otp: string };
       const result = await authService.verifyEmail(email, otp, getRequestMeta(req));
-      sendSuccess(res, result, 'Xác thực email thành công');
+      sendSuccess(res, result, 'Email đã được xác thực thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  verifyLoginOtp: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { email, otp } = req.body as { email: string; otp: string };
+      const result = await authService.verifyLoginOtp(email, otp, getRequestMeta(req));
+      sendSuccess(res, result, 'Đăng nhập thành công');
     } catch (error) {
       next(error);
     }

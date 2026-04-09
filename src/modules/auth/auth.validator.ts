@@ -54,3 +54,8 @@ export const verifyEmailSchema = z.object({
   email: z.string().email('Email không hợp lệ'),
   otp: z.string().length(6, 'OTP phải có 6 chữ số').regex(/^\d+$/, 'OTP chỉ được chứa chữ số'),
 });
+
+export const verifyLoginOtpSchema = z.object({
+  email: z.string().email('Email không hợp lệ'),
+  otp: z.string().length(6, 'OTP phải có 6 chữ số').regex(/^\d+$/, 'OTP chỉ được chứa chữ số'),
+});
