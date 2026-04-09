@@ -1,4 +1,4 @@
-import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, UpdateCommand, QueryCommand, BatchGetCommand } from '@aws-sdk/lib-dynamodb';
 import { dynamoClient } from '@/config/database.js';
 import type { IUser, IUpdateProfileDto } from './user.types.js';
 
@@ -29,5 +29,41 @@ export const userRepository = {
       ReturnValues: 'ALL_NEW',
     }));
     return result.Attributes as IUser;
+  },
+
+  search: async (query: string, limit: number = 10, offset: number = 0): Promise<IUser[]> => {
+    // Search by displayName or email (case-insensitive) using GSI
+    const result = await dynamoClient.send(new QueryCommand({
+      TableName: TABLE_NAME,
+      IndexName: 'GSI-1',
+      KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :sk)',
+      ExpressionAttributeValues: {
+        ':pk': 'SEARCH',
+        ':sk': query.toLowerCase(),
+      },
+      Limit: limit,
+      ExclusiveStartKey: offset > 0 ? { offset } : undefined,
+      ScanIndexForward: true,
+    }));
+    return (result.Items as IUser[]) || [];
+  },
+
+  findMultipleById: async (userIds: string[]): Promise<IUser[]> => {
+    if (userIds.length === 0) return [];
+
+    const keys = userIds.map((userId) => ({
+      PK: `USER#${userId}`,
+      SK: 'PROFILE',
+    }));
+
+    const result = await dynamoClient.send(new BatchGetCommand({
+      RequestItems: {
+        [TABLE_NAME]: {
+          Keys: keys,
+        },
+      },
+    }));
+
+    return (result.Responses?.[TABLE_NAME] as IUser[]) || [];
   },
 };

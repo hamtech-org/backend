@@ -25,4 +25,14 @@ export const userService = {
   updateProfile: async (userId: string, data: IUpdateProfileDto): Promise<IUser> => {
     return userRepository.update(userId, data);
   },
+
+  searchUsers: async (query: string, limit: number = 10, offset: number = 0): Promise<IUserPublic[]> => {
+    const users = await userRepository.search(query, limit, offset);
+    return users.map(toPublicProfile);
+  },
+
+  getMultipleUsers: async (userIds: string[]): Promise<IUserPublic[]> => {
+    const users = await userRepository.findMultipleById(userIds);
+    return users.map(toPublicProfile);
+  },
 };

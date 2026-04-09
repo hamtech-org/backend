@@ -47,3 +47,18 @@ export interface IUpdateProfileDto {
   avatar?: string;
   phone?: string;
 }
+
+export interface IUserStats {
+  userId: string;
+  displayName: string;
+  avatar: string | null;
+  followersCount: number;
+  followingCount: number;
+  postsCount: number;
+}
+
+export interface ISearchUserQuery {
+  q: string;
+  limit?: number;
+  offset?: number;
+}

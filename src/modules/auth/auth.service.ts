@@ -601,7 +601,11 @@ export const authService = {
     }
 
     // Decode base64 → Buffer
-    const imageBytes = Buffer.from(imageBase64, 'base64');
+    // Strip data:image/...;base64, prefix nếu có
+    const base64Data = imageBase64.includes(',')
+      ? imageBase64.split(',')[1]
+      : imageBase64;
+    const imageBytes = Buffer.from(base64Data, 'base64');
 
     // Index face vào Rekognition
     const faceId = await indexFace(userId, imageBytes);
@@ -641,7 +645,11 @@ export const authService = {
     imageBase64: string,
     meta: IRequestMeta,
   ): Promise<ILoginResponse> => {
-    const imageBytes = Buffer.from(imageBase64, 'base64');
+    // Strip data:image/...;base64, prefix nếu có
+    const base64Data = imageBase64.includes(',')
+      ? imageBase64.split(',')[1]
+      : imageBase64;
+    const imageBytes = Buffer.from(base64Data, 'base64');
 
     // 1. Tìm khuôn mặt trong collection
     const match = await searchFace(imageBytes);
