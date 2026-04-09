@@ -10,6 +10,7 @@ const envSchema = z.object({
 
   JWT_PRIVATE_KEY: z.string().min(1),
   JWT_PUBLIC_KEY: z.string().min(1),
+  JWT_ACCESS_SECRET: z.string().min(1),
   JWT_ACCESS_EXPIRY: z.string().default('15m'),
   JWT_REFRESH_SECRET: z.string().min(1),
   JWT_REFRESH_EXPIRY: z.string().default('7d'),
@@ -49,6 +50,9 @@ const envSchema = z.object({
   SNS_REGION: z.string().default('ap-southeast-1'),
 
   GOOGLE_GEMINI_API_KEY: z.string().default(''),
+
+  REKOGNITION_COLLECTION_ID: z.string().default('zalogram-faces'),
+  REKOGNITION_FACE_MATCH_THRESHOLD: z.coerce.number().default(95),
 
   CORS_ORIGINS: z.string().default('http://localhost:5173'),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
