@@ -34,7 +34,9 @@ services:
     container_name: zalogram-dynamodb
     ports:
       - '8000:8000'
-    command: '-jar DynamoDBLocal.jar -sharedDb -inMemory'
+    command: '-jar DynamoDBLocal.jar -sharedDb'
+    volumes:
+      - dynamodb-data:/home/dynamodblocal
     networks:
       - zalogram-network
 
@@ -105,6 +107,7 @@ services:
 volumes:
   backend-node-modules:
   redis-data:
+  dynamodb-data:
   es-data:
 
 networks:

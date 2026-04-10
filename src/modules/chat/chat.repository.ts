@@ -11,7 +11,7 @@ export const chatRepository = {
       TableName: CONVERSATIONS_TABLE,
       Key: { PK: `CONV#${conversationId}`, SK: 'META' },
     }));
-    return (result.Items as unknown as IConversation) ?? null;
+    return (result.Item as unknown as IConversation) ?? null;
   },
 
   getMessages: async (conversationId: string, limit: number = 20): Promise<IMessage[]> => {

@@ -617,7 +617,7 @@ export const authService = {
 
     // 1. 🔍 Xác thực liveness TRƯỚC indexing
     console.log('🎭 [DEBUG] Verifying face liveness with sessionId:', livenessSessionId);
-    const livenessResult = await detectFaceLiveness(livenessSessionId, imageBytes);
+    const livenessResult = await detectFaceLiveness(livenessSessionId);
 
     if (!livenessResult.isLive) {
       logger.warn(
@@ -700,7 +700,7 @@ export const authService = {
 
     // 0. 🔍 Xác thực liveness TRƯỚC tìm kiếm face
     console.log('🎭 [DEBUG] Verifying face liveness with sessionId:', livenessSessionId);
-    const livenessResult = await detectFaceLiveness(livenessSessionId, imageBytes);
+    const livenessResult = await detectFaceLiveness(livenessSessionId);
 
     if (!livenessResult.isLive) {
       logger.warn(
