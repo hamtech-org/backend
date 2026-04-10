@@ -4,6 +4,8 @@ import {
   IndexFacesCommand,
   SearchFacesByImageCommand,
   DeleteFacesCommand,
+  DetectFaceLivenessCommand,
+  CreateFaceLivenessSessionCommand,
 } from '@aws-sdk/client-rekognition';
 import { env } from '@/config/env.js';
 import { logger } from '@/shared/utils/logger.js';
@@ -153,4 +155,85 @@ export const deleteFace = async (faceId: string): Promise<void> => {
     }),
   );
   logger.info(`Face deleted from collection: ${faceId}`);
+};
+
+// ──────────────────────────────────────────────
+// Face Liveness (Anti-Spoofing)
+// ──────────────────────────────────────────────
+
+export interface FaceLivenessResult {
+  sessionId: string;
+  confidence: number;
+  isLive: boolean;
+}
+
+/**
+ * Tạo session mới cho face liveness check
+ * User phải hoàn thành movement challenge trước khi index face
+ *
+ * @returns sessionId để sử dụng ở frontend + backend verify
+ */
+export const createLivenessSession = async (): Promise<string> => {
+  try {
+    const result = await rekognitionClient.send(new CreateFaceLivenessSessionCommand({}));
+
+    const sessionId = result.SessionId;
+    if (!sessionId) {
+      throw new Error('Không thể tạo liveness session');
+    }
+
+    logger.debug(`Liveness session created: ${sessionId}`);
+    return sessionId;
+  } catch (error) {
+    logger.error('Failed to create liveness session:', error);
+    throw error;
+  }
+};
+
+/**
+ * Xác thực face liveness bằng session ID + image
+ * - Gọi sau khi user hoàn thành movement challenge
+ * - Trả về độ tin cậy và kết quả (live hay spoofed)
+ *
+ * @param sessionId - Session ID từ createLivenessSession
+ * @param imageBytes - Ảnh từ webcam/camera (JPEG/PNG)
+ * @returns { sessionId, confidence, isLive }
+ */
+export const detectFaceLiveness = async (
+  sessionId: string,
+  imageBytes: Buffer,
+): Promise<FaceLivenessResult> => {
+  try {
+    const result = await rekognitionClient.send(
+      new DetectFaceLivenessCommand({
+        SessionId: sessionId,
+        Image: {
+          Bytes: imageBytes,
+        },
+      }),
+    );
+
+    const confidence = result.Confidence ?? 0;
+    // AWS trả về:
+    // - Confidence: 0-100 (độ tin cậy)
+    // - Status: SUCCEEDED (live), FAILED (spoofed), UNABLE_TO_DETERMINE (không rõ)
+    const isLive = result.FaceDetected === true && confidence >= 80; // Ngưỡng 80%
+
+    const livenessResult: FaceLivenessResult = {
+      sessionId,
+      confidence: Math.round(confidence * 100) / 100,
+      isLive,
+    };
+
+    if (isLive) {
+      logger.debug(`✅ Face liveness verified (confidence: ${confidence}%)`);
+    } else {
+      logger.warn(`❌ Face liveness failed (confidence: ${confidence}%)`);
+    }
+
+    return livenessResult;
+  } catch (error) {
+    logger.error('Failed to detect face liveness:', error);
+    throw error;
+  }
 };

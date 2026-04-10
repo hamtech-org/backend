@@ -49,6 +49,15 @@ export const faceLoginSchema = z.object({
     .string()
     .min(1, 'Ảnh khuôn mặt không được để trống')
     .max(7_000_000, 'Ảnh quá lớn (tối đa ~5MB base64)'),
+  livenessSessionId: z.string().min(1, 'Liveness session ID không được để trống'),
+});
+
+export const enableFaceLoginSchema = z.object({
+  image: z
+    .string()
+    .min(1, 'Ảnh khuôn mặt không được để trống')
+    .max(7_000_000, 'Ảnh quá lớn (tối đa ~5MB base64)'),
+  livenessSessionId: z.string().min(1, 'Liveness session ID không được để trống'),
 });
 
 export const verifyEmailSchema = z.object({

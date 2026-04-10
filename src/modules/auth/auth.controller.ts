@@ -117,10 +117,26 @@ export const authController = {
 
   // ── Face Login ──
 
+  /**
+   * Tạo session mới cho face liveness check
+   * Frontend gọi endpoint này để bắt đầu movement challenge
+   */
+  createLivenessSession: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await authService.createLivenessSession();
+      sendSuccess(res, result, 'Liveness session created');
+    } catch (error) {
+      next(error);
+    }
+  },
+
   enableFaceLogin: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { image } = req.body as { image: string };
-      await authService.enableFaceLogin(req.user!.userId, image);
+      const { image, livenessSessionId } = req.body as {
+        image: string;
+        livenessSessionId: string;
+      };
+      await authService.enableFaceLogin(req.user!.userId, image, livenessSessionId);
       sendSuccess(res, null, 'Đã bật đăng nhập bằng khuôn mặt');
     } catch (error) {
       next(error);
@@ -138,8 +154,17 @@ export const authController = {
 
   loginWithFace: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { email, image } = req.body as { email: string; image: string };
-      const result = await authService.loginWithFace(email, image, getRequestMeta(req));
+      const { email, image, livenessSessionId } = req.body as {
+        email: string;
+        image: string;
+        livenessSessionId: string;
+      };
+      const result = await authService.loginWithFace(
+        email,
+        image,
+        livenessSessionId,
+        getRequestMeta(req),
+      );
       sendSuccess(res, result, 'Đăng nhập bằng khuôn mặt thành công');
     } catch (error) {
       next(error);

@@ -5,7 +5,7 @@ import { env } from '@/config/env.js';
 import { getRedis } from '@/config/redis.js';
 import { logger } from '@/shared/utils/logger.js';
 import { getLocationFromIp } from '@/shared/utils/geolocation.js';
-import { indexFace, searchFace, deleteFace } from '@/shared/utils/rekognition.js';
+import { indexFace, searchFace, deleteFace, createLivenessSession, detectFaceLiveness } from '@/shared/utils/rekognition.js';
 import { sendVerificationEmail, sendPasswordResetEmail } from '@/shared/utils/email.js';
 import {
   UnauthorizedError,
@@ -584,36 +584,68 @@ export const authService = {
   // ──────────────────────────────────────────────
 
   /**
+   * Tạo session mới cho face liveness check
+   * Frontend gọi endpoint này để bắt đầu movement challenge
+   */
+  createLivenessSession: async (): Promise<{ sessionId: string }> => {
+    const sessionId = await createLivenessSession();
+    return { sessionId };
+  },
+
+  /**
    * Bật đăng nhập bằng khuôn mặt
    * - Yêu cầu: user đã đăng nhập (authenticated)
+   * - Yêu cầu: liveness check đã PASS (anti-spoofing)
    * - Index face vào Rekognition collection
    * - Lưu faceId + bật flag
    */
-  enableFaceLogin: async (userId: string, imageBase64: string): Promise<void> => {
+  enableFaceLogin: async (
+    userId: string,
+    imageBase64: string,
+    livenessSessionId: string,
+  ): Promise<void> => {
+    console.log('🎭 [DEBUG] enableFaceLogin called with userId:', userId);
+
     const user = await authRepository.findUserById(userId);
     if (!user) {
       throw new NotFoundError('User');
     }
 
-    // Nếu đã có face cũ → xóa trước
+    // Decode base64 → Buffer
+    const base64Data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
+    const imageBytes = Buffer.from(base64Data, 'base64');
+
+    // 1. 🔍 Xác thực liveness TRƯỚC indexing
+    console.log('🎭 [DEBUG] Verifying face liveness with sessionId:', livenessSessionId);
+    const livenessResult = await detectFaceLiveness(livenessSessionId, imageBytes);
+
+    if (!livenessResult.isLive) {
+      logger.warn(
+        `❌ Face liveness verification FAILED for user ${userId} (confidence: ${livenessResult.confidence}%)`,
+      );
+      throw new UnauthorizedError(
+        `Xác thực khuôn mặt thất bại (độ tin cậy: ${livenessResult.confidence}%). Vui lòng thử lại.`,
+      );
+    }
+
+    console.log(
+      `✅ [DEBUG] Face liveness PASSED (confidence: ${livenessResult.confidence}%)`,
+    );
+    logger.info(`✅ Face liveness verified for user ${userId} (confidence: ${livenessResult.confidence}%)`);
+
+    // 2. Nếu đã có face cũ → xóa trước
     if (user.rekognitionFaceId) {
       await deleteFace(user.rekognitionFaceId);
     }
 
-    // Decode base64 → Buffer
-    // Strip data:image/...;base64, prefix nếu có
-    const base64Data = imageBase64.includes(',')
-      ? imageBase64.split(',')[1]
-      : imageBase64;
-    const imageBytes = Buffer.from(base64Data, 'base64');
-
-    // Index face vào Rekognition
+    // 3. ✅ Index face vào Rekognition (chỉ sau khi liveness pass)
+    console.log('📤 [DEBUG] Indexing face to Rekognition...');
     const faceId = await indexFace(userId, imageBytes);
 
-    // Cập nhật DB
+    // 4. Cập nhật DB
     await authRepository.updateFaceLogin(userId, true, faceId);
 
-    logger.info(`Face login enabled for user: ${userId}`);
+    logger.info(`✅ Face login enabled for user: ${userId}`);
   },
 
   /**
@@ -639,12 +671,14 @@ export const authService = {
   /**
    * Đăng nhập bằng khuôn mặt
    * - User phải gửi email + imageBase64 để xác thực nhân thân
+   * - Yêu cầu: liveness check đã PASS (anti-spoofing)
    * - Yêu cầu: user đã bật faceLoginEnabled
    * - Tìm face trong Rekognition → match userId → xác thực email → tạo session
    */
   loginWithFace: async (
     email: string,
     imageBase64: string,
+    livenessSessionId: string,
     meta: IRequestMeta,
   ): Promise<ILoginResponse> => {
     console.log('🎭 [DEBUG] loginWithFace called with email:', email);
@@ -663,6 +697,23 @@ export const authService = {
       ? imageBase64.split(',')[1]
       : imageBase64;
     const imageBytes = Buffer.from(base64Data, 'base64');
+
+    // 0. 🔍 Xác thực liveness TRƯỚC tìm kiếm face
+    console.log('🎭 [DEBUG] Verifying face liveness with sessionId:', livenessSessionId);
+    const livenessResult = await detectFaceLiveness(livenessSessionId, imageBytes);
+
+    if (!livenessResult.isLive) {
+      logger.warn(
+        `❌ Face liveness verification FAILED for email ${trimmedEmail} (confidence: ${livenessResult.confidence}%)`,
+      );
+      throw new UnauthorizedError(
+        `Xác thực khuôn mặt thất bại (độ tin cậy: ${livenessResult.confidence}%). Vui lòng thử lại.`,
+      );
+    }
+
+    console.log(
+      `✅ [DEBUG] Face liveness PASSED (confidence: ${livenessResult.confidence}%)`,
+    );
 
     // 1. Tìm khuôn mặt trong collection
     console.log('🔍 [DEBUG] Searching for face in Rekognition');
@@ -718,7 +769,7 @@ export const authService = {
 
     await createNewSession(user, tokens.refreshToken, meta);
     logger.info(
-      `✅ Face login successful for user ${user.userId} (${user.email}, similarity: ${match.similarity.toFixed(1)}%)`,
+      `✅ Face login successful for user ${user.userId} (${user.email}, liveness: ${livenessResult.confidence}%, face similarity: ${match.similarity.toFixed(1)}%)`,
     );
 
     return { ...tokens, userId: user.userId };
