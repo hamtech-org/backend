@@ -3,6 +3,8 @@ import { chatService } from './chat.service.js';
 import { sendSuccess, sendCreated } from '@/shared/utils/response.js';
 
 export const chatController = {
+  // ─── Conversations / Groups ────────────────────────────────────────────────────
+
   getConversations: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const conversations = await chatService.getConversations(req.user!.userId);
@@ -16,6 +18,36 @@ export const chatController = {
       sendCreated(res, conversation);
     } catch (error) { next(error); }
   },
+
+  /** PUT /api/groups/:groupId — Cập nhật tên / avatar nhóm */
+  updateGroup: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const updated = await chatService.updateGroup(
+        req.user!.userId,
+        req.params.groupId,
+        req.body,
+      );
+      sendSuccess(res, updated, 'Cập nhật nhóm thành công');
+    } catch (error) { next(error); }
+  },
+
+  /** DELETE /api/groups/:groupId — Giải tán nhóm */
+  deleteGroup: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await chatService.deleteGroup(req.user!.userId, req.params.groupId);
+      sendSuccess(res, null, 'Giải tán nhóm thành công');
+    } catch (error) { next(error); }
+  },
+
+  /** POST /api/groups/:groupId/leave — Rời nhóm */
+  leaveGroup: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await chatService.leaveGroup(req.user!.userId, req.params.groupId);
+      sendSuccess(res, null, 'Rời nhóm thành công');
+    } catch (error) { next(error); }
+  },
+
+  // ─── Messages ──────────────────────────────────────────────────────────────────
 
   getMessages: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {

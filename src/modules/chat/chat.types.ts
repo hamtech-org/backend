@@ -4,11 +4,11 @@ import type { MessageType, ConversationType, MemberRole } from '@/shared/types/c
 export interface IConversation extends TimestampFields {
   conversationId: string;
   type: ConversationType;
-  name: string | null;
-  avatar: string | null;
+  name?: string;
+  avatar?: string;
   creatorId: string;
-  lastMessage: ILastMessage | null;
-  lastMessageAt: string | null;
+  lastMessage?: ILastMessage;
+  lastMessageAt?: string;
   memberCount: number;
   isEncrypted: boolean;
 }
@@ -26,10 +26,10 @@ export interface IConversationMember {
   userId: string;
   role: MemberRole;
   joinedAt: string;
-  lastReadAt: string | null;
+  lastReadAt?: string;
   unreadCount: number;
   isMuted: boolean;
-  nickname: string | null;
+  nickname?: string;
 }
 
 export interface IMessage extends TimestampFields {
@@ -38,13 +38,13 @@ export interface IMessage extends TimestampFields {
   senderId: string;
   type: MessageType;
   content: string;
-  encryptedContent: string | null;
-  mediaUrl: string | null;
-  mediaType: string | null;
-  mediaSize: number | null;
-  thumbnailUrl: string | null;
-  replyTo: string | null;
-  forwardFrom: string | null;
+  encryptedContent?: string;
+  mediaUrl?: string;
+  mediaType?: string;
+  mediaSize?: number;
+  thumbnailUrl?: string;
+  replyTo?: string;
+  forwardFrom?: string;
   isPinned: boolean;
   isEdited: boolean;
   isRecalled: boolean;
@@ -55,7 +55,22 @@ export interface IMessage extends TimestampFields {
 export interface ICreateConversationDto {
   type: ConversationType;
   name?: string;
+  avatar?: string;
   memberIds: string[];
+}
+
+export interface IUpdateGroupDto {
+  name?: string;
+  avatar?: string;
+}
+
+export interface IGroupMember {
+  conversationId: string;
+  userId: string;
+  name: string;
+  avatar?: string;
+  role: MemberRole;
+  joinedAt: string;
 }
 
 export interface ISendMessageDto {

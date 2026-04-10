@@ -1,7 +1,5 @@
 import { Server, Socket } from 'socket.io';
-
-// TODO: import chat socket handlers
-// TODO: import signaling socket handlers
+import { registerChatHandlers } from '@/modules/chat/chat.socket.js';
 
 export const registerHandlers = (io: Server, socket: Socket): void => {
   const userId = socket.data.userId as string;
@@ -9,8 +7,8 @@ export const registerHandlers = (io: Server, socket: Socket): void => {
   // Tham gia room cá nhân
   socket.join(`user:${userId}`);
 
-  // TODO: Đăng ký chat handlers
-  // registerChatHandlers(io, socket);
+  // Đăng ký chat handlers
+  registerChatHandlers(io, socket);
 
   // TODO: Đăng ký signaling handlers (WebRTC)
   // registerSignalingHandlers(io, socket);
