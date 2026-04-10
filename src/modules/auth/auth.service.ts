@@ -604,8 +604,6 @@ export const authService = {
     imageBase64: string,
     livenessSessionId: string,
   ): Promise<void> => {
-    console.log('🎭 [DEBUG] enableFaceLogin called with userId:', userId);
-
     const user = await authRepository.findUserById(userId);
     if (!user) {
       throw new NotFoundError('User');
@@ -615,22 +613,14 @@ export const authService = {
     const base64Data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
     const imageBytes = Buffer.from(base64Data, 'base64');
 
-    // 1. 🔍 Xác thực liveness TRƯỚC indexing
-    console.log('🎭 [DEBUG] Verifying face liveness with sessionId:', livenessSessionId);
     const livenessResult = await detectFaceLiveness(livenessSessionId);
 
     if (!livenessResult.isLive) {
-      logger.warn(
-        `❌ Face liveness verification FAILED for user ${userId} (confidence: ${livenessResult.confidence}%)`,
-      );
       throw new UnauthorizedError(
         `Xác thực khuôn mặt thất bại (độ tin cậy: ${livenessResult.confidence}%). Vui lòng thử lại.`,
       );
     }
 
-    console.log(
-      `✅ [DEBUG] Face liveness PASSED (confidence: ${livenessResult.confidence}%)`,
-    );
     logger.info(`✅ Face liveness verified for user ${userId} (confidence: ${livenessResult.confidence}%)`);
 
     // 2. Nếu đã có face cũ → xóa trước
@@ -638,8 +628,6 @@ export const authService = {
       await deleteFace(user.rekognitionFaceId);
     }
 
-    // 3. ✅ Index face vào Rekognition (chỉ sau khi liveness pass)
-    console.log('📤 [DEBUG] Indexing face to Rekognition...');
     const faceId = await indexFace(userId, imageBytes);
 
     // 4. Cập nhật DB
@@ -681,16 +669,14 @@ export const authService = {
     livenessSessionId: string,
     meta: IRequestMeta,
   ): Promise<ILoginResponse> => {
-    console.log('🎭 [DEBUG] loginWithFace called with email:', email);
     
     // Validate email parameter
     if (!email || typeof email !== 'string') {
-      logger.error('❌ Email parameter missing or invalid:', { email, type: typeof email });
+      logger.error('Email parameter missing or invalid:', { email, type: typeof email });
       throw new ValidationError('Email là bắt buộc');
     }
 
     const trimmedEmail = email.trim().toLowerCase();
-    console.log('🎭 [DEBUG] Trimmed email:', trimmedEmail);
 
     // Strip data:image/...;base64, prefix nếu có
     const base64Data = imageBase64.includes(',')
@@ -699,65 +685,48 @@ export const authService = {
     const imageBytes = Buffer.from(base64Data, 'base64');
 
     // 0. 🔍 Xác thực liveness TRƯỚC tìm kiếm face
-    console.log('🎭 [DEBUG] Verifying face liveness with sessionId:', livenessSessionId);
     const livenessResult = await detectFaceLiveness(livenessSessionId);
 
     if (!livenessResult.isLive) {
       logger.warn(
-        `❌ Face liveness verification FAILED for email ${trimmedEmail} (confidence: ${livenessResult.confidence}%)`,
+        `Face liveness verification FAILED for email ${trimmedEmail} (confidence: ${livenessResult.confidence}%)`,
       );
       throw new UnauthorizedError(
         `Xác thực khuôn mặt thất bại (độ tin cậy: ${livenessResult.confidence}%). Vui lòng thử lại.`,
       );
     }
 
-    console.log(
-      `✅ [DEBUG] Face liveness PASSED (confidence: ${livenessResult.confidence}%)`,
-    );
-
     // 1. Tìm khuôn mặt trong collection
-    console.log('🔍 [DEBUG] Searching for face in Rekognition');
     const match = await searchFace(imageBytes);
     if (!match) {
-      logger.warn('❌ Face not recognized');
+      logger.warn('Face not recognized');
       throw new UnauthorizedError('Không nhận diện được khuôn mặt');
     }
 
-    console.log('✅ [DEBUG] Face found, userId from match:', match.userId);
-
     // 2. Tìm user
-    console.log('👤 [DEBUG] Finding user by ID:', match.userId);
     const user = await authRepository.findUserById(match.userId);
     if (!user) {
-      logger.error('❌ User not found for userId:', match.userId);
+      logger.error('User not found for userId:', match.userId);
       throw new UnauthorizedError('Tài khoản không tồn tại');
     }
 
-    console.log('✅ [DEBUG] User found:', { userId: user.userId, userEmail: user.email });
 
     // 3. Xác thực email khớp với face được nhận diện
-    console.log('📧 [DEBUG] Verifying email match:', { providedEmail: trimmedEmail, userEmail: user.email.toLowerCase() });
-    
     if (user.email.toLowerCase() !== trimmedEmail) {
       logger.warn(
-        `❌ Face login EMAIL MISMATCH detected: provided "${trimmedEmail}", user account "${user.email.toLowerCase()}"`,
+        `Face login EMAIL MISMATCH detected: provided "${trimmedEmail}", user account "${user.email.toLowerCase()}"`,
       );
       throw new UnauthorizedError('Email không khớp với khuôn mặt được xác thực');
     }
 
-    console.log('✅ [DEBUG] Email verification passed');
 
     // 4. Kiểm tra đã bật face login chưa
-    console.log('🔐 [DEBUG] Checking if face login is enabled for user');
     if (!user.faceLoginEnabled) {
-      logger.warn(`❌ Face login not enabled for user ${user.userId}`);
+      logger.warn(`Face login not enabled for user ${user.userId}`);
       throw new UnauthorizedError('Tài khoản chưa bật đăng nhập bằng khuôn mặt');
     }
 
-    console.log('✅ [DEBUG] Face login is enabled');
-
     // 5. Tạo tokens + session
-    console.log('🔑 [DEBUG] Generating tokens and creating session');
     const sessionId = uuidv4();
     const tokens = generateTokens({
       userId: user.userId,
@@ -769,7 +738,7 @@ export const authService = {
 
     await createNewSession(user, tokens.refreshToken, meta);
     logger.info(
-      `✅ Face login successful for user ${user.userId} (${user.email}, liveness: ${livenessResult.confidence}%, face similarity: ${match.similarity.toFixed(1)}%)`,
+      `Face login successful for user ${user.userId} (${user.email}, liveness: ${livenessResult.confidence}%, face similarity: ${match.similarity.toFixed(1)}%)`,
     );
 
     return { ...tokens, userId: user.userId };

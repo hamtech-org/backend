@@ -108,7 +108,6 @@ volumes:
   backend-node-modules:
   dynamodb-data:
   redis-data:
-  dynamodb-data:
   es-data:
 
 networks:
