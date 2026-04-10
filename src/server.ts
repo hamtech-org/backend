@@ -5,6 +5,7 @@ import { logger } from '@/shared/utils/logger.js';
 import { initializeSocket } from '@/socket/index.js';
 import { connectRedis } from '@/config/redis.js';
 import { connectKafka } from '@/config/kafka.js';
+import { ensureCollectionExists } from '@/shared/utils/rekognition.js';
 
 const server = http.createServer(app);
 
@@ -12,6 +13,7 @@ const startServer = async (): Promise<void> => {
   try {
     await connectRedis();
     await connectKafka();
+    await ensureCollectionExists();
     initializeSocket(server);
 
     server.listen(env.PORT, () => {

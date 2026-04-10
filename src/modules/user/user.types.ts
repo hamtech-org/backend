@@ -5,18 +5,31 @@ export interface IUser extends TimestampFields {
   userId: string;
   email: string;
   passwordHash: string;
+
   displayName: string;
   avatar: string | null;
   bio: string | null;
+
   phone: string | null;
+
   status: UserStatus;
-  lastSeen: string | null;
   role: UserRole;
+
   isVerified: boolean;
-  oauthProvider: OAuthProvider;
-  oauthId: string | null;
-  publicKey: string | null;
+  lastSeen: string | null;
+
+  tokenVersion: number; 
+
+  faceLoginEnabled: boolean;
+  rekognitionFaceId: string | null;
+
+  oauthProvider?: OAuthProvider;
+  oauthId?: string | null;
+
   settings: Record<string, unknown>;
+
+  GSI1PK?: string;
+  GSI1SK?: string;
 }
 
 export interface IUserPublic {
@@ -33,4 +46,19 @@ export interface IUpdateProfileDto {
   bio?: string;
   avatar?: string;
   phone?: string;
+}
+
+export interface IUserStats {
+  userId: string;
+  displayName: string;
+  avatar: string | null;
+  followersCount: number;
+  followingCount: number;
+  postsCount: number;
+}
+
+export interface ISearchUserQuery {
+  q: string;
+  limit?: number;
+  offset?: number;
 }

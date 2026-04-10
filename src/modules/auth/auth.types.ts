@@ -1,13 +1,28 @@
 import type { TimestampFields } from '@/shared/types/common.types.js';
+import type { ILocationInfo } from '@/shared/utils/geolocation.js';
+
+// ─── Session ───
 
 export interface ISession extends TimestampFields {
   sessionId: string;
   userId: string;
-  refreshToken: string;
-  deviceInfo: string;
+
+  refreshTokenHash: string;
+
+  deviceInfo: {
+    userAgent: string;
+    os?: string;
+    browser?: string;
+  };
+
   ipAddress: string;
+  location: ILocationInfo | null;
+
   expiresAt: number;
+  isRevoked: boolean;
 }
+
+// ─── DTOs ───
 
 export interface IRegisterDto {
   email: string;
@@ -19,6 +34,17 @@ export interface ILoginDto {
   email: string;
   password: string;
 }
+
+export interface IRequestMeta {
+  ipAddress: string;
+  userAgent: string;
+}
+
+export interface IFaceLoginDto {
+  image: string; // base64 encoded image
+}
+
+// ─── Responses ───
 
 export interface IAuthTokens {
   accessToken: string;
