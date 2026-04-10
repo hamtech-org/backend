@@ -36,6 +36,10 @@ app.use(express.urlencoded({ extended: true }));
 app.use(morgan('dev'));
 app.use(apiLimiter);
 
+app.get('/', (_req, res) => {
+  res.json({ status: 'Server is running', timestamp: new Date().toISOString() });
+});
+
 // --- Health check ---
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
