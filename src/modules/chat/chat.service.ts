@@ -114,14 +114,23 @@ export const chatService = {
 
   deleteGroup: async (requesterId: string, conversationId: string): Promise<void> => {
     const conversation = await chatRepository.getConversationById(conversationId);
-    if (!conversation) throw new AppError('Không tìm thấy nhóm', 404, 'GROUP_NOT_FOUND');
+    if (!conversation) throw new NotFoundError('Nhóm');
     if (conversation.type !== 'group') throw new AppError('Đây không phải nhóm chat', 400, 'NOT_A_GROUP');
-    if (conversation.creatorId !== requesterId) throw new AppError('Chỉ người tạo mới có thể giải tán nhóm', 403, 'FORBIDDEN');
+    if (conversation.creatorId !== requesterId) throw new ForbiddenError('Chỉ người tạo mới có thể giải tán nhóm');
 
-    // Soft-delete: đánh dấu isDeleted thay vì xóa hẳn
+    // Soft-delete: cập nhật isDeleted thay vì xóa hẳn
     await chatRepository.updateConversation(conversationId, {
       name: `[ĐÃ GIẢI TÁN] ${conversation.name}`,
+      isDeleted: true,
     } as Partial<IConversation>);
+
+    // Emit event để client ẩn/khóa nhóm
+    chatRepository.getMembers(conversationId).then(members => {
+      import('@/socket/index.js').then(({ getIO }) => {
+        const io = getIO();
+        members.forEach(m => io.to(`user:${m.userId}`).emit('group:delete', { conversationId }));
+      }).catch(err => console.error('Lỗi lấy socket io info', err));
+    }).catch(err => console.error('Lỗi lấy thành viên để emit socket delete', err));
   },
 
   leaveGroup: async (userId: string, conversationId: string): Promise<void> => {

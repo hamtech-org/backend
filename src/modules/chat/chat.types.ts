@@ -11,6 +11,7 @@ export interface IConversation extends TimestampFields {
   lastMessageAt?: string;
   memberCount: number;
   isEncrypted: boolean;
+  isDeleted?: boolean;
 }
 
 export interface ILastMessage {
