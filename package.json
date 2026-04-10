@@ -10,10 +10,12 @@
     "test": "jest --forceExit --detectOpenHandles",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "lint": "eslint src/ --ext .ts",
-    "lint:fix": "eslint src/ --ext .ts --fix",
-    "format": "prettier --write \"src/**/*.ts\"",
-    "typecheck": "tsc --noEmit"
+    "lint": "eslint \"src/**/*.ts\" \"scripts/**/*.ts\"",
+    "lint:fix": "eslint \"src/**/*.ts\" \"scripts/**/*.ts\" --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"scripts/**/*.ts\" \"*.{cjs,json}\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"scripts/**/*.ts\" \"*.{cjs,json}\"",
+    "typecheck": "tsc --noEmit",
+    "db:setup": "tsx scripts/database/setup-database.ts"
   },
   "dependencies": {
     "express": "^4.21.0",
