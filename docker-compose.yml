@@ -23,6 +23,9 @@ services:
       - REDIS_HOST=redis
       - KAFKA_BROKERS=kafka:29092
       - ELASTICSEARCH_NODE=http://elasticsearch:9200
+      - CHOKIDAR_USEPOLLING=true
+      - CHOKIDAR_INTERVAL=1000
+      - WATCHPACK_POLLING=true
     networks:
       - zalogram-network
 
@@ -31,7 +34,7 @@ services:
     container_name: zalogram-dynamodb
     ports:
       - '8000:8000'
-    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+    command: '-jar DynamoDBLocal.jar -sharedDb -inMemory'
     networks:
       - zalogram-network
 
