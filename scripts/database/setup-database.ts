@@ -59,10 +59,10 @@ const tableDefinitions: CreateTableCommandInput[] = [
     AttributeDefinitions: [
       { AttributeName: 'PK', AttributeType: S },
       { AttributeName: 'SK', AttributeType: S },
-      { AttributeName: 'email', AttributeType: S },
-      { AttributeName: 'displayName', AttributeType: S },
+      { AttributeName: 'GSI1PK', AttributeType: S },
+      { AttributeName: 'GSI1SK', AttributeType: S },
     ],
-    GlobalSecondaryIndexes: [gsi('GSI1-Email', 'email'), gsi('GSI2-DisplayName', 'displayName')],
+    GlobalSecondaryIndexes: [gsi('GSI-1', 'GSI1PK', 'GSI1SK')],
     BillingMode: 'PAY_PER_REQUEST',
   },
 
@@ -76,9 +76,10 @@ const tableDefinitions: CreateTableCommandInput[] = [
     AttributeDefinitions: [
       { AttributeName: 'PK', AttributeType: S },
       { AttributeName: 'SK', AttributeType: S },
-      { AttributeName: 'userId', AttributeType: S },
+      { AttributeName: 'GSI1PK', AttributeType: S },
+      { AttributeName: 'GSI1SK', AttributeType: S },
     ],
-    GlobalSecondaryIndexes: [gsi('GSI1-UserId', 'userId')],
+    GlobalSecondaryIndexes: [gsi('GSI-1', 'GSI1PK', 'GSI1SK')],
     BillingMode: 'PAY_PER_REQUEST',
   },
 
@@ -95,10 +96,7 @@ const tableDefinitions: CreateTableCommandInput[] = [
       { AttributeName: 'userId', AttributeType: S },
       { AttributeName: 'lastMessageAt', AttributeType: S },
     ],
-    GlobalSecondaryIndexes: [
-      gsi('GSI1-UserConversations', 'userId', 'lastMessageAt'),
-      gsi('GSI2-UserLookup', 'userId'),
-    ],
+    GlobalSecondaryIndexes: [gsi('GSI-1', 'userId', 'lastMessageAt'), gsi('GSI-2', 'userId')],
     BillingMode: 'PAY_PER_REQUEST',
   },
 
@@ -114,7 +112,7 @@ const tableDefinitions: CreateTableCommandInput[] = [
       { AttributeName: 'SK', AttributeType: S },
       { AttributeName: 'senderId', AttributeType: S },
     ],
-    GlobalSecondaryIndexes: [gsi('GSI1-Sender', 'senderId')],
+    GlobalSecondaryIndexes: [gsi('GSI-1', 'senderId')],
     BillingMode: 'PAY_PER_REQUEST',
   },
 
@@ -145,7 +143,7 @@ const tableDefinitions: CreateTableCommandInput[] = [
       { AttributeName: 'friendId', AttributeType: S },
       { AttributeName: 'userId', AttributeType: S },
     ],
-    GlobalSecondaryIndexes: [gsi('GSI1-ReverseLookup', 'friendId', 'userId')],
+    GlobalSecondaryIndexes: [gsi('GSI-1', 'friendId', 'userId')],
     BillingMode: 'PAY_PER_REQUEST',
   },
 
@@ -161,7 +159,7 @@ const tableDefinitions: CreateTableCommandInput[] = [
       { AttributeName: 'SK', AttributeType: S },
       { AttributeName: 'userId', AttributeType: S },
     ],
-    GlobalSecondaryIndexes: [gsi('GSI1-UserGroups', 'userId')],
+    GlobalSecondaryIndexes: [gsi('GSI-1', 'userId')],
     BillingMode: 'PAY_PER_REQUEST',
   },
 
@@ -178,7 +176,7 @@ const tableDefinitions: CreateTableCommandInput[] = [
       { AttributeName: 'authorId', AttributeType: S },
       { AttributeName: 'createdAt', AttributeType: S },
     ],
-    GlobalSecondaryIndexes: [gsi('GSI1-AuthorPosts', 'authorId', 'createdAt')],
+    GlobalSecondaryIndexes: [gsi('GSI-1', 'authorId', 'createdAt')],
     BillingMode: 'PAY_PER_REQUEST',
   },
 
@@ -223,7 +221,7 @@ const tableDefinitions: CreateTableCommandInput[] = [
       { AttributeName: 'authorId', AttributeType: S },
       { AttributeName: 'createdAt', AttributeType: S },
     ],
-    GlobalSecondaryIndexes: [gsi('GSI1-AuthorReels', 'authorId', 'createdAt')],
+    GlobalSecondaryIndexes: [gsi('GSI-1', 'authorId', 'createdAt')],
     BillingMode: 'PAY_PER_REQUEST',
   },
 

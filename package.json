@@ -12,13 +12,9 @@
     "test:coverage": "jest --coverage",
     "lint": "eslint \"src/**/*.ts\" \"scripts/**/*.ts\"",
     "lint:fix": "eslint \"src/**/*.ts\" \"scripts/**/*.ts\" --fix",
-
     "format": "prettier --write \"src/**/*.ts\" \"scripts/**/*.ts\" \"*.{cjs,json}\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"scripts/**/*.ts\" \"*.{cjs,json}\"",
-
     "typecheck": "tsc --noEmit",
-
-    "db:create-tables": "tsx scripts/create-tables.ts",
     "db:setup": "tsx scripts/database/setup-database.ts"
   },
   "dependencies": {
