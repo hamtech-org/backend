@@ -135,11 +135,11 @@ export const chatService = {
 
   leaveGroup: async (userId: string, conversationId: string): Promise<void> => {
     const conversation = await chatRepository.getConversationById(conversationId);
-    if (!conversation) throw new AppError('Không tìm thấy nhóm', 404, 'GROUP_NOT_FOUND');
+    if (!conversation) throw new NotFoundError('Nhóm');
     if (conversation.type !== 'group') throw new AppError('Đây không phải nhóm chat', 400, 'NOT_A_GROUP');
 
     const member = await chatRepository.getMember(conversationId, userId);
-    if (!member) throw new AppError('Bạn không phải thành viên nhóm', 403, 'NOT_A_MEMBER');
+    if (!member) throw new ForbiddenError('Bạn không phải thành viên nhóm');
     if (member.role === 'owner') {
       throw new AppError('Chủ nhóm không thể rời. Hãy chuyển quyền hoặc giải tán nhóm.', 400, 'OWNER_CANNOT_LEAVE');
     }
@@ -148,6 +148,17 @@ export const chatService = {
     await chatRepository.updateConversation(conversationId, {
       memberCount: Math.max(0, conversation.memberCount - 1),
     } as Partial<IConversation>);
+
+    // Bắn realtime để update UI
+    chatRepository.getMembers(conversationId).then(members => {
+      import('@/socket/index.js').then(({ getIO }) => {
+        const io = getIO();
+        // Báo cho những người CÒN LẠI trong nhóm
+        members.forEach(m => io.to(`user:${m.userId}`).emit('group:member_leave', { conversationId, userId }));
+        // Báo riêng cho người VỪA RỜI để gỡ chat ra khỏi danh sách
+        io.to(`user:${userId}`).emit('group:leave', { conversationId });
+      }).catch(err => console.error('Lỗi lấy socket io', err));
+    }).catch(err => console.error('Lỗi socket báo rời nhóm', err));
   },
 
   // ─── Messages ────────────────────────────────────────────────────────────
