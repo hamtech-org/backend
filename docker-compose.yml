@@ -5,7 +5,7 @@ services:
     image: node:20-alpine
     container_name: zalogram-backend
     working_dir: /app
-    command: sh -c "npm install && npm run dev"
+    command: sh scripts/entrypoint.sh
     ports:
       - '3000:3000'
     volumes:
@@ -106,6 +106,7 @@ services:
 
 volumes:
   backend-node-modules:
+  dynamodb-data:
   redis-data:
   dynamodb-data:
   es-data:
