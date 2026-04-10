@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from './auth.service.js';
 import { sendSuccess, sendCreated } from '@/shared/utils/response.js';
-import type { IRequestMeta } from './auth.types.js';
+import type { IRequestMeta, IRegisterDto, ILoginDto } from './auth.types.js';
+import { logger } from '@/shared/utils/logger.js';
 
 /**
  * Extract IP + User-Agent từ request
@@ -14,7 +15,7 @@ const getRequestMeta = (req: Request): IRequestMeta => ({
 export const authController = {
   register: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const result = await authService.register(req.body);
+      const result = await authService.register(req.body as IRegisterDto);
       sendCreated(res, result, 'Đăng ký thành công');
     } catch (error) {
       next(error);
@@ -23,7 +24,7 @@ export const authController = {
 
   login: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const result = await authService.login(req.body);
+      const result = await authService.login(req.body as ILoginDto);
       sendSuccess(res, result, 'Đăng nhập thành công');
     } catch (error) {
       next(error);
@@ -132,11 +133,11 @@ export const authController = {
 
   enableFaceLogin: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { image, livenessSessionId } = req.body as {
-        image: string;
+      const { password, livenessSessionId } = req.body as {
+        password: string;
         livenessSessionId: string;
       };
-      await authService.enableFaceLogin(req.user!.userId, image, livenessSessionId);
+      await authService.enableFaceLogin(req.user!.userId, password, livenessSessionId);
       sendSuccess(res, null, 'Đã bật đăng nhập bằng khuôn mặt');
     } catch (error) {
       next(error);
@@ -154,14 +155,12 @@ export const authController = {
 
   loginWithFace: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { email, image, livenessSessionId } = req.body as {
+      const { email, livenessSessionId } = req.body as {
         email: string;
-        image: string;
         livenessSessionId: string;
       };
       const result = await authService.loginWithFace(
         email,
-        image,
         livenessSessionId,
         getRequestMeta(req),
       );

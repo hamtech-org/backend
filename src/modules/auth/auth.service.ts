@@ -241,7 +241,11 @@ export const authService = {
     if (!regDataString) {
       throw new ValidationError('Thông tin đăng ký đã hết hạn. Vui lòng thử lại.');
     }
-    const regData = JSON.parse(regDataString);
+    const regData = JSON.parse(regDataString) as {
+      email: string;
+      passwordHash: string;
+      displayName: string;
+    };
 
     // 3. Tạo user mới trong DB
     const userId = uuidv4();
@@ -366,7 +370,12 @@ export const authService = {
     if (!loginDataString) {
       throw new ValidationError('Phiên đăng nhập đã hết hạn. Vui lòng thử lại.');
     }
-    const loginData = JSON.parse(loginDataString);
+    const loginData = JSON.parse(loginDataString) as {
+      userId: string;
+      email: string;
+      role: string;
+      tokenVersion: number;
+    };
 
     // 3. Tìm user để lấy đầy đủ thông tin
     const user = await authRepository.findUserById(loginData.userId);
@@ -595,45 +604,61 @@ export const authService = {
   /**
    * Bật đăng nhập bằng khuôn mặt
    * - Yêu cầu: user đã đăng nhập (authenticated)
+   * - Yêu cầu: user phải nhập đúng mật khẩu hiện tại
    * - Yêu cầu: liveness check đã PASS (anti-spoofing)
+   * - Lấy reference image từ AWS Liveness session
    * - Index face vào Rekognition collection
    * - Lưu faceId + bật flag
    */
   enableFaceLogin: async (
     userId: string,
-    imageBase64: string,
+    password: string,
     livenessSessionId: string,
   ): Promise<void> => {
+
+    logger.debug(`0Password verified for user ${userId} before enabling face login`);
     const user = await authRepository.findUserById(userId);
     if (!user) {
       throw new NotFoundError('User');
     }
-
-    // Decode base64 → Buffer
-    const base64Data = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
-    const imageBytes = Buffer.from(base64Data, 'base64');
-
+    logger.debug(`1Password verified for user ${userId} before enabling face login`);
+    // 1. Xác thực mật khẩu trước tiên
+    const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
+    if (!isPasswordValid) {
+      throw new ValidationError('Mật khẩu không đúng');
+    }
+    logger.debug(`2Password verified for user ${userId} before enabling face login`);
+    // 2. Lấy reference image từ AWS Liveness session
+    // (Image này đã được AWS xác thực là liveness, không cần imageBase64 từ frontend)
     const livenessResult = await detectFaceLiveness(livenessSessionId);
 
+    logger.debug(`3Liveness result for user ${userId}: ${JSON.stringify(livenessResult.confidence)}`);
+
+
     if (!livenessResult.isLive) {
-      throw new UnauthorizedError(
+      throw new ValidationError(
         `Xác thực khuôn mặt thất bại (độ tin cậy: ${livenessResult.confidence}%). Vui lòng thử lại.`,
       );
     }
 
-    logger.info(`✅ Face liveness verified for user ${userId} (confidence: ${livenessResult.confidence}%)`);
+    if (!livenessResult.referenceImageBytes) {
+      throw new ValidationError('Không thể lấy reference image từ AWS. Vui lòng thử lại.');
+    }
 
-    // 2. Nếu đã có face cũ → xóa trước
+    logger.info(`Face liveness verified for user ${userId} (confidence: ${livenessResult.confidence}%)`);
+
+    // 3. Nếu đã có face cũ → xóa trước
     if (user.rekognitionFaceId) {
       await deleteFace(user.rekognitionFaceId);
     }
 
-    const faceId = await indexFace(userId, imageBytes);
+    // 4. Index face từ reference image (đã được AWS xác thực)
+    const faceId = await indexFace(userId, livenessResult.referenceImageBytes);
 
-    // 4. Cập nhật DB
+    // 5. Cập nhật DB
     await authRepository.updateFaceLogin(userId, true, faceId);
 
-    logger.info(`✅ Face login enabled for user: ${userId}`);
+    logger.info(`Face login enabled for user: ${userId}`);
   },
 
   /**
@@ -658,14 +683,14 @@ export const authService = {
 
   /**
    * Đăng nhập bằng khuôn mặt
-   * - User phải gửi email + imageBase64 để xác thực nhân thân
+   * - User phải gửi email để xác thực nhân thân
    * - Yêu cầu: liveness check đã PASS (anti-spoofing)
    * - Yêu cầu: user đã bật faceLoginEnabled
+   * - Lấy reference image từ AWS Liveness session
    * - Tìm face trong Rekognition → match userId → xác thực email → tạo session
    */
   loginWithFace: async (
     email: string,
-    imageBase64: string,
     livenessSessionId: string,
     meta: IRequestMeta,
   ): Promise<ILoginResponse> => {
@@ -678,13 +703,8 @@ export const authService = {
 
     const trimmedEmail = email.trim().toLowerCase();
 
-    // Strip data:image/...;base64, prefix nếu có
-    const base64Data = imageBase64.includes(',')
-      ? imageBase64.split(',')[1]
-      : imageBase64;
-    const imageBytes = Buffer.from(base64Data, 'base64');
-
-    // 0. 🔍 Xác thực liveness TRƯỚC tìm kiếm face
+    // 1. Lấy reference image từ AWS Liveness session
+    // (Image này đã được AWS xác thực là liveness, không cần imageBase64 từ frontend)
     const livenessResult = await detectFaceLiveness(livenessSessionId);
 
     if (!livenessResult.isLive) {
@@ -696,22 +716,25 @@ export const authService = {
       );
     }
 
-    // 1. Tìm khuôn mặt trong collection
-    const match = await searchFace(imageBytes);
+    if (!livenessResult.referenceImageBytes) {
+      throw new UnauthorizedError('Không thể lấy reference image từ AWS. Vui lòng thử lại.');
+    }
+
+    // 2. Tìm khuôn mặt trong collection bằng reference image từ AWS
+    const match = await searchFace(livenessResult.referenceImageBytes);
     if (!match) {
       logger.warn('Face not recognized');
       throw new UnauthorizedError('Không nhận diện được khuôn mặt');
     }
 
-    // 2. Tìm user
+    // 3. Tìm user
     const user = await authRepository.findUserById(match.userId);
     if (!user) {
       logger.error('User not found for userId:', match.userId);
       throw new UnauthorizedError('Tài khoản không tồn tại');
     }
 
-
-    // 3. Xác thực email khớp với face được nhận diện
+    // 4. Xác thực email khớp với face được nhận diện
     if (user.email.toLowerCase() !== trimmedEmail) {
       logger.warn(
         `Face login EMAIL MISMATCH detected: provided "${trimmedEmail}", user account "${user.email.toLowerCase()}"`,
@@ -719,14 +742,13 @@ export const authService = {
       throw new UnauthorizedError('Email không khớp với khuôn mặt được xác thực');
     }
 
-
-    // 4. Kiểm tra đã bật face login chưa
+    // 5. Kiểm tra đã bật face login chưa
     if (!user.faceLoginEnabled) {
       logger.warn(`Face login not enabled for user ${user.userId}`);
       throw new UnauthorizedError('Tài khoản chưa bật đăng nhập bằng khuôn mặt');
     }
 
-    // 5. Tạo tokens + session
+    // 6. Tạo tokens + session
     const sessionId = uuidv4();
     const tokens = generateTokens({
       userId: user.userId,
