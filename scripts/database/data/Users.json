@@ -1,5 +1,27 @@
 [
   {
+    "PK": "USER#seed-user-<slug>",
+    "SK": "PROFILE",
+    "GSI1PK": "EMAIL#<email>",
+    "GSI1SK": "EMAIL#<email>",
+    "userId": "seed-user-<slug>",
+    "email": "<email>",
+    "passwordHash": "node -e \"const bcrypt=require('bcryptjs'); bcrypt.hash('Test@1234', 10).then(console.log)\"",
+    "displayName": "<ten_hien_thi>",
+    "avatar": "https://i.pravatar.cc/150?u=<slug>",
+    "bio": "",
+    "status": "offline",
+    "role": "user",
+    "isVerified": true,
+    "lastSeen": "2026-04-09T12:00:00.000Z",
+    "tokenVersion": 0,
+    "faceLoginEnabled": false,
+    "oauthProvider": "local",
+    "settings": {},
+    "createdAt": "2026-04-01T08:00:00.000Z",
+    "updatedAt": "2026-04-09T12:00:00.000Z"
+  },
+  {
     "PK": "USER#seed-user-alice",
     "SK": "PROFILE",
     "GSI1PK": "EMAIL#huycoi210804@gmail.com",
