@@ -138,8 +138,8 @@ export const authController = {
 
   loginWithFace: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { image } = req.body as { image: string };
-      const result = await authService.loginWithFace(image, getRequestMeta(req));
+      const { email, image } = req.body as { email: string; image: string };
+      const result = await authService.loginWithFace(email, image, getRequestMeta(req));
       sendSuccess(res, result, 'Đăng nhập bằng khuôn mặt thành công');
     } catch (error) {
       next(error);

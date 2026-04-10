@@ -44,6 +44,7 @@ export const changePasswordSchema = z.object({
 });
 
 export const faceLoginSchema = z.object({
+  email: z.string().email('Email không hợp lệ'),
   image: z
     .string()
     .min(1, 'Ảnh khuôn mặt không được để trống')

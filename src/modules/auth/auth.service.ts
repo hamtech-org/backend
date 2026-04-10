@@ -638,13 +638,26 @@ export const authService = {
 
   /**
    * Đăng nhập bằng khuôn mặt
-   * - User phải đã bật faceLoginEnabled
-   * - Tìm face trong Rekognition → match userId → tạo session
+   * - User phải gửi email + imageBase64 để xác thực nhân thân
+   * - Yêu cầu: user đã bật faceLoginEnabled
+   * - Tìm face trong Rekognition → match userId → xác thực email → tạo session
    */
   loginWithFace: async (
+    email: string,
     imageBase64: string,
     meta: IRequestMeta,
   ): Promise<ILoginResponse> => {
+    console.log('🎭 [DEBUG] loginWithFace called with email:', email);
+    
+    // Validate email parameter
+    if (!email || typeof email !== 'string') {
+      logger.error('❌ Email parameter missing or invalid:', { email, type: typeof email });
+      throw new ValidationError('Email là bắt buộc');
+    }
+
+    const trimmedEmail = email.trim().toLowerCase();
+    console.log('🎭 [DEBUG] Trimmed email:', trimmedEmail);
+
     // Strip data:image/...;base64, prefix nếu có
     const base64Data = imageBase64.includes(',')
       ? imageBase64.split(',')[1]
@@ -652,23 +665,48 @@ export const authService = {
     const imageBytes = Buffer.from(base64Data, 'base64');
 
     // 1. Tìm khuôn mặt trong collection
+    console.log('🔍 [DEBUG] Searching for face in Rekognition');
     const match = await searchFace(imageBytes);
     if (!match) {
+      logger.warn('❌ Face not recognized');
       throw new UnauthorizedError('Không nhận diện được khuôn mặt');
     }
 
+    console.log('✅ [DEBUG] Face found, userId from match:', match.userId);
+
     // 2. Tìm user
+    console.log('👤 [DEBUG] Finding user by ID:', match.userId);
     const user = await authRepository.findUserById(match.userId);
     if (!user) {
+      logger.error('❌ User not found for userId:', match.userId);
       throw new UnauthorizedError('Tài khoản không tồn tại');
     }
 
-    // 3. Kiểm tra đã bật face login chưa
+    console.log('✅ [DEBUG] User found:', { userId: user.userId, userEmail: user.email });
+
+    // 3. Xác thực email khớp với face được nhận diện
+    console.log('📧 [DEBUG] Verifying email match:', { providedEmail: trimmedEmail, userEmail: user.email.toLowerCase() });
+    
+    if (user.email.toLowerCase() !== trimmedEmail) {
+      logger.warn(
+        `❌ Face login EMAIL MISMATCH detected: provided "${trimmedEmail}", user account "${user.email.toLowerCase()}"`,
+      );
+      throw new UnauthorizedError('Email không khớp với khuôn mặt được xác thực');
+    }
+
+    console.log('✅ [DEBUG] Email verification passed');
+
+    // 4. Kiểm tra đã bật face login chưa
+    console.log('🔐 [DEBUG] Checking if face login is enabled for user');
     if (!user.faceLoginEnabled) {
+      logger.warn(`❌ Face login not enabled for user ${user.userId}`);
       throw new UnauthorizedError('Tài khoản chưa bật đăng nhập bằng khuôn mặt');
     }
 
-    // 4. Tạo tokens + session
+    console.log('✅ [DEBUG] Face login is enabled');
+
+    // 5. Tạo tokens + session
+    console.log('🔑 [DEBUG] Generating tokens and creating session');
     const sessionId = uuidv4();
     const tokens = generateTokens({
       userId: user.userId,
@@ -680,7 +718,7 @@ export const authService = {
 
     await createNewSession(user, tokens.refreshToken, meta);
     logger.info(
-      `Face login successful for user ${user.userId} (similarity: ${match.similarity.toFixed(1)}%)`,
+      `✅ Face login successful for user ${user.userId} (${user.email}, similarity: ${match.similarity.toFixed(1)}%)`,
     );
 
     return { ...tokens, userId: user.userId };
