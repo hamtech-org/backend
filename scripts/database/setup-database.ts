@@ -10,7 +10,7 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const REGION = process.env.AWS_REGION ?? 'ap-southeast-1';
+const REGION = process.env.AWS_REGION ?? 'us-east-1';
 const ENDPOINT = process.env.DYNAMODB_ENDPOINT ?? 'http://localhost:8000';
 const PREFIX = process.env.DYNAMODB_TABLE_PREFIX ?? 'Zalogram_';
 

@@ -17,10 +17,12 @@ export const chatRepository = {
   // ─── Conversations ───────────────────────────────────────────────────
 
   getConversationById: async (conversationId: string): Promise<IConversation | null> => {
-    const result = await dynamoClient.send(new GetCommand({
-      TableName: CONVERSATIONS_TABLE,
-      Key: { PK: `CONV#${conversationId}`, SK: 'META' },
-    }));
+    const result = await dynamoClient.send(
+      new GetCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: 'META' },
+      }),
+    );
     return (result.Item as IConversation) ?? null;
   },
 
@@ -29,16 +31,18 @@ export const chatRepository = {
    * GSI-2: userId (PK) — Tìm tất cả hội thoại của user
    */
   getConversations: async (userId: string): Promise<IConversation[]> => {
-    const result = await dynamoClient.send(new QueryCommand({
-      TableName: CONVERSATIONS_TABLE,
-      IndexName: 'GSI-2',
-      KeyConditionExpression: 'userId = :uid',
-      FilterExpression: 'begins_with(SK, :memberPrefix)',
-      ExpressionAttributeValues: {
-        ':uid': userId,
-        ':memberPrefix': 'MEMBER#',
-      },
-    }));
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: CONVERSATIONS_TABLE,
+        IndexName: 'GSI-2',
+        KeyConditionExpression: 'userId = :uid',
+        FilterExpression: 'begins_with(SK, :memberPrefix)',
+        ExpressionAttributeValues: {
+          ':uid': userId,
+          ':memberPrefix': 'MEMBER#',
+        },
+      }),
+    );
 
     if (!result.Items || result.Items.length === 0) return [];
 
@@ -57,14 +61,16 @@ export const chatRepository = {
   },
 
   createConversation: async (conversation: IConversation): Promise<void> => {
-    await dynamoClient.send(new PutCommand({
-      TableName: CONVERSATIONS_TABLE,
-      Item: {
-        PK: `CONV#${conversation.conversationId}`,
-        SK: 'META',
-        ...conversation,
-      },
-    }));
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Item: {
+          PK: `CONV#${conversation.conversationId}`,
+          SK: 'META',
+          ...conversation,
+        },
+      }),
+    );
   },
 
   /**
@@ -73,25 +79,29 @@ export const chatRepository = {
    * userId được lưu thêm cho GSI-2
    */
   addConversationMember: async (member: IConversationMember): Promise<void> => {
-    await dynamoClient.send(new PutCommand({
-      TableName: CONVERSATIONS_TABLE,
-      Item: {
-        PK: `CONV#${member.conversationId}`,
-        SK: `MEMBER#${member.userId}`,
-        ...member,
-      },
-    }));
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Item: {
+          PK: `CONV#${member.conversationId}`,
+          SK: `MEMBER#${member.userId}`,
+          ...member,
+        },
+      }),
+    );
   },
 
   getConversationMembers: async (conversationId: string): Promise<IConversationMember[]> => {
-    const result = await dynamoClient.send(new QueryCommand({
-      TableName: CONVERSATIONS_TABLE,
-      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :memberPrefix)',
-      ExpressionAttributeValues: {
-        ':pk': `CONV#${conversationId}`,
-        ':memberPrefix': 'MEMBER#',
-      },
-    }));
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: CONVERSATIONS_TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :memberPrefix)',
+        ExpressionAttributeValues: {
+          ':pk': `CONV#${conversationId}`,
+          ':memberPrefix': 'MEMBER#',
+        },
+      }),
+    );
     return (result.Items as IConversationMember[]) ?? [];
   },
 
@@ -100,16 +110,18 @@ export const chatRepository = {
     lastMessage: IConversation['lastMessage'],
     lastMessageAt: string,
   ): Promise<void> => {
-    await dynamoClient.send(new UpdateCommand({
-      TableName: CONVERSATIONS_TABLE,
-      Key: { PK: `CONV#${conversationId}`, SK: 'META' },
-      UpdateExpression: 'SET lastMessage = :lm, lastMessageAt = :lma, updatedAt = :now',
-      ExpressionAttributeValues: {
-        ':lm': lastMessage,
-        ':lma': lastMessageAt,
-        ':now': new Date().toISOString(),
-      },
-    }));
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: 'META' },
+        UpdateExpression: 'SET lastMessage = :lm, lastMessageAt = :lma, updatedAt = :now',
+        ExpressionAttributeValues: {
+          ':lm': lastMessage,
+          ':lma': lastMessageAt,
+          ':now': new Date().toISOString(),
+        },
+      }),
+    );
   },
 
   /**
@@ -131,45 +143,57 @@ export const chatRepository = {
   },
 
   deleteConversation: async (conversationId: string): Promise<void> => {
-    await dynamoClient.send(new DeleteCommand({
-      TableName: CONVERSATIONS_TABLE,
-      Key: { PK: `CONV#${conversationId}`, SK: 'META' },
-    }));
+    await dynamoClient.send(
+      new DeleteCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: 'META' },
+      }),
+    );
   },
 
   // ─── Messages ────────────────────────────────────────────────────────
 
   getMessages: async (conversationId: string, limit: number = 20): Promise<IMessage[]> => {
-    const result = await dynamoClient.send(new QueryCommand({
-      TableName: MESSAGES_TABLE,
-      KeyConditionExpression: 'PK = :pk',
-      ExpressionAttributeValues: { ':pk': `CONV#${conversationId}` },
-      Limit: limit,
-      ScanIndexForward: false,
-    }));
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: MESSAGES_TABLE,
+        KeyConditionExpression: 'PK = :pk',
+        ExpressionAttributeValues: { ':pk': `CONV#${conversationId}` },
+        Limit: limit,
+        ScanIndexForward: false,
+      }),
+    );
     return (result.Items as IMessage[]) ?? [];
   },
 
-  getMessageById: async (conversationId: string, messageId: string, createdAt: string): Promise<IMessage | null> => {
-    const result = await dynamoClient.send(new GetCommand({
-      TableName: MESSAGES_TABLE,
-      Key: {
-        PK: `CONV#${conversationId}`,
-        SK: `MSG#${createdAt}#${messageId}`,
-      },
-    }));
+  getMessageById: async (
+    conversationId: string,
+    messageId: string,
+    createdAt: string,
+  ): Promise<IMessage | null> => {
+    const result = await dynamoClient.send(
+      new GetCommand({
+        TableName: MESSAGES_TABLE,
+        Key: {
+          PK: `CONV#${conversationId}`,
+          SK: `MSG#${createdAt}#${messageId}`,
+        },
+      }),
+    );
     return (result.Item as IMessage) ?? null;
   },
 
   createMessage: async (message: IMessage): Promise<void> => {
-    await dynamoClient.send(new PutCommand({
-      TableName: MESSAGES_TABLE,
-      Item: {
-        PK: `CONV#${message.conversationId}`,
-        SK: `MSG#${message.createdAt}#${message.messageId}`,
-        ...message,
-      },
-    }));
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: MESSAGES_TABLE,
+        Item: {
+          PK: `CONV#${message.conversationId}`,
+          SK: `MSG#${message.createdAt}#${message.messageId}`,
+          ...message,
+        },
+      }),
+    );
   },
 
   updateMessage: async (
@@ -179,18 +203,20 @@ export const chatRepository = {
     updates: Partial<IMessage>,
   ): Promise<void> => {
     const entries = Object.entries(updates).filter(([, v]) => v !== undefined);
-    const updateExpr = entries.map(([, ], i) => `#k${i} = :v${i}`).join(', ');
+    const updateExpr = entries.map(([,], i) => `#k${i} = :v${i}`).join(', ');
 
-    await dynamoClient.send(new UpdateCommand({
-      TableName: MESSAGES_TABLE,
-      Key: { PK: `CONV#${conversationId}`, SK: sortKey },
-      UpdateExpression: `SET ${updateExpr}, updatedAt = :now`,
-      ExpressionAttributeNames: Object.fromEntries(entries.map(([k], i) => [`#k${i}`, k])),
-      ExpressionAttributeValues: {
-        ...Object.fromEntries(entries.map(([, v], i) => [`:v${i}`, v])),
-        ':now': new Date().toISOString(),
-      },
-    }));
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: MESSAGES_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: sortKey },
+        UpdateExpression: `SET ${updateExpr}, updatedAt = :now`,
+        ExpressionAttributeNames: Object.fromEntries(entries.map(([k], i) => [`#k${i}`, k])),
+        ExpressionAttributeValues: {
+          ...Object.fromEntries(entries.map(([, v], i) => [`:v${i}`, v])),
+          ':now': new Date().toISOString(),
+        },
+      }),
+    );
     void messageId;
   },
 
@@ -202,18 +228,20 @@ export const chatRepository = {
     status: MessageStatus,
   ): Promise<void> => {
     const now = new Date().toISOString();
-    await dynamoClient.send(new PutCommand({
-      TableName: MESSAGE_STATUS_TABLE,
-      Item: {
-        PK: `MSG#${messageId}`,
-        SK: `STATUS#${userId}`,
-        messageId,
-        userId,
-        status,
-        ...(status === 'delivered' ? { deliveredAt: now } : {}),
-        ...(status === 'read' ? { readAt: now } : {}),
-      },
-    }));
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: MESSAGE_STATUS_TABLE,
+        Item: {
+          PK: `MSG#${messageId}`,
+          SK: `STATUS#${userId}`,
+          messageId,
+          userId,
+          status,
+          ...(status === 'delivered' ? { deliveredAt: now } : {}),
+          ...(status === 'read' ? { readAt: now } : {}),
+        },
+      }),
+    );
   },
 
   /**
@@ -224,23 +252,27 @@ export const chatRepository = {
     userId: string,
     increment: number,
   ): Promise<void> => {
-    await dynamoClient.send(new UpdateCommand({
-      TableName: CONVERSATIONS_TABLE,
-      Key: { PK: `CONV#${conversationId}`, SK: `MEMBER#${userId}` },
-      UpdateExpression: 'ADD unreadCount :inc',
-      ExpressionAttributeValues: { ':inc': increment },
-    }));
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: `MEMBER#${userId}` },
+        UpdateExpression: 'ADD unreadCount :inc',
+        ExpressionAttributeValues: { ':inc': increment },
+      }),
+    );
   },
 
   resetMemberUnreadCount: async (conversationId: string, userId: string): Promise<void> => {
-    await dynamoClient.send(new UpdateCommand({
-      TableName: CONVERSATIONS_TABLE,
-      Key: { PK: `CONV#${conversationId}`, SK: `MEMBER#${userId}` },
-      UpdateExpression: 'SET unreadCount = :zero, lastReadAt = :now',
-      ExpressionAttributeValues: {
-        ':zero': 0,
-        ':now': new Date().toISOString(),
-      },
-    }));
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: `MEMBER#${userId}` },
+        UpdateExpression: 'SET unreadCount = :zero, lastReadAt = :now',
+        ExpressionAttributeValues: {
+          ':zero': 0,
+          ':now': new Date().toISOString(),
+        },
+      }),
+    );
   },
 };

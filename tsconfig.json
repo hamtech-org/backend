@@ -20,7 +20,8 @@
       "@shared/*": ["./src/shared/*"],
       "@config/*": ["./src/config/*"]
     },
-    "baseUrl": "."
+    "baseUrl": ".",
+    "ignoreDeprecations": "6.0"
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "tests"]
