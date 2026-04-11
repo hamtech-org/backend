@@ -18,8 +18,8 @@ export const authenticateSocket = (socket: Socket, next: (err?: Error) => void):
       return next(new Error('Token không được cung cấp'));
     }
 
-    const decoded = verify(token, env.JWT_PUBLIC_KEY, {
-      algorithms: ['RS256'],
+    const decoded = verify(token, env.JWT_ACCESS_SECRET, {
+      algorithms: ['HS256'],
     }) as SocketAuthPayload;
 
     socket.data.userId = decoded.userId;
