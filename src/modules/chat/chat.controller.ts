@@ -65,6 +65,13 @@ export const chatController = {
         conversationId,
         createdAt,
       );
+      try {
+        getIO().to(`conv:${conversationId}`).emit('message:edited', {
+          messageId: req.params.messageId,
+          conversationId,
+          content,
+        });
+      } catch { /* socket chưa khởi tạo */ }
       sendSuccess(res, null, 'Chỉnh sửa thành công');
     } catch (error) { next(error); }
   },
@@ -78,6 +85,12 @@ export const chatController = {
         conversationId,
         createdAt,
       );
+      try {
+        getIO().to(`conv:${conversationId}`).emit('message:deleted', {
+          messageId: req.params.messageId,
+          conversationId,
+        });
+      } catch { /* socket chưa khởi tạo */ }
       sendSuccess(res, null, 'Xóa thành công');
     } catch (error) { next(error); }
   },
@@ -91,6 +104,12 @@ export const chatController = {
         conversationId,
         createdAt,
       );
+      try {
+        getIO().to(`conv:${conversationId}`).emit('message:recall', {
+          messageId: req.params.messageId,
+          conversationId,
+        });
+      } catch { /* socket chưa khởi tạo */ }
       sendSuccess(res, null, 'Thu hồi thành công');
     } catch (error) { next(error); }
   },
@@ -107,6 +126,13 @@ export const chatController = {
     try {
       const { conversationId, createdAt } = req.body as { conversationId: string; createdAt: string };
       await chatService.pinMessage(req.params.messageId, conversationId, createdAt);
+      try {
+        getIO().to(`conv:${conversationId}`).emit('message:pin_updated', {
+          messageId: req.params.messageId,
+          conversationId,
+          isPinned: true,
+        });
+      } catch { /* socket chưa khởi tạo */ }
       sendSuccess(res, null, 'Đã ghim tin nhắn');
     } catch (error) { next(error); }
   },
@@ -115,6 +141,13 @@ export const chatController = {
     try {
       const { conversationId, createdAt } = req.body as { conversationId: string; createdAt: string };
       await chatService.unpinMessage(req.params.messageId, conversationId, createdAt);
+      try {
+        getIO().to(`conv:${conversationId}`).emit('message:pin_updated', {
+          messageId: req.params.messageId,
+          conversationId,
+          isPinned: false,
+        });
+      } catch { /* socket chưa khởi tạo */ }
       sendSuccess(res, null, 'Đã bỏ ghim tin nhắn');
     } catch (error) { next(error); }
   },
