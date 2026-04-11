@@ -33,6 +33,14 @@ export interface IConversationMember {
   nickname: string | null;
 }
 
+export interface IReplyToDetails {
+  messageId: string;
+  senderId: string;
+  senderDisplayName: string | null;
+  content: string;
+  type: MessageType;
+}
+
 export interface IMessage extends TimestampFields {
   messageId: string;
   conversationId: string;
@@ -46,6 +54,7 @@ export interface IMessage extends TimestampFields {
   mediaSize: number | null;
   thumbnailUrl: string | null;
   replyTo: string | null;
+  replyToDetails?: IReplyToDetails | null;
   forwardFrom: string | null;
   isPinned: boolean;
   isEdited: boolean;

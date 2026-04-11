@@ -52,6 +52,45 @@ async function attachSenderDisplayNames(messages: IMessage[]): Promise<IMessage[
   }));
 }
 
+async function attachReplyToDetails(
+  conversationId: string,
+  messages: IMessage[],
+): Promise<IMessage[]> {
+  const replyToIds = messages
+    .map((m) => m.replyTo)
+    .filter((id): id is string => id !== null && id !== undefined);
+
+  if (replyToIds.length === 0) return messages;
+
+  const allMessagesInConv = await chatRepository.getMessages(conversationId, 100);
+  const msgMap = new Map(allMessagesInConv.map((m) => [m.messageId, m]));
+
+  const senderIds = [...new Set(allMessagesInConv.map((m) => m.senderId))];
+  const users = await userRepository.findByIds(senderIds);
+  const nameById = new Map(users.map((u) => [u.userId, u.displayName]));
+
+  return messages.map((msg) => {
+    if (!msg.replyTo) return msg;
+    const original = msgMap.get(msg.replyTo);
+    if (!original) return msg;
+
+    let content = original.content;
+    if (original.isRecalled) content = 'Tin nhắn đã được thu hồi';
+    if (original.isDeleted) content = 'Tin nhắn đã được xóa';
+
+    return {
+      ...msg,
+      replyToDetails: {
+        messageId: original.messageId,
+        senderId: original.senderId,
+        senderDisplayName: nameById.get(original.senderId) ?? null,
+        content: content.slice(0, 100),
+        type: original.type,
+      },
+    };
+  });
+}
+
 export const chatService = {
   // ─── Conversations ────────────────────────────────────────────────────
 
@@ -168,7 +207,8 @@ export const chatService = {
 
   getMessages: async (conversationId: string, limit?: number): Promise<IMessage[]> => {
     const messages = await chatRepository.getMessages(conversationId, limit);
-    return attachSenderDisplayNames(messages);
+    const withNames = await attachSenderDisplayNames(messages);
+    return attachReplyToDetails(conversationId, withNames);
   },
 
   /**
@@ -215,6 +255,9 @@ export const chatService = {
     const senders = await userRepository.findByIds([senderId]);
     const senderDisplayName = senders[0]?.displayName?.trim() ?? null;
 
+    const withSenderName: IMessage = { ...message, senderDisplayName };
+    const [messageForClient] = await attachReplyToDetails(conversationId, [withSenderName]);
+
     // Cập nhật lastMessage trên conversation
     await chatRepository.updateConversationLastMessage(
       conversationId,
@@ -251,7 +294,7 @@ export const chatService = {
       }),
     ]);
 
-    return { ...message, senderDisplayName };
+    return messageForClient;
   },
 
   /**
