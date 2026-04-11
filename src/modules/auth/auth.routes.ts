@@ -11,6 +11,7 @@ import {
   resetPasswordSchema,
   changePasswordSchema,
   faceLoginSchema,
+  enableFaceLoginSchema,
   verifyEmailSchema,
   verifyLoginOtpSchema,
 } from './auth.validator.js';
@@ -27,13 +28,21 @@ router.post('/forgot-password', validate(forgotPasswordSchema), authController.f
 router.post('/reset-password', validate(resetPasswordSchema), authController.resetPassword);
 
 // ── Face Login (public: login, protected: enable/disable) ──
+// Step 1: Create liveness session
+router.post('/face-liveness/start', authController.createLivenessSession);
+
+// Step 2: Login with face (requires liveness session ID)
 router.post('/face-login', loginLimiter, validate(faceLoginSchema), authController.loginWithFace);
+
+// Step 3: Enable face login (protected: requires authentication + liveness session ID)
 router.post(
   '/face-login/enable',
   authenticate,
-  validate(faceLoginSchema),
+  validate(enableFaceLoginSchema),
   authController.enableFaceLogin,
 );
+
+// Step 4: Disable face login
 router.delete('/face-login/disable', authenticate, authController.disableFaceLogin);
 
 // ── Protected routes (cần access token) ──

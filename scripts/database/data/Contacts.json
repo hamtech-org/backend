@@ -1,0 +1,74 @@
+[
+  {
+    "PK": "USER#seed-user-alice",
+    "SK": "FRIEND#seed-user-bob",
+    "userId": "seed-user-alice",
+    "friendId": "seed-user-bob",
+    "status": "accepted",
+    "requestedBy": "seed-user-alice",
+    "createdAt": "2026-04-02T10:00:00.000Z"
+  },
+  {
+    "PK": "USER#seed-user-bob",
+    "SK": "FRIEND#seed-user-alice",
+    "userId": "seed-user-bob",
+    "friendId": "seed-user-alice",
+    "status": "accepted",
+    "requestedBy": "seed-user-alice",
+    "createdAt": "2026-04-02T10:00:00.000Z"
+  },
+  {
+    "PK": "USER#seed-user-alice",
+    "SK": "FRIEND#seed-user-charlie",
+    "userId": "seed-user-alice",
+    "friendId": "seed-user-charlie",
+    "status": "accepted",
+    "requestedBy": "seed-user-charlie",
+    "createdAt": "2026-04-02T11:00:00.000Z"
+  },
+  {
+    "PK": "USER#seed-user-charlie",
+    "SK": "FRIEND#seed-user-alice",
+    "userId": "seed-user-charlie",
+    "friendId": "seed-user-alice",
+    "status": "accepted",
+    "requestedBy": "seed-user-charlie",
+    "createdAt": "2026-04-02T11:00:00.000Z"
+  },
+  {
+    "PK": "USER#seed-user-bob",
+    "SK": "FRIEND#seed-user-charlie",
+    "userId": "seed-user-bob",
+    "friendId": "seed-user-charlie",
+    "status": "accepted",
+    "requestedBy": "seed-user-bob",
+    "createdAt": "2026-04-02T12:00:00.000Z"
+  },
+  {
+    "PK": "USER#seed-user-charlie",
+    "SK": "FRIEND#seed-user-bob",
+    "userId": "seed-user-charlie",
+    "friendId": "seed-user-bob",
+    "status": "accepted",
+    "requestedBy": "seed-user-bob",
+    "createdAt": "2026-04-02T12:00:00.000Z"
+  },
+  {
+    "PK": "USER#seed-user-alice",
+    "SK": "FRIEND#seed-user-diana",
+    "userId": "seed-user-alice",
+    "friendId": "seed-user-diana",
+    "status": "accepted",
+    "requestedBy": "seed-user-alice",
+    "createdAt": "2026-04-03T08:00:00.000Z"
+  },
+  {
+    "PK": "USER#seed-user-diana",
+    "SK": "FRIEND#seed-user-alice",
+    "userId": "seed-user-diana",
+    "friendId": "seed-user-alice",
+    "status": "accepted",
+    "requestedBy": "seed-user-alice",
+    "createdAt": "2026-04-03T08:00:00.000Z"
+  }
+]

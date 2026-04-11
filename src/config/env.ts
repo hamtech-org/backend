@@ -22,7 +22,7 @@ const envSchema = z.object({
   FACEBOOK_APP_SECRET: z.string().default(''),
   FACEBOOK_CALLBACK_URL: z.string().default(''),
 
-  AWS_REGION: z.string().default('ap-southeast-1'),
+  AWS_REGION: z.string().default('us-east-1'),
   AWS_ACCESS_KEY_ID: z.string().default(''),
   AWS_SECRET_ACCESS_KEY: z.string().default(''),
 
@@ -42,12 +42,12 @@ const envSchema = z.object({
   ELASTICSEARCH_PASSWORD: z.string().default(''),
 
   S3_BUCKET_NAME: z.string().default('zalogram-media'),
-  S3_REGION: z.string().default('ap-southeast-1'),
+  S3_REGION: z.string().default('us-east-1'),
   CLOUDFRONT_DOMAIN: z.string().default(''),
 
   SES_FROM_EMAIL: z.string().default('noreply@zalogram.vn'),
-  SES_REGION: z.string().default('ap-southeast-1'),
-  SNS_REGION: z.string().default('ap-southeast-1'),
+  SES_REGION: z.string().default('us-east-1'),
+  SNS_REGION: z.string().default('us-east-1'),
 
   GOOGLE_GEMINI_API_KEY: z.string().default(''),
 

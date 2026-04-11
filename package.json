@@ -15,7 +15,11 @@
     "format": "prettier --write \"src/**/*.ts\" \"scripts/**/*.ts\" \"*.{cjs,json}\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"scripts/**/*.ts\" \"*.{cjs,json}\"",
     "typecheck": "tsc --noEmit",
-    "db:setup": "tsx scripts/database/setup-database.ts"
+    "db:wait": "tsx scripts/database/wait-for-dynamodb.ts",
+    "db:setup": "tsx scripts/database/setup-database.ts",
+    "db:seed": "tsx scripts/database/insert-data.ts",
+    "db:reset": "tsx scripts/database/setup-database.ts && tsx scripts/database/insert-data.ts",
+    "db:seed:legacy": "tsx scripts/database/seed-data.ts"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.600.0",

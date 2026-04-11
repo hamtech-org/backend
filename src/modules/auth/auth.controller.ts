@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from './auth.service.js';
 import { sendSuccess, sendCreated } from '@/shared/utils/response.js';
-import type { IRequestMeta } from './auth.types.js';
+import type { IRequestMeta, IRegisterDto, ILoginDto } from './auth.types.js';
+import { logger } from '@/shared/utils/logger.js';
 
 /**
  * Extract IP + User-Agent từ request
@@ -14,7 +15,7 @@ const getRequestMeta = (req: Request): IRequestMeta => ({
 export const authController = {
   register: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const result = await authService.register(req.body);
+      const result = await authService.register(req.body as IRegisterDto);
       sendCreated(res, result, 'Đăng ký thành công');
     } catch (error) {
       next(error);
@@ -23,7 +24,7 @@ export const authController = {
 
   login: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const result = await authService.login(req.body);
+      const result = await authService.login(req.body as ILoginDto);
       sendSuccess(res, result, 'Đăng nhập thành công');
     } catch (error) {
       next(error);
@@ -117,10 +118,26 @@ export const authController = {
 
   // ── Face Login ──
 
+  /**
+   * Tạo session mới cho face liveness check
+   * Frontend gọi endpoint này để bắt đầu movement challenge
+   */
+  createLivenessSession: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await authService.createLivenessSession();
+      sendSuccess(res, result, 'Liveness session created');
+    } catch (error) {
+      next(error);
+    }
+  },
+
   enableFaceLogin: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { image } = req.body as { image: string };
-      await authService.enableFaceLogin(req.user!.userId, image);
+      const { password, livenessSessionId } = req.body as {
+        password: string;
+        livenessSessionId: string;
+      };
+      await authService.enableFaceLogin(req.user!.userId, password, livenessSessionId);
       sendSuccess(res, null, 'Đã bật đăng nhập bằng khuôn mặt');
     } catch (error) {
       next(error);
@@ -138,8 +155,15 @@ export const authController = {
 
   loginWithFace: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { image } = req.body as { image: string };
-      const result = await authService.loginWithFace(image, getRequestMeta(req));
+      const { email, livenessSessionId } = req.body as {
+        email: string;
+        livenessSessionId: string;
+      };
+      const result = await authService.loginWithFace(
+        email,
+        livenessSessionId,
+        getRequestMeta(req),
+      );
       sendSuccess(res, result, 'Đăng nhập bằng khuôn mặt thành công');
     } catch (error) {
       next(error);
