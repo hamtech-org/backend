@@ -9,6 +9,7 @@ import {
   deleteMessageSchema,
   recallMessageSchema,
   markAsReadSchema,
+  reactMessageSchema,
 } from './chat.validator.js';
 
 const router = Router();
@@ -27,5 +28,6 @@ router.delete('/messages/:messageId', authenticate, validate(deleteMessageSchema
 router.post('/messages/:messageId/recall', authenticate, validate(recallMessageSchema), chatController.recallMessage);
 router.post('/messages/:messageId/pin', authenticate, chatController.pinMessage);
 router.delete('/messages/:messageId/pin', authenticate, chatController.unpinMessage);
+router.post('/messages/:messageId/react', authenticate, validate(reactMessageSchema), chatController.reactToMessage);
 
 export default router;

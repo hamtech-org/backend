@@ -161,4 +161,19 @@ export const chatController = {
       sendSuccess(res, null, 'Đã bỏ ghim tin nhắn');
     } catch (error) { next(error); }
   },
+
+  reactToMessage: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { conversationId, createdAt, emoji } = req.body as { conversationId: string; createdAt: string; emoji: string };
+      const reactions = await chatService.reactToMessage(req.params.messageId, req.user!.userId, conversationId, createdAt, emoji);
+      try {
+        getIO().to(`conv:${conversationId}`).emit('message:reacted', {
+          messageId: req.params.messageId,
+          conversationId,
+          reactions,
+        });
+      } catch { /* socket chưa khởi tạo */ }
+      sendSuccess(res, reactions, 'Đã thả cảm xúc');
+    } catch (error) { next(error); }
+  },
 };

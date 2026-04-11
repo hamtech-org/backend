@@ -35,3 +35,9 @@ export const recallMessageSchema = z.object({
 export const markAsReadSchema = z.object({
   messageId: z.string().uuid(),
 });
+
+export const reactMessageSchema = z.object({
+  conversationId: conversationIdBodySchema,
+  createdAt: z.string().datetime(),
+  emoji: z.string().min(1).max(20),
+});

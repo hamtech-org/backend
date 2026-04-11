@@ -75,3 +75,9 @@ export interface ISendMessageDto {
   mediaUrl?: string;
   replyTo?: string;
 }
+
+export interface IReactMessageDto {
+  conversationId: string;
+  createdAt: string;
+  emoji: string;
+}

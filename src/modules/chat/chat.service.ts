@@ -396,4 +396,51 @@ export const chatService = {
       isPinned: false,
     });
   },
+
+  /**
+   * Thả cảm xúc trên tin nhắn
+   */
+  reactToMessage: async (
+    messageId: string,
+    userId: string,
+    conversationId: string,
+    createdAt: string,
+    emoji: string,
+  ): Promise<Record<string, string[]>> => {
+    const message = await chatRepository.getMessageById(conversationId, messageId, createdAt);
+    if (!message) throw new NotFoundError('Tin nhắn');
+
+    const reactions = { ...(message.reactions || {}) };
+    let usersWithThisEmoji = reactions[emoji] || [];
+
+    if (usersWithThisEmoji.includes(userId)) {
+      // Đã thả emoji này -> hủy thả
+      usersWithThisEmoji = usersWithThisEmoji.filter((id) => id !== userId);
+      if (usersWithThisEmoji.length === 0) {
+        delete reactions[emoji];
+      } else {
+        reactions[emoji] = usersWithThisEmoji;
+      }
+    } else {
+      // Chưa thả -> xóa emoji cũ của user này (mỗi user 1 cảm xúc/tin nhắn) rồi thêm emoji mới
+      for (const [key, userList] of Object.entries(reactions)) {
+        if (userList.includes(userId)) {
+          const newList = userList.filter((id) => id !== userId);
+          if (newList.length === 0) {
+            delete reactions[key];
+          } else {
+            reactions[key] = newList;
+          }
+        }
+      }
+      reactions[emoji] = [...(reactions[emoji] || []), userId];
+    }
+
+    const sortKey = `MSG#${message.createdAt}#${messageId}`;
+    await chatRepository.updateMessage(conversationId, messageId, sortKey, {
+      reactions,
+    });
+
+    return reactions;
+  },
 };
