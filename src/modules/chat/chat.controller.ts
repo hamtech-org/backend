@@ -90,6 +90,11 @@ export const chatController = {
           messageId: req.params.messageId,
           conversationId,
         });
+        getIO().to(`conv:${conversationId}`).emit('message:pin_updated', {
+          messageId: req.params.messageId,
+          conversationId,
+          isPinned: false,
+        });
       } catch { /* socket chưa khởi tạo */ }
       sendSuccess(res, null, 'Xóa thành công');
     } catch (error) { next(error); }
@@ -108,6 +113,11 @@ export const chatController = {
         getIO().to(`conv:${conversationId}`).emit('message:recall', {
           messageId: req.params.messageId,
           conversationId,
+        });
+        getIO().to(`conv:${conversationId}`).emit('message:pin_updated', {
+          messageId: req.params.messageId,
+          conversationId,
+          isPinned: false,
         });
       } catch { /* socket chưa khởi tạo */ }
       sendSuccess(res, null, 'Thu hồi thành công');

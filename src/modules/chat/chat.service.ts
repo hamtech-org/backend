@@ -252,6 +252,7 @@ export const chatService = {
     const sortKey = `MSG#${message.createdAt}#${messageId}`;
     await chatRepository.updateMessage(conversationId, messageId, sortKey, {
       isDeleted: true,
+      isPinned: false,
     });
   },
 
@@ -272,6 +273,7 @@ export const chatService = {
     await chatRepository.updateMessage(conversationId, messageId, sortKey, {
       isRecalled: true,
       content: 'Tin nhắn đã được thu hồi',
+      isPinned: false,
     });
   },
 
