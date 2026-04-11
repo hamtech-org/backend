@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { chatService } from './chat.service.js';
 import { sendSuccess, sendCreated } from '@/shared/utils/response.js';
 import { getIO } from '@/socket/index.js';
+import { broadcastMessageNew } from './chat.broadcast.js';
 
 export const chatController = {
   getConversations: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -43,10 +44,9 @@ export const chatController = {
         req.params.conversationId,
         req.body,
       );
-      // Broadcast tới tất cả thành viên đang kết nối trong phòng
       try {
-        getIO().to(`conv:${req.params.conversationId}`).emit('message:new', message);
-      } catch { /* socket chưa khởi tạo, bỏ qua */ }
+        await broadcastMessageNew(message);
+      } catch { /* socket chưa khởi tạo hoặc lỗi broadcast */ }
       sendCreated(res, message);
     } catch (error) { next(error); }
   },

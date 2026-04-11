@@ -2,6 +2,7 @@ import { Server, Socket } from 'socket.io';
 import { z } from 'zod';
 import { chatService } from './chat.service.js';
 import { chatRepository } from './chat.repository.js';
+import { broadcastMessageNew } from './chat.broadcast.js';
 import { logger } from '@/shared/utils/logger.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 
@@ -48,8 +49,7 @@ export const registerChatHandlers = (io: Server, socket: Socket): void => {
 
       const message = await chatService.sendMessage(userId, conversationId, messageData);
 
-      // Phát tin nhắn mới đến tất cả thành viên trong room (bao gồm người gửi)
-      io.to(`conv:${conversationId}`).emit('message:new', message);
+      await broadcastMessageNew(message);
 
       // Gửi xác nhận delivered cho người gửi
       socket.emit('message:delivered', { messageId: message.messageId, conversationId });
