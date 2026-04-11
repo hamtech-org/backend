@@ -15,4 +15,20 @@ export const sendMessageSchema = z.object({
 
 export const editMessageSchema = z.object({
   content: z.string().min(1).max(10000),
+  conversationId: z.string().uuid(),
+  createdAt: z.string().datetime(),
+});
+
+export const deleteMessageSchema = z.object({
+  conversationId: z.string().uuid(),
+  createdAt: z.string().datetime(),
+});
+
+export const recallMessageSchema = z.object({
+  conversationId: z.string().uuid(),
+  createdAt: z.string().datetime(),
+});
+
+export const markAsReadSchema = z.object({
+  messageId: z.string().uuid(),
 });
