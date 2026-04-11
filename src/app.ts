@@ -17,6 +17,7 @@ import mediaRoutes from '@/modules/media/media.routes.js';
 import aiRoutes from '@/modules/ai/ai.routes.js';
 import adminRoutes from '@/modules/admin/admin.routes.js';
 import searchRoutes from '@/modules/search/search.routes.js';
+import agoraRoutes from '@/modules/agora/agora.routes.js';
 
 const app = express();
 
@@ -56,6 +57,7 @@ app.use(`${API_PREFIX}/media`, mediaRoutes);
 app.use(`${API_PREFIX}/ai`, aiRoutes);
 app.use(`${API_PREFIX}/admin`, adminRoutes);
 app.use(`${API_PREFIX}/search`, searchRoutes);
+app.use(`${API_PREFIX}/agora`, agoraRoutes);
 
 // --- Error handler---
 app.use(errorHandler);

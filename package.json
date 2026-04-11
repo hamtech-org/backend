@@ -27,6 +27,7 @@
     "@aws-sdk/s3-request-presigner": "^3.600.0",
     "@elastic/elasticsearch": "^8.14.0",
     "@google/generative-ai": "^0.12.0",
+    "agora-token": "^2.0.5",
     "bcryptjs": "^2.4.3",
     "compression": "^1.7.4",
     "cors": "^2.8.5",
