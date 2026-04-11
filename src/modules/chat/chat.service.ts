@@ -6,6 +6,17 @@ import { kafkaProducer } from '@/shared/kafka/producer.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 
+async function attachSenderDisplayNames(messages: IMessage[]): Promise<IMessage[]> {
+  if (messages.length === 0) return messages;
+  const senderIds = [...new Set(messages.map((m) => m.senderId))];
+  const users = await userRepository.findByIds(senderIds);
+  const nameById = new Map(users.map((u) => [u.userId, u.displayName]));
+  return messages.map((msg) => ({
+    ...msg,
+    senderDisplayName: nameById.get(msg.senderId) ?? null,
+  }));
+}
+
 export const chatService = {
   // ─── Conversations ────────────────────────────────────────────────────
 
@@ -118,7 +129,8 @@ export const chatService = {
   // ─── Messages ─────────────────────────────────────────────────────────
 
   getMessages: async (conversationId: string, limit?: number): Promise<IMessage[]> => {
-    return chatRepository.getMessages(conversationId, limit);
+    const messages = await chatRepository.getMessages(conversationId, limit);
+    return attachSenderDisplayNames(messages);
   },
 
   /**
@@ -197,7 +209,9 @@ export const chatService = {
       }),
     ]);
 
-    return message;
+    const senders = await userRepository.findByIds([senderId]);
+    const senderDisplayName = senders[0]?.displayName ?? null;
+    return { ...message, senderDisplayName };
   },
 
   /**

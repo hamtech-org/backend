@@ -36,6 +36,7 @@ export interface IMessage extends TimestampFields {
   messageId: string;
   conversationId: string;
   senderId: string;
+  senderDisplayName?: string | null;
   type: MessageType;
   content: string;
   encryptedContent: string | null;
