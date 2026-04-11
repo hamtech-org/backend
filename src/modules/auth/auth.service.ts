@@ -14,6 +14,7 @@ import {
   ValidationError,
 } from '@/shared/utils/errors.js';
 import { authRepository } from './auth.repository.js';
+import { userService } from '@/modules/user/user.service.js';
 import type { JwtAccessPayload, JwtRefreshPayload } from '@/shared/types/auth.types.js';
 import type {
   IRegisterDto,
@@ -274,6 +275,9 @@ export const authService = {
 
     await authRepository.createUser(newUser);
     logger.info(`User registered and verified: ${userId} (${email})`);
+
+    // Emit event to sync with Elasticsearch
+    await userService.emitUserEvent('index', newUser);
 
     // 4. Xóa data tạm trong Redis
     await redis.del(`${REDIS_VERIFY_PREFIX}${email}`);

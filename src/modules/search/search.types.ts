@@ -18,6 +18,7 @@ export interface ISearchOptions {
 export interface ISearchUserResult {
   userId: string;
   displayName: string;
+  email: string;
   avatar: string | null;
   bio: string | null;
 }
@@ -49,6 +50,11 @@ export interface ISearchMessageResult {
 export interface ISearchAllResult {
   users: ISearchResult<ISearchUserResult>;
   posts: ISearchResult<ISearchPostResult>;
+  groups: ISearchResult<ISearchGroupResult>;
+}
+
+export interface ISearchAllChatResult {
+  users: ISearchResult<ISearchUserResult>;
   groups: ISearchResult<ISearchGroupResult>;
   messages: ISearchResult<ISearchMessageResult>;
 }

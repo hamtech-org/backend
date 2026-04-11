@@ -9,5 +9,6 @@ router.get('/users', authenticate, searchController.searchUsers);
 router.get('/groups', authenticate, searchController.searchGroups);
 router.get('/posts', authenticate, searchController.searchPosts);
 router.get('/all', authenticate, searchController.searchAll);
+router.get('/all-chat', authenticate, searchController.searchAllChat);
 
 export default router;

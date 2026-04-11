@@ -51,4 +51,12 @@ export const searchController = {
       sendSuccess(res, results);
     } catch (error) { next(error); }
   },
+
+  searchAllChat: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const options = parseSearchOptions(req);
+      const results = await searchService.searchAllChat(req.user!.userId, options);
+      sendSuccess(res, results);
+    } catch (error) { next(error); }
+  },
 };

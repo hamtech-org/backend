@@ -19,9 +19,13 @@ echo "[3/5] Initializing tables..."
 npx tsx scripts/database/setup-database.ts
 echo ""
 
-echo "[4/5] Seeding data..."
-npx tsx scripts/database/insert-data.ts
+# echo "[4/5] Seeding data..."
+# npx tsx scripts/database/insert-data.ts
+# echo ""
+
+echo "[5/5] Syncing users to Elasticsearch..." 
+npx tsx scripts/database/sync-users-to-es.ts
 echo ""
 
-echo "[5/5] Starting dev server..."
+echo "[6/6] Starting dev server..."
 exec npm run dev
