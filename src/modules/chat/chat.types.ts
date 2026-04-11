@@ -19,6 +19,7 @@ export interface ILastMessage {
   content: string;
   type: MessageType;
   createdAt: string;
+  senderDisplayName?: string | null;
 }
 
 export interface IConversationMember {

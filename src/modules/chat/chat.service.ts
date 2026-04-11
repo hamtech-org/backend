@@ -13,24 +13,27 @@ import { kafkaProducer } from '@/shared/kafka/producer.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 
-function lastMessageSnapshotFromNewest(messages: IMessage[]): ILastMessage | null {
+async function lastMessageSnapshotFromNewest(messages: IMessage[]): Promise<ILastMessage | null> {
   if (messages.length === 0) return null;
   const m = messages[0];
   let content = m.content ?? '';
   if (m.isRecalled) content = 'Tin nhắn đã được thu hồi';
   else if (m.isDeleted) content = 'Tin nhắn đã được xóa';
+  const senders = await userRepository.findByIds([m.senderId]);
+  const senderDisplayName = senders[0]?.displayName?.trim() ?? null;
   return {
     messageId: m.messageId,
     senderId: m.senderId,
     type: m.type,
     content,
     createdAt: m.createdAt,
+    senderDisplayName,
   };
 }
 
 async function syncConversationLastMessageMeta(conversationId: string): Promise<void> {
   const messages = await chatRepository.getMessages(conversationId, 100);
-  const snapshot = lastMessageSnapshotFromNewest(messages);
+  const snapshot = await lastMessageSnapshotFromNewest(messages);
   if (!snapshot) {
     await chatRepository.clearConversationLastMessage(conversationId);
     return;
@@ -209,6 +212,9 @@ export const chatService = {
 
     await chatRepository.createMessage(message);
 
+    const senders = await userRepository.findByIds([senderId]);
+    const senderDisplayName = senders[0]?.displayName?.trim() ?? null;
+
     // Cập nhật lastMessage trên conversation
     await chatRepository.updateConversationLastMessage(
       conversationId,
@@ -218,6 +224,7 @@ export const chatService = {
         content: data.content,
         type: data.type,
         createdAt: now,
+        senderDisplayName,
       },
       now,
     );
@@ -244,8 +251,6 @@ export const chatService = {
       }),
     ]);
 
-    const senders = await userRepository.findByIds([senderId]);
-    const senderDisplayName = senders[0]?.displayName ?? null;
     return { ...message, senderDisplayName };
   },
 
