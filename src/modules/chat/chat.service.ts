@@ -1,10 +1,42 @@
 import { v4 as uuidv4 } from 'uuid';
 import { chatRepository } from './chat.repository.js';
-import type { IConversation, IConversationMember, IMessage, ICreateConversationDto, ISendMessageDto } from './chat.types.js';
+import type {
+  IConversation,
+  IConversationMember,
+  IMessage,
+  ICreateConversationDto,
+  ISendMessageDto,
+  ILastMessage,
+} from './chat.types.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
 import { kafkaProducer } from '@/shared/kafka/producer.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { userRepository } from '@/modules/user/user.repository.js';
+
+function lastMessageSnapshotFromNewest(messages: IMessage[]): ILastMessage | null {
+  if (messages.length === 0) return null;
+  const m = messages[0];
+  let content = m.content ?? '';
+  if (m.isRecalled) content = 'Tin nhắn đã được thu hồi';
+  else if (m.isDeleted) content = 'Tin nhắn đã được xóa';
+  return {
+    messageId: m.messageId,
+    senderId: m.senderId,
+    type: m.type,
+    content,
+    createdAt: m.createdAt,
+  };
+}
+
+async function syncConversationLastMessageMeta(conversationId: string): Promise<void> {
+  const messages = await chatRepository.getMessages(conversationId, 100);
+  const snapshot = lastMessageSnapshotFromNewest(messages);
+  if (!snapshot) {
+    await chatRepository.clearConversationLastMessage(conversationId);
+    return;
+  }
+  await chatRepository.updateConversationLastMessage(conversationId, snapshot, snapshot.createdAt);
+}
 
 async function attachSenderDisplayNames(messages: IMessage[]): Promise<IMessage[]> {
   if (messages.length === 0) return messages;
@@ -22,7 +54,9 @@ export const chatService = {
 
   getConversations: async (userId: string): Promise<IConversation[]> => {
     const conversations = await chatRepository.getConversations(userId);
-    const directConversations = conversations.filter((conversation) => conversation.type === 'direct');
+    const directConversations = conversations.filter(
+      (conversation) => conversation.type === 'direct',
+    );
 
     if (directConversations.length === 0) {
       return conversations;
@@ -37,9 +71,7 @@ export const chatService = {
     const otherUserIds = [
       ...new Set(
         membersPerConversation.flatMap((members) =>
-          members
-            .filter((member) => member.userId !== userId)
-            .map((member) => member.userId),
+          members.filter((member) => member.userId !== userId).map((member) => member.userId),
         ),
       ),
     ];
@@ -65,7 +97,10 @@ export const chatService = {
    * Tạo conversation mới (direct hoặc group).
    * Với direct: kiểm tra đã tồn tại conv 1-1 chưa, nếu có thì trả về conv cũ.
    */
-  createConversation: async (creatorId: string, data: ICreateConversationDto): Promise<IConversation> => {
+  createConversation: async (
+    creatorId: string,
+    data: ICreateConversationDto,
+  ): Promise<IConversation> => {
     const allMemberIds = Array.from(new Set([creatorId, ...data.memberIds]));
 
     // Với direct chat, tìm conv đã tồn tại
@@ -234,6 +269,7 @@ export const chatService = {
       content,
       isEdited: true,
     });
+    await syncConversationLastMessageMeta(conversationId);
   },
 
   /**
@@ -254,6 +290,7 @@ export const chatService = {
       isDeleted: true,
       isPinned: false,
     });
+    await syncConversationLastMessageMeta(conversationId);
   },
 
   /**
@@ -275,6 +312,7 @@ export const chatService = {
       content: 'Tin nhắn đã được thu hồi',
       isPinned: false,
     });
+    await syncConversationLastMessageMeta(conversationId);
   },
 
   /**

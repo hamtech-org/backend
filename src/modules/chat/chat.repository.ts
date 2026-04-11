@@ -124,6 +124,19 @@ export const chatRepository = {
     );
   },
 
+  clearConversationLastMessage: async (conversationId: string): Promise<void> => {
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: 'META' },
+        UpdateExpression: 'REMOVE lastMessage, lastMessageAt SET updatedAt = :now',
+        ExpressionAttributeValues: {
+          ':now': new Date().toISOString(),
+        },
+      }),
+    );
+  },
+
   /**
    * Tìm conversation 1-1 đã tồn tại giữa 2 user
    * Lấy danh sách conv của userA rồi kiểm tra xem userB có trong đó không
