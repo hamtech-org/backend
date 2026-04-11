@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { chatService } from './chat.service.js';
 import { chatRepository } from './chat.repository.js';
 import { logger } from '@/shared/utils/logger.js';
+import { userRepository } from '@/modules/user/user.repository.js';
 
 // Schema validate data gửi qua socket
 const sendMessageSocketSchema = z.object({
@@ -60,10 +61,18 @@ export const registerChatHandlers = (io: Server, socket: Socket): void => {
 
   // ─── Typing indicator ─────────────────────────────────────────────────
 
-  socket.on('message:typing', (conversationId: string) => {
+  socket.on('message:typing', async (conversationId: string) => {
+    let displayName: string | null = null;
+    try {
+      const user = await userRepository.findById(userId);
+      displayName = user?.displayName ?? null;
+    } catch (error) {
+      logger.debug('Socket message:typing lookup user lỗi:', error);
+    }
     socket.to(`conv:${conversationId}`).emit('message:typing_indicator', {
       userId,
       conversationId,
+      displayName,
     });
   });
 
