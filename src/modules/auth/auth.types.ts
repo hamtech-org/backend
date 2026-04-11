@@ -41,7 +41,24 @@ export interface IRequestMeta {
 }
 
 export interface IFaceLoginDto {
+  email: string; // Email phải khớp với face được nhận diện
   image: string; // base64 encoded image
+  livenessSessionId: string; // Session ID từ face liveness check
+}
+
+export interface IEnableFaceLoginDto {
+  image: string; // base64 encoded image
+  livenessSessionId: string; // Session ID từ face liveness check
+}
+
+export interface ILivenessSessionResponse {
+  sessionId: string;
+}
+
+export interface ILivenessResultDto {
+  sessionId: string;
+  confidence: number; // 0-100
+  isLive: boolean;
 }
 
 // ─── Responses ───
