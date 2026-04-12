@@ -10,6 +10,9 @@ import {
   recallMessageSchema,
   markAsReadSchema,
   reactMessageSchema,
+  updateGroupSchema,
+  addMembersSchema,
+  changeRoleSchema,
 } from './chat.validator.js';
 
 const router = Router();
@@ -29,5 +32,53 @@ router.post('/messages/:messageId/recall', authenticate, validate(recallMessageS
 router.post('/messages/:messageId/pin', authenticate, chatController.pinMessage);
 router.delete('/messages/:messageId/pin', authenticate, chatController.unpinMessage);
 router.post('/messages/:messageId/react', authenticate, validate(reactMessageSchema), chatController.reactToMessage);
+
+// ─── Group Management ────────────────────────────────────────────────────────
+// Cập nhật thông tin nhóm (tên / avatar nhóm)
+router.put('/groups/:groupId', authenticate, validate(updateGroupSchema), chatController.updateGroup);
+// Xóa nhóm (Giải tán nhóm)
+router.delete('/groups/:groupId', authenticate, chatController.deleteGroup);
+// Rời khỏi nhóm
+router.post('/groups/:groupId/leave', authenticate, chatController.leaveGroup);
+// Thêm thành viên
+router.post('/groups/:groupId/members', authenticate, validate(addMembersSchema), chatController.addMembers);
+// Xóa thành viên (Kick)
+router.delete('/groups/:groupId/members/:userId', authenticate, chatController.removeMember);
+// Phân quyền thành viên
+router.put('/groups/:groupId/members/:userId/role', authenticate, validate(changeRoleSchema), chatController.changeMemberRole);
+
+// ─── Member Requests (Duyệt thành viên) ──────────────────────────────
+// Yêu cầu tham gia nhóm
+router.post('/groups/:groupId/request', authenticate, chatController.joinRequest);
+// Lấy danh sách yêu cầu tham gia nhóm
+router.get('/groups/:groupId/requests', authenticate, chatController.getGroupRequests);
+// Duyệt yêu cầu tham gia nhóm
+router.post('/groups/:groupId/requests/:userId/approve', authenticate, chatController.approveRequest);
+// Từ chối yêu cầu tham gia nhóm
+router.post('/groups/:groupId/requests/:userId/reject', authenticate, chatController.rejectRequest);
+
+// ─── Polls (Bình chọn) ───────────────────────────────────────────────
+// Lấy danh sách bình chọn
+router.get('/groups/:groupId/polls', authenticate, chatController.getPolls);
+// Tạo bình chọn
+router.post('/groups/:groupId/polls', authenticate, chatController.createPoll);
+// Bỏ phiếu
+router.post('/groups/:groupId/polls/:pollId/vote', authenticate, chatController.votePoll);
+// Hủy bỏ phiếu
+router.post('/groups/:groupId/polls/:pollId/unvote', authenticate, chatController.unvotePoll);
+
+// ─── Tasks (Công việc) ───────────────────────────────────────────────
+// Lấy danh sách công việc
+router.get('/groups/:groupId/tasks', authenticate, chatController.getTasks);
+// Tạo công việc
+router.post('/groups/:groupId/tasks', authenticate, chatController.createTask);
+// Cập nhật trạng thái công việc
+router.put('/groups/:groupId/tasks/:taskId', authenticate, chatController.updateTaskStatus);
+
+// ─── AI Recap ───────────────────────────────────────────────────────
+// Tạo AI Recap
+router.post('/groups/:groupId/ai-recap', authenticate, chatController.generateAIRecap);
+// Lấy AI Recap mới nhất
+router.get('/groups/:groupId/ai-recap/latest', authenticate, chatController.getLatestAIRecap);
 
 export default router;
