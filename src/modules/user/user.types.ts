@@ -48,6 +48,52 @@ export interface IUpdateProfileDto {
   phone?: string;
 }
 
+export interface IFriendship {
+  userId: string;
+  friendId: string;
+  status: 'friend' | 'pending' | 'blocked';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IFriendRequest {
+  senderId: string;
+  receiverId: string;
+  status: 'pending' | 'accepted' | 'rejected' | 'blocked';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IFriendshipResponse {
+  userId: string;
+  displayName: string;
+  avatar: string | null;
+  bio: string | null;
+  status: 'friend' | 'pending' | 'blocked';
+  createdAt: string;
+}
+
+export interface IFriendRequestResponse {
+  userId: string;
+  displayName: string;
+  avatar: string | null;
+  bio: string | null;
+  requestStatus: 'sent' | 'received'; // 'sent' nếu user gửi request, 'received' nếu user nhận
+  status: 'pending' | 'accepted' | 'rejected' | 'blocked';
+  createdAt: string;
+}
+
+export interface IFriendsList {
+  userId: string;
+  friends: IFriendshipResponse[];
+  total: number;
+}
+
+export interface IPendingRequests {
+  received: IFriendRequestResponse[]; // Requests người dùng nhận
+  sent: IFriendRequestResponse[]; // Requests người dùng gửi
+}
+
 export interface IUserStats {
   userId: string;
   displayName: string;

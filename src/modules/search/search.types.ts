@@ -13,6 +13,7 @@ export interface ISearchOptions {
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
   filters?: Record<string, unknown>;
+  userId?: string; // Current user ID for friendship check
 }
 
 export interface ISearchUserResult {
@@ -21,6 +22,8 @@ export interface ISearchUserResult {
   email: string;
   avatar: string | null;
   bio: string | null;
+  isFriend?: boolean; // Whether current user is friend with this user
+  friendshipStatus?: 'friend' | 'pending_sent' | 'pending_received' | 'none'; // Detailed friendship status
 }
 
 export interface ISearchPostResult {

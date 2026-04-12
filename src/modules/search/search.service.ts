@@ -1,4 +1,5 @@
 import { esClient } from '@/config/elasticsearch.js';
+import { userRepository } from '@/modules/user/user.repository.js';
 import type {
   ISearchResult, ISearchOptions,
   ISearchUserResult, ISearchPostResult,
@@ -126,7 +127,7 @@ export const searchService = {
         track_total_hits: true,
       });
 
-      const items: ISearchUserResult[] = result.hits.hits.map(hit => {
+      let items: ISearchUserResult[] = result.hits.hits.map(hit => {
         const source = hit._source as ISearchUserResult;
         return {
           userId: source.userId,
@@ -134,8 +135,61 @@ export const searchService = {
           email: source.email,
           avatar: source.avatar || null,
           bio: source.bio || null,
+          isFriend: false,
         };
       });
+
+      // ✅ Optimized: Batch get all friend IDs once instead of checking each individually
+      console.log('searchUsers - Current userId:', options.userId);
+      console.log('searchUsers - Found users:', items.map(u => u.userId));
+      
+      if (options.userId) {
+        try {
+          const userFriendIds = await userRepository.getFriendIds(options.userId, 1000);
+          const userFriendIdsSet = new Set(userFriendIds);
+          console.log('searchUsers - User friend IDs from Set:', Array.from(userFriendIdsSet));
+
+          // Get pending requests
+          const { received, sent } = await userRepository.getPendingRequests(options.userId);
+          console.log('searchUsers - Pending received:', received, 'Pending sent:', sent);
+          const pendingReceivedSet = new Set(received);
+          const pendingSentSet = new Set(sent);
+
+          items = await Promise.all(items.map(async user => {
+            let friendshipStatus: 'friend' | 'pending_sent' | 'pending_received' | 'none' = 'none';
+            
+            console.log(`Checking friendship for user ${user.userId} against currentUser ${options.userId}`);
+            
+            // Double-check friendship status directly from DB to ensure accuracy
+            if (userFriendIdsSet.has(user.userId)) {
+              console.log(`User ${user.userId} is in friend list`);
+              const isFriendConfirmed = await userRepository.checkFriendship(options.userId, user.userId);
+              if (isFriendConfirmed) {
+                friendshipStatus = 'friend';
+              }
+            } else if (pendingSentSet.has(user.userId)) {
+              console.log(`User ${user.userId} has pending_sent status`);
+              friendshipStatus = 'pending_sent';
+            } else if (pendingReceivedSet.has(user.userId)) {
+              console.log(`User ${user.userId} has pending_received status`);
+              friendshipStatus = 'pending_received';
+            } else {
+              console.log(`User ${user.userId} has no friendship`);
+            }
+
+            return {
+              ...user,
+              isFriend: friendshipStatus === 'friend',
+              friendshipStatus,
+            };
+          }));
+        } catch (error) {
+          console.error('Error checking friendships:', error);
+          // Continue without friendship data if check fails
+        }
+      } else {
+        console.log('searchUsers - No userId provided, skipping friendship check');
+      }
 
       const total = typeof result.hits.total === 'number' ? result.hits.total : result.hits.total?.value || 0;
       const hasMore = from + pageSize < total;
@@ -291,7 +345,7 @@ export const searchService = {
     // Tìm kiếm tổng hợp trên tất cả index
     try {
       const [usersResult, postsResult, groupsResult] = await Promise.all([
-        searchService.searchUsers({ ...options, pageSize: 5 }),
+        searchService.searchUsers({ ...options, pageSize: 5, userId: _userId }),
         searchService.searchPosts({ ...options, pageSize: 5 }),
         searchService.searchGroups({ ...options, pageSize: 5 }),
       ]);
@@ -317,7 +371,7 @@ export const searchService = {
     // Tìm kiếm tổng hợp cho chat: users, groups, messages
     try {
       const [usersResult, groupsResult, messagesResult] = await Promise.all([
-        searchService.searchUsers({ ...options, pageSize: 5 }),
+        searchService.searchUsers({ ...options, pageSize: 5, userId: _userId }),
         searchService.searchGroups({ ...options, pageSize: 5 }),
         searchService.searchMessages(_userId, { ...options, pageSize: 5 }),
       ]);

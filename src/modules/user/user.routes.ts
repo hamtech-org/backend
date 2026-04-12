@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { userController } from './user.controller.js';
 import { authenticate } from '@/shared/middlewares/auth.middleware.js';
 import { validate } from '@/shared/middlewares/validate.middleware.js';
-import { updateProfileSchema } from './user.validator.js';
+import { updateProfileSchema, friendIdParamSchema } from './user.validator.js';
 
 const router = Router();
 
@@ -12,5 +12,30 @@ router.put('/me', authenticate, validate(updateProfileSchema), userController.up
 router.get('/search', authenticate, userController.searchUsers);
 router.post('/multiple', authenticate, userController.getMultipleUsers);
 router.get('/:userId', authenticate, userController.getUserById);
+
+// ── Friend Request routes ──
+// Send friend request
+router.post('/friends/:friendId', authenticate, userController.sendFriendRequest);
+
+// Accept friend request
+router.post('/friends/:senderId/accept', authenticate, userController.acceptFriendRequest);
+
+// Reject friend request
+router.post('/friends/:senderId/reject', authenticate, userController.rejectFriendRequest);
+
+// Cancel sent friend request
+router.post('/friends/:receiverId/cancel', authenticate, userController.cancelFriendRequest);
+
+// Get pending requests (both received and sent)
+router.get('/friends/requests/pending', authenticate, userController.getPendingRequests);
+
+// Check friend status (friend | pending_sent | pending_received | none)
+router.get('/friends/:userId/status', authenticate, userController.getFriendRequestStatus);
+
+// Remove/unfriend
+router.delete('/friends/:friendId', authenticate, userController.removeFriend);
+
+// Get friends list
+router.get('/friends', authenticate, userController.getFriends);
 
 export default router;

@@ -9,6 +9,7 @@ const parseSearchOptions = (req: Request): ISearchOptions => ({
   pageSize: req.query.pageSize ? Number(req.query.pageSize) : undefined,
   sortBy: req.query.sortBy as string | undefined,
   sortOrder: req.query.sortOrder as 'asc' | 'desc' | undefined,
+  userId: req.user?.userId, // Add current user ID
 });
 
 export const searchController = {

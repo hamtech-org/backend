@@ -18,6 +18,7 @@ services:
       - redis
       - kafka
       - elasticsearch
+      - dynamodb-admin
     environment:
       - DYNAMODB_ENDPOINT=http://dynamodb:8000
       - REDIS_HOST=redis
