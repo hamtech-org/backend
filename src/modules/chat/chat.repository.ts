@@ -66,35 +66,23 @@ export const chatRepository = {
   /**
    * META: không ghi null cho lastMessage / lastMessageAt (GSI key kiểu String — DynamoDB từ chối NULL).
    */
-  // createConversation: async (conversation: IConversation): Promise<void> => {
-  //   const { lastMessage, lastMessageAt, name, avatar, ...rest } = conversation;
-  //   const item: Record<string, unknown> = {
-  //     PK: `CONV#${conversation.conversationId}`,
-  //     SK: 'META',
-  //     ...rest,
-  //   };
-  //   if (name != null) item['name'] = name;
-  //   if (avatar != null) item['avatar'] = avatar;
-  //   if (lastMessage != null) item['lastMessage'] = lastMessage;
-  //   if (lastMessageAt != null) item['lastMessageAt'] = lastMessageAt;
-
-  //   await dynamoClient.send(
-  //     new PutCommand({
-  //       TableName: CONVERSATIONS_TABLE,
-  //       Item: item,
-  //     }),
-  //   );
-  // },
-
   createConversation: async (conversation: IConversation): Promise<void> => {
+    const { lastMessage, lastMessageAt, name, avatar, isDeleted, ...rest } = conversation;
+    const item: Record<string, unknown> = {
+      PK: `CONV#${conversation.conversationId}`,
+      SK: 'META',
+      ...rest,
+    };
+    if (name != null) item['name'] = name;
+    if (avatar != null) item['avatar'] = avatar;
+    if (lastMessage != null) item['lastMessage'] = lastMessage;
+    if (lastMessageAt != null) item['lastMessageAt'] = lastMessageAt;
+    if (isDeleted === true) item['isDeleted'] = isDeleted;
+
     await dynamoClient.send(
       new PutCommand({
         TableName: CONVERSATIONS_TABLE,
-        Item: {
-          PK: `CONV#${conversation.conversationId}`,
-          SK: 'META',
-          ...conversation,
-        },
+        Item: item,
       }),
     );
   },
@@ -103,16 +91,22 @@ export const chatRepository = {
    * Thêm thành viên vào conversation
    * PK: CONV#{conversationId}, SK: MEMBER#{userId}
    * userId được lưu thêm cho GSI-2
+   * Không ghi null cho lastReadAt / nickname (DynamoDB Document Client).
    */
   addConversationMember: async (member: IConversationMember): Promise<void> => {
+    const { lastReadAt, nickname, ...rest } = member;
+    const item: Record<string, unknown> = {
+      PK: `CONV#${member.conversationId}`,
+      SK: `MEMBER#${member.userId}`,
+      ...rest,
+    };
+    if (lastReadAt != null) item['lastReadAt'] = lastReadAt;
+    if (nickname != null) item['nickname'] = nickname;
+
     await dynamoClient.send(
       new PutCommand({
         TableName: CONVERSATIONS_TABLE,
-        Item: {
-          PK: `CONV#${member.conversationId}`,
-          SK: `MEMBER#${member.userId}`,
-          ...member,
-        },
+        Item: item,
       }),
     );
   },
