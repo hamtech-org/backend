@@ -4,7 +4,11 @@ import {
   IndexFacesCommand,
   SearchFacesByImageCommand,
   DeleteFacesCommand,
+  CreateFaceLivenessSessionCommand,
+  GetFaceLivenessSessionResultsCommand,
 } from '@aws-sdk/client-rekognition';
+// import fs from 'fs';
+// import path from 'path';
 import { env } from '@/config/env.js';
 import { logger } from '@/shared/utils/logger.js';
 
@@ -153,4 +157,110 @@ export const deleteFace = async (faceId: string): Promise<void> => {
     }),
   );
   logger.info(`Face deleted from collection: ${faceId}`);
+};
+
+// ──────────────────────────────────────────────
+// Face Liveness (Anti-Spoofing)
+// ──────────────────────────────────────────────
+
+export interface FaceLivenessResult {
+  sessionId: string;
+  confidence: number;
+  isLive: boolean;
+  referenceImageBytes?: Buffer;
+}
+
+/**
+ * Tạo session mới cho face liveness check
+ * User phải hoàn thành movement challenge trước khi index face
+ *
+ * @returns sessionId để sử dụng ở frontend + backend verify
+ */
+export const createLivenessSession = async (): Promise<string> => {
+  try {
+    const result = await rekognitionClient.send(new CreateFaceLivenessSessionCommand({}));
+
+    const sessionId = result.SessionId;
+    if (!sessionId) {
+      throw new Error('Không thể tạo liveness session');
+    }
+
+    logger.debug(`Liveness session created: ${sessionId}`);
+    return sessionId;
+  } catch (error) {
+    logger.error('Failed to create liveness session:', error);
+    throw error;
+  }
+};
+
+/**
+ * Xác thực face liveness bằng session ID
+ * - Gọi sau khi user hoàn thành movement challenge ở frontend
+ * - Trả về độ tin cậy, kết quả (live hay spoofed), và reference image từ AWS
+ *
+ * @param sessionId - Session ID từ createLivenessSession
+ * @returns { sessionId, confidence, isLive, referenceImageBytes }
+ */
+export const detectFaceLiveness = async (
+  sessionId: string,
+): Promise<FaceLivenessResult> => {
+  try {
+    const result = await rekognitionClient.send(
+      new GetFaceLivenessSessionResultsCommand({
+        SessionId: sessionId,
+      }),
+    );
+
+    const confidence = result.Confidence ?? 0; // Already in 0-100 range
+    // AWS trả về:
+    // - Confidence: 0-100 (độ tin cậy)
+    // - Status: 'SUCCEEDED' | 'FAILED' | 'EXPIRED' | 'IN_PROGRESS' | 'CREATED'
+    // - ReferenceImage: { Bytes: Buffer } - ảnh khuôn mặt đã được xác thực liveness
+    const isSucceeded = result.Status === 'SUCCEEDED';
+
+    const isLive = isSucceeded && confidence >= 50; // Ngưỡng 50%
+
+    // Lấy reference image từ AWS (ảnh đã được xác thực)
+    let referenceImageBytes: Buffer | undefined;
+
+    if (result.ReferenceImage?.Bytes) {
+      const bytes = result.ReferenceImage.Bytes;
+      referenceImageBytes = Buffer.isBuffer(bytes)
+        ? bytes
+        : Buffer.from(bytes);
+
+      // // 💾 Lưu hình để kiểm tra
+      // try {
+      //   const logsDir = path.join(process.cwd(), 'logs');
+      //   if (!fs.existsSync(logsDir)) {
+      //     fs.mkdirSync(logsDir, { recursive: true });
+      //   }
+
+      //   const filePath = path.join(logsDir, `liveness-${sessionId}.jpg`);
+      //   fs.writeFileSync(filePath, referenceImageBytes);
+
+      //   logger.debug(`📸 Saved reference image to: ${filePath} (${referenceImageBytes.byteLength} bytes)`);
+      // } catch (saveError) {
+      //   logger.warn(`⚠️ Failed to save reference image: ${saveError}`);
+      // }
+    }
+
+    const livenessResult: FaceLivenessResult = {
+      sessionId,
+      confidence: Math.round(confidence * 100) / 100,
+      isLive,
+      referenceImageBytes,
+    };
+
+    if (isLive) {
+      logger.debug(`Face liveness verified (confidence: ${confidence.toFixed(2)}%)`);
+    } else {
+      logger.warn(`Face liveness failed (confidence: ${confidence.toFixed(2)}%)`);
+    }
+
+    return livenessResult;
+  } catch (error) {
+    logger.error('Failed to get face liveness session results:', error);
+    throw error;
+  }
 };

@@ -20,6 +20,7 @@ export interface ILastMessage {
   content: string;
   type: MessageType;
   createdAt: string;
+  senderDisplayName?: string | null;
 }
 
 export interface IConversationMember {
@@ -33,19 +34,29 @@ export interface IConversationMember {
   nickname?: string;
 }
 
+export interface IReplyToDetails {
+  messageId: string;
+  senderId: string;
+  senderDisplayName: string | null;
+  content: string;
+  type: MessageType;
+}
+
 export interface IMessage extends TimestampFields {
   messageId: string;
   conversationId: string;
   senderId: string;
+  senderDisplayName?: string | null;
   type: MessageType;
   content: string;
-  encryptedContent?: string;
-  mediaUrl?: string;
-  mediaType?: string;
-  mediaSize?: number;
-  thumbnailUrl?: string;
-  replyTo?: string;
-  forwardFrom?: string;
+  encryptedContent: string | null;
+  mediaUrl: string | null;
+  mediaType: string | null;
+  mediaSize: number | null;
+  thumbnailUrl: string | null;
+  replyTo: string | null;
+  replyToDetails?: IReplyToDetails | null;
+  forwardFrom: string | null;
   isPinned: boolean;
   isEdited: boolean;
   isRecalled: boolean;
@@ -79,4 +90,10 @@ export interface ISendMessageDto {
   content: string;
   mediaUrl?: string;
   replyTo?: string;
+}
+
+export interface IReactMessageDto {
+  conversationId: string;
+  createdAt: string;
+  emoji: string;
 }
