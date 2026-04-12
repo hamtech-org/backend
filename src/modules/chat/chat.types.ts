@@ -97,3 +97,10 @@ export interface IReactMessageDto {
   createdAt: string;
   emoji: string;
 }
+export interface IAddMembersDto {
+  memberIds: string[];
+}
+
+export interface IChangeRoleDto {
+  role: MemberRole;
+}

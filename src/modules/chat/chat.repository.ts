@@ -66,35 +66,23 @@ export const chatRepository = {
   /**
    * META: không ghi null cho lastMessage / lastMessageAt (GSI key kiểu String — DynamoDB từ chối NULL).
    */
-  // createConversation: async (conversation: IConversation): Promise<void> => {
-  //   const { lastMessage, lastMessageAt, name, avatar, ...rest } = conversation;
-  //   const item: Record<string, unknown> = {
-  //     PK: `CONV#${conversation.conversationId}`,
-  //     SK: 'META',
-  //     ...rest,
-  //   };
-  //   if (name != null) item['name'] = name;
-  //   if (avatar != null) item['avatar'] = avatar;
-  //   if (lastMessage != null) item['lastMessage'] = lastMessage;
-  //   if (lastMessageAt != null) item['lastMessageAt'] = lastMessageAt;
-
-  //   await dynamoClient.send(
-  //     new PutCommand({
-  //       TableName: CONVERSATIONS_TABLE,
-  //       Item: item,
-  //     }),
-  //   );
-  // },
-
   createConversation: async (conversation: IConversation): Promise<void> => {
+    const { lastMessage, lastMessageAt, name, avatar, isDeleted, ...rest } = conversation;
+    const item: Record<string, unknown> = {
+      PK: `CONV#${conversation.conversationId}`,
+      SK: 'META',
+      ...rest,
+    };
+    if (name != null) item['name'] = name;
+    if (avatar != null) item['avatar'] = avatar;
+    if (lastMessage != null) item['lastMessage'] = lastMessage;
+    if (lastMessageAt != null) item['lastMessageAt'] = lastMessageAt;
+    if (isDeleted === true) item['isDeleted'] = isDeleted;
+
     await dynamoClient.send(
       new PutCommand({
         TableName: CONVERSATIONS_TABLE,
-        Item: {
-          PK: `CONV#${conversation.conversationId}`,
-          SK: 'META',
-          ...conversation,
-        },
+        Item: item,
       }),
     );
   },
@@ -103,16 +91,22 @@ export const chatRepository = {
    * Thêm thành viên vào conversation
    * PK: CONV#{conversationId}, SK: MEMBER#{userId}
    * userId được lưu thêm cho GSI-2
+   * Không ghi null cho lastReadAt / nickname (DynamoDB Document Client).
    */
   addConversationMember: async (member: IConversationMember): Promise<void> => {
+    const { lastReadAt, nickname, ...rest } = member;
+    const item: Record<string, unknown> = {
+      PK: `CONV#${member.conversationId}`,
+      SK: `MEMBER#${member.userId}`,
+      ...rest,
+    };
+    if (lastReadAt != null) item['lastReadAt'] = lastReadAt;
+    if (nickname != null) item['nickname'] = nickname;
+
     await dynamoClient.send(
       new PutCommand({
         TableName: CONVERSATIONS_TABLE,
-        Item: {
-          PK: `CONV#${member.conversationId}`,
-          SK: `MEMBER#${member.userId}`,
-          ...member,
-        },
+        Item: item,
       }),
     );
   },
@@ -313,5 +307,246 @@ export const chatRepository = {
         },
       }),
     );
+  },
+
+  // ─── Group Management Repository Extensions ───────────────────────────
+
+  updateConversation: async (conversationId: string, updates: Partial<IConversation>): Promise<void> => {
+    const entries = Object.entries(updates).filter(([, v]) => v !== undefined);
+    if (entries.length === 0) return;
+
+    const updateExpr = 'SET ' + entries.map(([,], i) => `#k${i} = :v${i}`).join(', ') + ', updatedAt = :now';
+    const attrNames = Object.fromEntries(entries.map(([k], i) => [`#k${i}`, k]));
+    const attrValues = {
+      ...Object.fromEntries(entries.map(([, v], i) => [`:v${i}`, v])),
+      ':now': new Date().toISOString(),
+    };
+
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: 'META' },
+        UpdateExpression: updateExpr,
+        ExpressionAttributeNames: attrNames,
+        ExpressionAttributeValues: attrValues,
+      }),
+    );
+  },
+
+  getMember: async (conversationId: string, userId: string): Promise<IConversationMember | null> => {
+    const result = await dynamoClient.send(
+      new GetCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: `MEMBER#${userId}` },
+      }),
+    );
+    return (result.Item as IConversationMember) ?? null;
+  },
+
+  removeMember: async (conversationId: string, userId: string): Promise<void> => {
+    await dynamoClient.send(
+      new DeleteCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: `MEMBER#${userId}` },
+      }),
+    );
+  },
+
+  updateMemberRole: async (conversationId: string, userId: string, role: string): Promise<void> => {
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: `MEMBER#${userId}` },
+        UpdateExpression: 'SET #r = :role, updatedAt = :now',
+        ExpressionAttributeNames: { '#r': 'role' },
+        ExpressionAttributeValues: {
+          ':role': role,
+          ':now': new Date().toISOString(),
+        },
+      }),
+    );
+  },
+
+  // ─── Group Requests (Duyệt thành viên) ───────────────────────────────
+
+  createGroupRequest: async (conversationId: string, userId: string): Promise<void> => {
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Item: {
+          PK: `CONV#${conversationId}`,
+          SK: `REQUEST#${userId}`,
+          conversationId,
+          userId,
+          status: 'pending',
+          requestedAt: new Date().toISOString(),
+        },
+      }),
+    );
+  },
+
+  getGroupRequests: async (conversationId: string): Promise<any[]> => {
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: CONVERSATIONS_TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :reqPrefix)',
+        ExpressionAttributeValues: {
+          ':pk': `CONV#${conversationId}`,
+          ':reqPrefix': 'REQUEST#',
+        },
+      }),
+    );
+    return result.Items ?? [];
+  },
+
+  removeGroupRequest: async (conversationId: string, userId: string): Promise<void> => {
+    await dynamoClient.send(
+      new DeleteCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: `REQUEST#${userId}` },
+      }),
+    );
+  },
+
+  // ─── Polls (Bình chọn) ───────────────────────────────────────────────
+
+  createPoll: async (poll: any): Promise<void> => {
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Item: {
+          PK: `CONV#${poll.conversationId}`,
+          SK: `POLL#${poll.pollId}`,
+          ...poll,
+        },
+      }),
+    );
+  },
+
+  getPolls: async (conversationId: string): Promise<any[]> => {
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: CONVERSATIONS_TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :pollPrefix)',
+        ExpressionAttributeValues: {
+          ':pk': `CONV#${conversationId}`,
+          ':pollPrefix': 'POLL#',
+        },
+      }),
+    );
+    return result.Items ?? [];
+  },
+
+  updatePollVotes: async (conversationId: string, pollId: string, options: any[]): Promise<void> => {
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: `POLL#${pollId}` },
+        UpdateExpression: 'SET #opt = :options, updatedAt = :now',
+        ExpressionAttributeNames: { '#opt': 'options' },
+        ExpressionAttributeValues: {
+          ':options': options,
+          ':now': new Date().toISOString(),
+        },
+      }),
+    );
+  },
+
+  deletePoll: async (conversationId: string, pollId: string): Promise<void> => {
+    await dynamoClient.send(
+      new DeleteCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: `POLL#${pollId}` },
+      }),
+    );
+  },
+
+  // ─── Tasks (Công việc) ───────────────────────────────────────────────
+
+  createTask: async (task: any): Promise<void> => {
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Item: {
+          PK: `CONV#${task.conversationId}`,
+          SK: `TASK#${task.taskId}`,
+          ...task,
+        },
+      }),
+    );
+  },
+
+  getTasks: async (conversationId: string): Promise<any[]> => {
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: CONVERSATIONS_TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :taskPrefix)',
+        ExpressionAttributeValues: {
+          ':pk': `CONV#${conversationId}`,
+          ':taskPrefix': 'TASK#',
+        },
+      }),
+    );
+    return result.Items ?? [];
+  },
+
+  updateTask: async (conversationId: string, taskId: string, updates: any): Promise<void> => {
+    const entries = Object.entries(updates);
+    const updateExpr = 'SET ' + entries.map((_, i) => `#k${i} = :v${i}`).join(', ') + ', updatedAt = :now';
+    const attrNames = Object.fromEntries(entries.map(([k], i) => [`#k${i}`, k]));
+    const attrValues = {
+      ...Object.fromEntries(entries.map(([, v], i) => [`:v${i}`, v])),
+      ':now': new Date().toISOString(),
+    };
+
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: `TASK#${taskId}` },
+        UpdateExpression: updateExpr,
+        ExpressionAttributeNames: attrNames,
+        ExpressionAttributeValues: attrValues,
+      }),
+    );
+  },
+
+  deleteTask: async (conversationId: string, taskId: string): Promise<void> => {
+    await dynamoClient.send(
+      new DeleteCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: `TASK#${taskId}` },
+      }),
+    );
+  },
+
+  // ─── AI Recap (Tóm tắt) ──────────────────────────────────────────────
+
+  saveAISummary: async (conversationId: string, summary: any): Promise<void> => {
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Item: {
+          PK: `CONV#${conversationId}`,
+          SK: `SUMMARY#${summary.summaryId}`,
+          ...summary,
+        },
+      }),
+    );
+  },
+
+  getLatestAISummary: async (conversationId: string): Promise<any | null> => {
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: CONVERSATIONS_TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :summaryPrefix)',
+        ExpressionAttributeValues: {
+          ':pk': `CONV#${conversationId}`,
+          ':summaryPrefix': 'SUMMARY#',
+        },
+        ScanIndexForward: false,
+        Limit: 1,
+      }),
+    );
+    return result.Items?.[0] ?? null;
   },
 };

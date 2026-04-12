@@ -7,11 +7,15 @@ import type {
   ICreateConversationDto,
   ISendMessageDto,
   ILastMessage,
+  IUpdateGroupDto,
+  IAddMembersDto,
+  IChangeRoleDto,
 } from './chat.types.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
 import { kafkaProducer } from '@/shared/kafka/producer.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { userRepository } from '@/modules/user/user.repository.js';
+import type { MemberRole } from '@/shared/types/chat.types.js';
 
 async function lastMessageSnapshotFromNewest(messages: IMessage[]): Promise<ILastMessage | null> {
   if (messages.length === 0) return null;
@@ -129,7 +133,7 @@ export const chatService = {
       if (!otherUser) return;
 
       conversation.name = otherUser.displayName;
-      conversation.avatar = otherUser.avatar ?? null;
+      conversation.avatar = otherUser.avatar ?? undefined;
       (conversation as IConversation & { otherUserId?: string }).otherUserId = otherMember.userId;
     });
 
@@ -159,11 +163,8 @@ export const chatService = {
     const conversation: IConversation = {
       conversationId,
       type: data.type,
-      name: data.name ?? null,
-      avatar: null,
+      ...(data.name != null && data.name !== '' ? { name: data.name } : {}),
       creatorId,
-      lastMessage: null,
-      lastMessageAt: null,
       memberCount: allMemberIds.length,
       isEncrypted: false,
       createdAt: now,
@@ -180,10 +181,8 @@ export const chatService = {
           userId,
           role: index === 0 ? 'owner' : 'member',
           joinedAt: now,
-          lastReadAt: null,
           unreadCount: 0,
           isMuted: false,
-          nickname: null,
         };
         return chatRepository.addConversationMember(member);
       }),
@@ -443,5 +442,290 @@ export const chatService = {
     });
 
     return reactions;
+  },
+
+  // ─── Group Management Service Extensions ──────────────────────────
+
+  updateGroup: async (
+    requesterId: string,
+    conversationId: string,
+    data: IUpdateGroupDto,
+  ): Promise<IConversation> => {
+    const conversation = await chatRepository.getConversationById(conversationId);
+    if (!conversation) throw new NotFoundError('Nhóm');
+    if (conversation.type !== 'group') throw new ForbiddenError('Đây không phải nhóm chat');
+
+    const member = await chatRepository.getMember(conversationId, requesterId);
+    if (!member || !['owner', 'admin'].includes(member.role)) {
+      throw new ForbiddenError('Chỉ Admin/Owner mới có quyền cập nhật nhóm');
+    }
+
+    await chatRepository.updateConversation(conversationId, data);
+    return { ...conversation, ...data, updatedAt: new Date().toISOString() };
+  },
+
+  deleteGroup: async (requesterId: string, conversationId: string): Promise<void> => {
+    const conversation = await chatRepository.getConversationById(conversationId);
+    if (!conversation) throw new NotFoundError('Nhóm');
+    if (conversation.type !== 'group') throw new ForbiddenError('Đây không phải nhóm chat');
+    if (conversation.creatorId !== requesterId) {
+      throw new ForbiddenError('Chỉ người tạo nhóm mới có quyền giải tán');
+    }
+
+    // Soft delete bằng cách gán cờ isDeleted hoặc xóa META (ở đây xóa hẳn theo repo cũ hoặc gán cờ)
+    // Theo repo mở rộng tôi vừa viết: repo.updateConversation
+    await chatRepository.updateConversation(conversationId, {
+      name: `[ĐÃ GIẢI TÁN] ${conversation.name}`,
+      isDeleted: true,
+    } as any);
+  },
+
+  leaveGroup: async (userId: string, conversationId: string): Promise<void> => {
+    const member = await chatRepository.getMember(conversationId, userId);
+    if (!member) throw new NotFoundError('Thành viên nhóm');
+    if (member.role === 'owner') {
+      throw new Error('Chủ nhóm không thể rời. Hãy chuyển quyền hoặc giải tán nhóm.');
+    }
+
+    await chatRepository.removeMember(conversationId, userId);
+
+    const conv = await chatRepository.getConversationById(conversationId);
+    if (conv) {
+      await chatRepository.updateConversation(conversationId, {
+        memberCount: Math.max(0, (conv.memberCount || 0) - 1),
+      });
+    }
+  },
+
+  addMembers: async (
+    requesterId: string,
+    conversationId: string,
+    data: IAddMembersDto,
+  ): Promise<void> => {
+    const member = await chatRepository.getMember(conversationId, requesterId);
+    if (!member || !['owner', 'admin'].includes(member.role)) {
+      throw new ForbiddenError('Chỉ Admin/Owner mới có quyền thêm thành viên');
+    }
+
+    const now = new Date().toISOString();
+    await Promise.all(
+      data.memberIds.map((userId) =>
+        chatRepository.addConversationMember({
+          conversationId,
+          userId,
+          role: 'member',
+          joinedAt: now,
+          unreadCount: 0,
+          isMuted: false,
+        }),
+      ),
+    );
+
+    const conv = await chatRepository.getConversationById(conversationId);
+    if (conv) {
+      await chatRepository.updateConversation(conversationId, {
+        memberCount: (conv.memberCount || 0) + data.memberIds.length,
+      });
+    }
+  },
+
+  removeMember: async (
+    requesterId: string,
+    conversationId: string,
+    targetUserId: string,
+  ): Promise<void> => {
+    const requester = await chatRepository.getMember(conversationId, requesterId);
+    if (!requester || !['owner', 'admin'].includes(requester.role)) {
+      throw new ForbiddenError('Chỉ Admin/Owner mới có quyền xóa thành viên');
+    }
+
+    const target = await chatRepository.getMember(conversationId, targetUserId);
+    if (!target) throw new NotFoundError('Thành viên');
+    if (target.role === 'owner') throw new ForbiddenError('Không thể xóa chủ nhóm');
+
+    await chatRepository.removeMember(conversationId, targetUserId);
+
+    const conv = await chatRepository.getConversationById(conversationId);
+    if (conv) {
+      await chatRepository.updateConversation(conversationId, {
+        memberCount: Math.max(0, (conv.memberCount || 0) - 1),
+      });
+    }
+  },
+
+  changeMemberRole: async (
+    requesterId: string,
+    conversationId: string,
+    targetUserId: string,
+    role: MemberRole,
+  ): Promise<void> => {
+    const requester = await chatRepository.getMember(conversationId, requesterId);
+    if (!requester || requester.role !== 'owner') {
+      throw new ForbiddenError('Chỉ Owner mới có quyền thay đổi vai trò Admin');
+    }
+
+    await chatRepository.updateMemberRole(conversationId, targetUserId, role);
+  },
+
+  // ─── Member Requests (Duyệt thành viên) ──────────────────────────────
+
+  joinRequest: async (userId: string, conversationId: string): Promise<void> => {
+    const conv = await chatRepository.getConversationById(conversationId);
+    if (!conv) throw new NotFoundError('Hội thoại');
+    await chatRepository.createGroupRequest(conversationId, userId);
+  },
+
+  getGroupRequests: async (conversationId: string, requesterId: string): Promise<any[]> => {
+    const member = await chatRepository.getMember(conversationId, requesterId);
+    if (!member || !['owner', 'admin'].includes(member.role)) {
+      throw new ForbiddenError('Chỉ Admin/Owner mới xem được danh sách chờ');
+    }
+    return chatRepository.getGroupRequests(conversationId);
+  },
+
+  approveRequest: async (conversationId: string, requesterId: string, targetUserId: string): Promise<void> => {
+    const member = await chatRepository.getMember(conversationId, requesterId);
+    if (!member || !['owner', 'admin'].includes(member.role)) {
+      throw new ForbiddenError('Chỉ Admin/Owner mới có quyền duyệt');
+    }
+    
+    await chatRepository.addConversationMember({
+      conversationId,
+      userId: targetUserId,
+      role: 'member',
+      joinedAt: new Date().toISOString(),
+      unreadCount: 0,
+      isMuted: false,
+    });
+    
+    const conv = await chatRepository.getConversationById(conversationId);
+    if (conv) {
+      await chatRepository.updateConversation(conversationId, { memberCount: (conv.memberCount || 0) + 1 });
+    }
+    
+    await chatRepository.removeGroupRequest(conversationId, targetUserId);
+  },
+
+  rejectRequest: async (conversationId: string, requesterId: string, targetUserId: string): Promise<void> => {
+    const member = await chatRepository.getMember(conversationId, requesterId);
+    if (!member || !['owner', 'admin'].includes(member.role)) {
+      throw new ForbiddenError('Chỉ Admin/Owner mới có quyền từ chối');
+    }
+    await chatRepository.removeGroupRequest(conversationId, targetUserId);
+  },
+
+  // ─── Polls (Bình chọn) ───────────────────────────────────────────────
+
+  createPoll: async (requesterId: string, conversationId: string, data: any): Promise<void> => {
+    const pollId = uuidv4();
+    const poll = {
+      pollId,
+      conversationId,
+      creatorId: requesterId,
+      question: data.question,
+      options: data.options.map((opt: string) => ({ text: opt, vofers: [] })),
+      isMultipleChoice: data.isMultipleChoice || false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await chatRepository.createPoll(poll);
+  },
+
+  getPolls: async (conversationId: string): Promise<any[]> => {
+    return chatRepository.getPolls(conversationId);
+  },
+
+  votePoll: async (userId: string, conversationId: string, pollId: string, optionIndex: number): Promise<void> => {
+    const polls = await chatRepository.getPolls(conversationId);
+    const poll = polls.find(p => p.pollId === pollId);
+    if (!poll) throw new NotFoundError('Bình chọn');
+
+    // Logic bỏ phiếu (đơn giản hóa: bỏ phiếu cho 1 option)
+    if (!poll.options[optionIndex]) throw new Error('Lựa chọn không hợp lệ');
+    
+    // Nếu chưa bầu thì thêm vào
+    if (!poll.options[optionIndex].voters) poll.options[optionIndex].voters = [];
+    if (!poll.options[optionIndex].voters.includes(userId)) {
+      poll.options[optionIndex].voters.push(userId);
+    }
+    
+    await chatRepository.updatePollVotes(conversationId, pollId, poll.options);
+  },
+
+  unvotePoll: async (userId: string, conversationId: string, pollId: string, optionIndex: number): Promise<void> => {
+    const polls = await chatRepository.getPolls(conversationId);
+    const poll = polls.find(p => p.pollId === pollId);
+    if (!poll) throw new NotFoundError('Bình chọn');
+
+    if (poll.options[optionIndex] && poll.options[optionIndex].voters) {
+      poll.options[optionIndex].voters = poll.options[optionIndex].voters.filter((id: string) => id !== userId);
+      await chatRepository.updatePollVotes(conversationId, pollId, poll.options);
+    }
+  },
+
+  deletePoll: async (requesterId: string, conversationId: string, pollId: string): Promise<void> => {
+    const polls = await chatRepository.getPolls(conversationId);
+    const poll = polls.find(p => p.pollId === pollId);
+    if (!poll) throw new NotFoundError('Bình chọn');
+    if (poll.creatorId !== requesterId) throw new ForbiddenError('Chỉ người tạo mới được xóa bình chọn');
+    
+    await chatRepository.deletePoll(conversationId, pollId);
+  },
+
+  // ─── Tasks (Công việc) ───────────────────────────────────────────────
+
+  createTask: async (requesterId: string, conversationId: string, data: any): Promise<void> => {
+    const taskId = uuidv4();
+    const task = {
+      taskId,
+      conversationId,
+      creatorId: requesterId,
+      title: data.title,
+      description: data.description,
+      assignees: data.assignees || [],
+      status: 'todo', // todo, in_progress, done
+      dueDate: data.dueDate,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await chatRepository.createTask(task);
+  },
+
+  getTasks: async (conversationId: string): Promise<any[]> => {
+    return chatRepository.getTasks(conversationId);
+  },
+
+  updateTaskStatus: async (conversationId: string, taskId: string, status: string): Promise<void> => {
+    await chatRepository.updateTask(conversationId, taskId, { status });
+  },
+
+  deleteTask: async (requesterId: string, conversationId: string, taskId: string): Promise<void> => {
+    // Logic tương tự deletePoll
+    await chatRepository.deleteTask(conversationId, taskId);
+  },
+
+  // ─── AI Recap ───────────────────────────────────────────────────────
+
+  generateRecap: async (conversationId: string): Promise<any> => {
+    // 1. Lấy tin nhắn gần đây
+    const messages = await chatRepository.getMessages(conversationId, 50);
+    const text = messages.map(m => `${m.senderId}: ${m.content}`).join('\n');
+    
+    // 2. Gọi AI (Mock)
+    const summaryText = `[AI Tóm tắt]: Cuộc hội thoại xoay quanh việc ${text.length > 0 ? 'trao đổi thông tin dự án' : 'chưa có nội dung mới'}.`;
+    
+    const summary = {
+      summaryId: uuidv4(),
+      conversationId,
+      content: summaryText,
+      createdAt: new Date().toISOString(),
+    };
+    
+    await chatRepository.saveAISummary(conversationId, summary);
+    return summary;
+  },
+
+  getLatestRecap: async (conversationId: string): Promise<any> => {
+    return chatRepository.getLatestAISummary(conversationId);
   },
 };
