@@ -16,9 +16,6 @@ export async function broadcastMessageNew(message: IMessage): Promise<void> {
   const { conversationId } = message;
   io.to(`conv:${conversationId}`).emit('message:new', message);
   const members = await chatRepository.getConversationMembers(conversationId);
-  console.log({
-    members,
-  });
   for (const m of members) {
     io.to(`user:${m.userId}`).emit('message:new', message);
   }
