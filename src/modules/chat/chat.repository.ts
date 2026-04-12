@@ -13,6 +13,8 @@ const CONVERSATIONS_TABLE = 'Zalogram_Conversations';
 const MESSAGES_TABLE = 'Zalogram_Messages';
 const MESSAGE_STATUS_TABLE = 'Zalogram_MessageStatus';
 
+
+
 export const chatRepository = {
   // ─── Conversations ───────────────────────────────────────────────────
 
@@ -60,15 +62,25 @@ export const chatRepository = {
     return conversations.filter((c): c is IConversation => c !== null);
   },
 
+  /**
+   * META: không ghi null cho lastMessage / lastMessageAt (GSI key kiểu String — DynamoDB từ chối NULL).
+   */
   createConversation: async (conversation: IConversation): Promise<void> => {
+    const { lastMessage, lastMessageAt, name, avatar, ...rest } = conversation;
+    const item: Record<string, unknown> = {
+      PK: `CONV#${conversation.conversationId}`,
+      SK: 'META',
+      ...rest,
+    };
+    if (name != null) item['name'] = name;
+    if (avatar != null) item['avatar'] = avatar;
+    if (lastMessage != null) item['lastMessage'] = lastMessage;
+    if (lastMessageAt != null) item['lastMessageAt'] = lastMessageAt;
+
     await dynamoClient.send(
       new PutCommand({
         TableName: CONVERSATIONS_TABLE,
-        Item: {
-          PK: `CONV#${conversation.conversationId}`,
-          SK: 'META',
-          ...conversation,
-        },
+        Item: item,
       }),
     );
   },

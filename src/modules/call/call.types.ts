@@ -26,3 +26,14 @@ export interface CallEndPayload {
   channelName: string;
   peerId: string;
 }
+
+export interface CallUpgradeRequestPayload {
+  peerId: string;
+  channelName: string;
+}
+
+export interface CallUpgradeResponsePayload {
+  peerId: string;
+  channelName: string;
+  accepted: boolean;
+}

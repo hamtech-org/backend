@@ -6,12 +6,10 @@ import type {
   CallAcceptPayload,
   CallRejectPayload,
   CallEndPayload,
+  CallUpgradeRequestPayload,
+  CallUpgradeResponsePayload,
 } from './call.types.js';
 
-/**
- * Tạo channel name ngắn (≤ 64 chars) cho cuộc gọi 1-1.
- * Hash sorted user pair để giữ tính duy nhất + đảm bảo cùng channel cho cả 2 hướng.
- */
 const buildChannelName = (userA: string, userB: string): string => {
   const sorted = [userA, userB].sort();
   const hash = crypto.createHash('md5').update(sorted.join('_')).digest('hex').substring(0, 16);
@@ -32,7 +30,6 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
     });
 
     socket.emit('call:channel-ready', { channelName });
-
     logger.info(`Call: ${userId} -> ${data.calleeId} (${data.type}) channel=${channelName}`);
   });
 
@@ -41,7 +38,6 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
       calleeId: userId,
       channelName: data.channelName,
     });
-
     logger.info(`Call accepted: ${userId} on channel=${data.channelName}`);
   });
 
@@ -50,7 +46,6 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
       calleeId: userId,
       channelName: data.channelName,
     });
-
     logger.info(`Call rejected: ${userId} on channel=${data.channelName}`);
   });
 
@@ -59,7 +54,23 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
       userId,
       channelName: data.channelName,
     });
-
     logger.info(`Call ended by ${userId} on channel=${data.channelName}`);
+  });
+
+  socket.on('call:upgrade-request', (data: CallUpgradeRequestPayload) => {
+    io.to(`user:${data.peerId}`).emit('call:upgrade-request', {
+      fromUserId: userId,
+      channelName: data.channelName,
+    });
+    logger.info(`Upgrade request: ${userId} -> ${data.peerId} on channel=${data.channelName}`);
+  });
+
+  socket.on('call:upgrade-response', (data: CallUpgradeResponsePayload) => {
+    io.to(`user:${data.peerId}`).emit('call:upgrade-response', {
+      fromUserId: userId,
+      channelName: data.channelName,
+      accepted: data.accepted,
+    });
+    logger.info(`Upgrade ${data.accepted ? 'accepted' : 'rejected'}: ${userId} on channel=${data.channelName}`);
   });
 };
