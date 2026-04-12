@@ -1,4 +1,5 @@
 import { Server, Socket } from 'socket.io';
+import crypto from 'crypto';
 import { logger } from '@/shared/utils/logger.js';
 import type {
   CallInitiatePayload,
@@ -8,12 +9,13 @@ import type {
 } from './call.types.js';
 
 /**
- * Tạo channel name duy nhất cho cuộc gọi 1-1.
- * Sắp xếp userId để đảm bảo cùng channel cho cả 2 hướng gọi.
+ * Tạo channel name ngắn (≤ 64 chars) cho cuộc gọi 1-1.
+ * Hash sorted user pair để giữ tính duy nhất + đảm bảo cùng channel cho cả 2 hướng.
  */
 const buildChannelName = (userA: string, userB: string): string => {
   const sorted = [userA, userB].sort();
-  return `call_${sorted[0]}_${sorted[1]}`;
+  const hash = crypto.createHash('md5').update(sorted.join('_')).digest('hex').substring(0, 16);
+  return `call_${hash}`;
 };
 
 export const registerCallHandlers = (io: Server, socket: Socket): void => {
