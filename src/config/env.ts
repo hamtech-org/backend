@@ -54,6 +54,9 @@ const envSchema = z.object({
   REKOGNITION_COLLECTION_ID: z.string().default('zalogram-faces'),
   REKOGNITION_FACE_MATCH_THRESHOLD: z.coerce.number().default(95),
 
+  AGORA_APP_ID: z.string().min(1),
+  AGORA_APP_CERTIFICATE: z.string().min(1),
+
   CORS_ORIGINS: z.string().default('http://localhost:5173'),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60000),
   RATE_LIMIT_MAX: z.coerce.number().default(100),
