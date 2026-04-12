@@ -66,4 +66,8 @@ export const userRepository = {
 
     return (result.Responses?.[TABLE_NAME] as IUser[]) || [];
   },
+
+  findByIds: async (userIds: string[]): Promise<IUser[]> => {
+    return userRepository.findMultipleById(userIds);
+  },
 };

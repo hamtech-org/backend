@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+/** PK `CONV#{id}` — chấp nhận UUID (hội thoại app) và id seed/legacy (ví dụ `seed-conv-alice-bob`). */
+export const conversationIdBodySchema = z.string().min(1).max(128);
+
 export const createConversationSchema = z.object({
   type: z.enum(['direct', 'group']),
   name: z.string().min(1).max(100).optional(),
@@ -15,4 +18,26 @@ export const sendMessageSchema = z.object({
 
 export const editMessageSchema = z.object({
   content: z.string().min(1).max(10000),
+  conversationId: conversationIdBodySchema,
+  createdAt: z.string().datetime(),
+});
+
+export const deleteMessageSchema = z.object({
+  conversationId: conversationIdBodySchema,
+  createdAt: z.string().datetime(),
+});
+
+export const recallMessageSchema = z.object({
+  conversationId: conversationIdBodySchema,
+  createdAt: z.string().datetime(),
+});
+
+export const markAsReadSchema = z.object({
+  messageId: z.string().uuid(),
+});
+
+export const reactMessageSchema = z.object({
+  conversationId: conversationIdBodySchema,
+  createdAt: z.string().datetime(),
+  emoji: z.string().min(1).max(20),
 });
