@@ -178,4 +178,198 @@ export const chatController = {
       sendSuccess(res, reactions, 'Đã thả cảm xúc');
     } catch (error) { next(error); }
   },
+
+  // ─── Group Management Controller Extensions ──────────────────────────
+
+  updateGroup: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const group = await chatService.updateGroup(
+        req.user!.userId,
+        req.params.groupId,
+        req.body,
+      );
+      try {
+        getIO().to(`conv:${req.params.groupId}`).emit('group:updated', group);
+      } catch { /* ignore */ }
+      sendSuccess(res, group, 'Cập nhật nhóm thành công');
+    } catch (error) { next(error); }
+  },
+
+  deleteGroup: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await chatService.deleteGroup(req.user!.userId, req.params.groupId);
+      try {
+        getIO().to(`conv:${req.params.groupId}`).emit('group:deleted', { groupId: req.params.groupId });
+      } catch { /* ignore */ }
+      sendSuccess(res, null, 'Giải tán nhóm thành công');
+    } catch (error) { next(error); }
+  },
+
+  leaveGroup: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await chatService.leaveGroup(req.user!.userId, req.params.groupId);
+      try {
+        getIO().to(`conv:${req.params.groupId}`).emit('group:member_left', {
+          groupId: req.params.groupId,
+          userId: req.user!.userId,
+        });
+      } catch { /* ignore */ }
+      sendSuccess(res, null, 'Rời nhóm thành công');
+    } catch (error) { next(error); }
+  },
+
+  addMembers: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await chatService.addMembers(req.user!.userId, req.params.groupId, req.body);
+      try {
+        getIO().to(`conv:${req.params.groupId}`).emit('group:members_added', {
+          groupId: req.params.groupId,
+          memberIds: req.body.memberIds,
+        });
+      } catch { /* ignore */ }
+      sendSuccess(res, null, 'Thêm thành viên thành công');
+    } catch (error) { next(error); }
+  },
+
+  removeMember: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await chatService.removeMember(
+        req.user!.userId,
+        req.params.groupId,
+        req.params.userId,
+      );
+      try {
+        getIO().to(`conv:${req.params.groupId}`).emit('group:member_removed', {
+          groupId: req.params.groupId,
+          userId: req.params.userId,
+        });
+      } catch { /* ignore */ }
+      sendSuccess(res, null, 'Xóa thành viên thành công');
+    } catch (error) { next(error); }
+  },
+
+  changeMemberRole: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await chatService.changeMemberRole(
+        req.user!.userId,
+        req.params.groupId,
+        req.params.userId,
+        req.body.role,
+      );
+      try {
+        getIO().to(`conv:${req.params.groupId}`).emit('group:role_changed', {
+          groupId: req.params.groupId,
+          userId: req.params.userId,
+          role: req.body.role,
+        });
+      } catch { /* ignore */ }
+      sendSuccess(res, null, 'Thay đổi quyền thành công');
+    } catch (error) { next(error); }
+  },
+
+  // ─── Member Requests (Duyệt thành viên) ──────────────────────────────
+
+  joinRequest: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await chatService.joinRequest(req.user!.userId, req.params.groupId);
+      sendSuccess(res, null, 'Đã gửi yêu cầu tham gia');
+    } catch (error) { next(error); }
+  },
+
+  getGroupRequests: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const requests = await chatService.getGroupRequests(req.params.groupId, req.user!.userId);
+      sendSuccess(res, requests);
+    } catch (error) { next(error); }
+  },
+
+  approveRequest: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await chatService.approveRequest(req.params.groupId, req.user!.userId, req.params.userId);
+      sendSuccess(res, null, 'Đã duyệt thành viên');
+    } catch (error) { next(error); }
+  },
+
+  rejectRequest: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await chatService.rejectRequest(req.params.groupId, req.user!.userId, req.params.userId);
+      sendSuccess(res, null, 'Đã từ chối yêu cầu');
+    } catch (error) { next(error); }
+  },
+
+  // ─── Polls (Bình chọn) ───────────────────────────────────────────────
+
+  createPoll: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await chatService.createPoll(req.user!.userId, req.params.groupId, req.body);
+      getIO().to(`conv:${req.params.groupId}`).emit('group:poll_new', { groupId: req.params.groupId });
+      sendCreated(res, null, 'Tạo bình chọn thành công');
+    } catch (error) { next(error); }
+  },
+
+  getPolls: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const polls = await chatService.getPolls(req.params.groupId);
+      sendSuccess(res, polls);
+    } catch (error) { next(error); }
+  },
+
+  votePoll: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { optionIndex } = req.body;
+      await chatService.votePoll(req.user!.userId, req.params.groupId, req.params.pollId, optionIndex);
+      getIO().to(`conv:${req.params.groupId}`).emit('group:poll_updated', { pollId: req.params.pollId });
+      sendSuccess(res, null, 'Đã bình chọn');
+    } catch (error) { next(error); }
+  },
+
+  unvotePoll: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { optionIndex } = req.body;
+      await chatService.unvotePoll(req.user!.userId, req.params.groupId, req.params.pollId, optionIndex);
+      getIO().to(`conv:${req.params.groupId}`).emit('group:poll_updated', { pollId: req.params.pollId });
+      sendSuccess(res, null, 'Đã rút phiếu');
+    } catch (error) { next(error); }
+  },
+
+  // ─── Tasks (Công việc) ───────────────────────────────────────────────
+
+  createTask: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await chatService.createTask(req.user!.userId, req.params.groupId, req.body);
+      getIO().to(`conv:${req.params.groupId}`).emit('group:task_new', { groupId: req.params.groupId });
+      sendCreated(res, null, 'Đã tạo công việc');
+    } catch (error) { next(error); }
+  },
+
+  getTasks: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const tasks = await chatService.getTasks(req.params.groupId);
+      sendSuccess(res, tasks);
+    } catch (error) { next(error); }
+  },
+
+  updateTaskStatus: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await chatService.updateTaskStatus(req.params.groupId, req.params.taskId, req.body.status);
+      getIO().to(`conv:${req.params.groupId}`).emit('group:task_updated', { taskId: req.params.taskId });
+      sendSuccess(res, null, 'Cập nhật trạng thái thành công');
+    } catch (error) { next(error); }
+  },
+
+  // ─── AI Recap ───────────────────────────────────────────────────────
+
+  generateAIRecap: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const summary = await chatService.generateRecap(req.params.groupId);
+      sendSuccess(res, summary, 'Tóm tắt thành công');
+    } catch (error) { next(error); }
+  },
+
+  getLatestAIRecap: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const summary = await chatService.getLatestRecap(req.params.groupId);
+      sendSuccess(res, summary);
+    } catch (error) { next(error); }
+  },
 };
