@@ -5,6 +5,8 @@ import { getIO } from '@/socket/index.js';
 import { broadcastMessageNew } from './chat.broadcast.js';
 
 export const chatController = {
+  // ─── Conversations / Groups ────────────────────────────────────────────────────
+
   getConversations: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const conversations = await chatService.getConversations(req.user!.userId);
