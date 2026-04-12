@@ -272,6 +272,10 @@ export const chatController = {
   joinRequest: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await chatService.joinRequest(req.user!.userId, req.params.groupId);
+      try {
+        // Thông báo cho admin/owner của nhóm (hoặc toàn nhóm để update badge)
+        getIO().to(`conv:${req.params.groupId}`).emit('group:join_request_new', { groupId: req.params.groupId });
+      } catch { /* ignore */ }
       sendSuccess(res, null, 'Đã gửi yêu cầu tham gia');
     } catch (error) { next(error); }
   },
@@ -286,6 +290,14 @@ export const chatController = {
   approveRequest: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await chatService.approveRequest(req.params.groupId, req.user!.userId, req.params.userId);
+      try {
+        getIO().to(`conv:${req.params.groupId}`).emit('group:member_joined', { 
+          groupId: req.params.groupId,
+          userId: req.params.userId 
+        });
+        // Thông báo riêng cho người được duyệt
+        getIO().to(`user:${req.params.userId}`).emit('group:request_approved', { groupId: req.params.groupId });
+      } catch { /* ignore */ }
       sendSuccess(res, null, 'Đã duyệt thành viên');
     } catch (error) { next(error); }
   },
@@ -293,6 +305,10 @@ export const chatController = {
   rejectRequest: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await chatService.rejectRequest(req.params.groupId, req.user!.userId, req.params.userId);
+      try {
+        getIO().to(`user:${req.params.userId}`).emit('group:request_rejected', { groupId: req.params.groupId });
+        getIO().to(`conv:${req.params.groupId}`).emit('group:join_request_updated', { groupId: req.params.groupId });
+      } catch { /* ignore */ }
       sendSuccess(res, null, 'Đã từ chối yêu cầu');
     } catch (error) { next(error); }
   },
@@ -362,6 +378,9 @@ export const chatController = {
   generateAIRecap: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const summary = await chatService.generateRecap(req.params.groupId);
+      try {
+        getIO().to(`conv:${req.params.groupId}`).emit('group:recap_new', { groupId: req.params.groupId, summary });
+      } catch { /* ignore */ }
       sendSuccess(res, summary, 'Tóm tắt thành công');
     } catch (error) { next(error); }
   },
