@@ -133,6 +133,7 @@ export const chatService = {
 
       conversation.name = otherUser.displayName;
       conversation.avatar = otherUser.avatar ?? null;
+      (conversation as IConversation & { otherUserId?: string }).otherUserId = otherMember.userId;
     });
 
     return conversations;
