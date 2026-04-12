@@ -29,6 +29,14 @@ export const searchController = {
     } catch (error) { next(error); }
   },
 
+  searchUsersByContact: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const options = parseSearchOptions(req);
+      const results = await searchService.searchUsersByContact(options);
+      sendSuccess(res, results);
+    } catch (error) { next(error); }
+  },
+
   searchGroups: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const options = parseSearchOptions(req);

@@ -2,22 +2,48 @@ import { PutCommand, QueryCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { dynamoClient } from '@/config/database.js';
 import type { IContact, IGroup, IGroupMember } from './contact.types.js';
 
-const CONTACTS_TABLE = 'Zalogram_Contacts';
+const USERS_TABLE = 'Zalogram_Users';
 const GROUPS_TABLE = 'Zalogram_Groups';
 
 export const contactRepository = {
   getFriends: async (userId: string): Promise<IContact[]> => {
+    const pk = `USER#${userId}`;
+    console.log('🔍 Querying friends for PK:', pk, 'from table:', USERS_TABLE);
+    
     const result = await dynamoClient.send(new QueryCommand({
-      TableName: CONTACTS_TABLE,
-      KeyConditionExpression: 'PK = :pk',
-      ExpressionAttributeValues: { ':pk': `USER#${userId}` },
+      TableName: USERS_TABLE,
+      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+      ExpressionAttributeValues: { 
+        ':pk': pk,
+        ':sk': 'FRIEND#'
+      },
     }));
-    return (result.Items as IContact[]) ?? [];
+    
+    console.log('📊 DynamoDB response:', {
+      Count: result.Count,
+      Items: result.Items?.length ?? 0,
+      RawItems: result.Items
+    });
+    
+    // Filter only confirmed friendships (status='friend')
+    const friends = (result.Items as any[] ?? [])
+      .filter(item => item.status === 'friend')
+      .map(item => ({
+        userId: item.PK.substring('USER#'.length),
+        friendId: item.SK.substring('FRIEND#'.length),
+        status: item.status,
+        requestedBy: item.requestedBy,
+        createdAt: item.createdAt,
+      })) as IContact[];
+    
+    console.log('✅ Filtered friends (status=friend):', friends);
+    
+    return friends;
   },
 
   addFriend: async (contact: IContact): Promise<void> => {
     await dynamoClient.send(new PutCommand({
-      TableName: CONTACTS_TABLE,
+      TableName: USERS_TABLE,
       Item: {
         PK: `USER#${contact.userId}`,
         SK: `FRIEND#${contact.friendId}`,
@@ -28,7 +54,7 @@ export const contactRepository = {
 
   removeFriend: async (userId: string, friendId: string): Promise<void> => {
     await dynamoClient.send(new DeleteCommand({
-      TableName: CONTACTS_TABLE,
+      TableName: USERS_TABLE,
       Key: { PK: `USER#${userId}`, SK: `FRIEND#${friendId}` },
     }));
   },

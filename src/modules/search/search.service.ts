@@ -139,6 +139,11 @@ export const searchService = {
         };
       });
 
+      // ✅ Filter out current user
+      if (options.userId) {
+        items = items.filter(user => user.userId !== options.userId);
+      }
+
       // ✅ Optimized: Batch get all friend IDs once instead of checking each individually
       console.log('searchUsers - Current userId:', options.userId);
       console.log('searchUsers - Found users:', items.map(u => u.userId));
@@ -388,6 +393,117 @@ export const searchService = {
         groups: { items: [], total: 0, page: 1, pageSize: 20, hasMore: false },
         messages: { items: [], total: 0, page: 1, pageSize: 20, hasMore: false },
       };
+    }
+  },
+
+  searchUsersByContact: async (options: ISearchOptions): Promise<ISearchResult<ISearchUserResult>> => {
+    const page = options.page || 1;
+    const pageSize = options.pageSize || 20;
+    const from = (page - 1) * pageSize;
+
+    try {
+      const result = await esClient.search({
+        index: 'users',
+        from,
+        size: pageSize,
+        query: {
+          bool: {
+            should: [
+              {
+                match: {
+                  email: {
+                    query: options.query,
+                    fuzziness: 'AUTO',
+                    operator: 'or',
+                  },
+                },
+              },
+              {
+                match: {
+                  phone: {
+                    query: options.query,
+                    fuzziness: 'AUTO',
+                    operator: 'or',
+                  },
+                },
+              },
+              {
+                match_phrase_prefix: {
+                  email: options.query,
+                },
+              },
+              {
+                match_phrase_prefix: {
+                  phone: options.query,
+                },
+              },
+            ],
+            minimum_should_match: 1,
+          },
+        },
+        _source: ['userId', 'displayName', 'email', 'phone', 'avatar', 'bio'],
+        track_total_hits: true,
+      });
+
+      let items: ISearchUserResult[] = result.hits.hits.map(hit => {
+        const source = hit._source as ISearchUserResult & { phone?: string };
+        return {
+          userId: source.userId,
+          displayName: source.displayName,
+          email: source.email,
+          phone: source.phone || null,
+          avatar: source.avatar || null,
+          bio: source.bio || null,
+          isFriend: false,
+          friendshipStatus: 'none',
+        };
+      });
+
+      // ✅ Filter out current user
+      if (options.userId) {
+        items = items.filter(user => user.userId !== options.userId);
+      }
+
+      // Check friendship status if userId is provided
+      if (options.userId) {
+        try {
+          const userFriendIds = await userRepository.getFriendIds(options.userId, 1000);
+          const userFriendIdsSet = new Set(userFriendIds);
+
+          const { received, sent } = await userRepository.getPendingRequests(options.userId);
+          const pendingReceivedSet = new Set(received);
+          const pendingSentSet = new Set(sent);
+
+          items = items.map(user => ({
+            ...user,
+            isFriend: userFriendIdsSet.has(user.userId),
+            friendshipStatus: userFriendIdsSet.has(user.userId)
+              ? 'friend'
+              : pendingReceivedSet.has(user.userId)
+                ? 'pending_received'
+                : pendingSentSet.has(user.userId)
+                  ? 'pending_sent'
+                  : 'none',
+          }));
+        } catch (error) {
+          console.error('Error checking friendships:', error);
+          // Keep items with their default 'none' status
+        }
+      }
+
+      const total = typeof result.hits.total === 'number' ? result.hits.total : result.hits.total?.value || 0;
+      const hasMore = from + pageSize < total;
+
+      return {
+        items,
+        total,
+        page,
+        pageSize,
+        hasMore,
+      };
+    } catch (error) {
+      console.error('Search users by contact error:', error);
+      return { items: [], total: 0, page, pageSize, hasMore: false };
     }
   },
 
