@@ -15,6 +15,7 @@ import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
 import { kafkaProducer } from '@/shared/kafka/producer.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { userRepository } from '@/modules/user/user.repository.js';
+import type { MemberRole } from '@/shared/types/chat.types.js';
 
 async function lastMessageSnapshotFromNewest(messages: IMessage[]): Promise<ILastMessage | null> {
   if (messages.length === 0) return null;
@@ -132,7 +133,7 @@ export const chatService = {
       if (!otherUser) return;
 
       conversation.name = otherUser.displayName;
-      conversation.avatar = otherUser.avatar ?? null;
+      conversation.avatar = otherUser.avatar ?? undefined;
       (conversation as IConversation & { otherUserId?: string }).otherUserId = otherMember.userId;
     });
 
@@ -162,11 +163,8 @@ export const chatService = {
     const conversation: IConversation = {
       conversationId,
       type: data.type,
-      name: data.name ?? null,
-      avatar: null,
+      ...(data.name != null && data.name !== '' ? { name: data.name } : {}),
       creatorId,
-      lastMessage: null,
-      lastMessageAt: null,
       memberCount: allMemberIds.length,
       isEncrypted: false,
       createdAt: now,
@@ -183,10 +181,8 @@ export const chatService = {
           userId,
           role: index === 0 ? 'owner' : 'member',
           joinedAt: now,
-          lastReadAt: null,
           unreadCount: 0,
           isMuted: false,
-          nickname: null,
         };
         return chatRepository.addConversationMember(member);
       }),
@@ -519,10 +515,8 @@ export const chatService = {
           userId,
           role: 'member',
           joinedAt: now,
-          lastReadAt: null,
           unreadCount: 0,
           isMuted: false,
-          nickname: null,
         }),
       ),
     );
