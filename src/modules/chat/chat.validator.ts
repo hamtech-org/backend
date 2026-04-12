@@ -49,3 +49,10 @@ export const reactMessageSchema = z.object({
   createdAt: z.string().datetime(),
   emoji: z.string().min(1).max(20),
 });
+export const addMembersSchema = z.object({
+  memberIds: z.array(z.string().uuid()).min(1),
+});
+
+export const changeRoleSchema = z.object({
+  role: z.enum(['owner', 'admin', 'member']),
+});
