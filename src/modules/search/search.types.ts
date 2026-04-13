@@ -13,13 +13,17 @@ export interface ISearchOptions {
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
   filters?: Record<string, unknown>;
+  userId?: string; // Current user ID for friendship check
 }
 
 export interface ISearchUserResult {
   userId: string;
   displayName: string;
+  email: string;
   avatar: string | null;
   bio: string | null;
+  isFriend?: boolean; // Whether current user is friend with this user
+  friendshipStatus?: 'friend' | 'pending_sent' | 'pending_received' | 'none'; // Detailed friendship status
 }
 
 export interface ISearchPostResult {
@@ -49,6 +53,11 @@ export interface ISearchMessageResult {
 export interface ISearchAllResult {
   users: ISearchResult<ISearchUserResult>;
   posts: ISearchResult<ISearchPostResult>;
+  groups: ISearchResult<ISearchGroupResult>;
+}
+
+export interface ISearchAllChatResult {
+  users: ISearchResult<ISearchUserResult>;
   groups: ISearchResult<ISearchGroupResult>;
   messages: ISearchResult<ISearchMessageResult>;
 }

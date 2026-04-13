@@ -12,3 +12,7 @@ export const updateSettingsSchema = z.object({
   notifications: z.boolean().optional(),
   privacy: z.enum(['public', 'friends', 'private']).optional(),
 });
+
+export const friendIdParamSchema = z.object({
+  friendId: z.string().min(1, 'Friend ID is required'),
+});

@@ -9,6 +9,7 @@ const parseSearchOptions = (req: Request): ISearchOptions => ({
   pageSize: req.query.pageSize ? Number(req.query.pageSize) : undefined,
   sortBy: req.query.sortBy as string | undefined,
   sortOrder: req.query.sortOrder as 'asc' | 'desc' | undefined,
+  userId: req.user?.userId, // Add current user ID
 });
 
 export const searchController = {
@@ -24,6 +25,14 @@ export const searchController = {
     try {
       const options = parseSearchOptions(req);
       const results = await searchService.searchUsers(options);
+      sendSuccess(res, results);
+    } catch (error) { next(error); }
+  },
+
+  searchUsersByContact: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const options = parseSearchOptions(req);
+      const results = await searchService.searchUsersByContact(options);
       sendSuccess(res, results);
     } catch (error) { next(error); }
   },
@@ -48,6 +57,14 @@ export const searchController = {
     try {
       const options = parseSearchOptions(req);
       const results = await searchService.searchAll(req.user!.userId, options);
+      sendSuccess(res, results);
+    } catch (error) { next(error); }
+  },
+
+  searchAllChat: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const options = parseSearchOptions(req);
+      const results = await searchService.searchAllChat(req.user!.userId, options);
       sendSuccess(res, results);
     } catch (error) { next(error); }
   },

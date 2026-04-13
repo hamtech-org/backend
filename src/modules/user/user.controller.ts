@@ -49,4 +49,80 @@ export const userController = {
       sendSuccess(res, users, 'Lấy thông tin thành công');
     } catch (error) { next(error); }
   },
+
+  // ── Friend Request operations ──
+  sendFriendRequest: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { friendId } = req.params;
+      const message = await userService.sendFriendRequest(req.user!.userId, friendId);
+      sendSuccess(res, null, message);
+    } catch (error) { next(error); }
+  },
+
+  acceptFriendRequest: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { senderId } = req.params;
+      const message = await userService.acceptFriendRequest(req.user!.userId, senderId);
+      sendSuccess(res, null, message);
+    } catch (error) { next(error); }
+  },
+
+  rejectFriendRequest: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { senderId } = req.params;
+      const message = await userService.rejectFriendRequest(req.user!.userId, senderId);
+      sendSuccess(res, null, message);
+    } catch (error) { next(error); }
+  },
+
+  cancelFriendRequest: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { receiverId } = req.params;
+      const message = await userService.cancelFriendRequest(req.user!.userId, receiverId);
+      sendSuccess(res, null, message);
+    } catch (error) { next(error); }
+  },
+
+  getFriendRequestStatus: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { userId } = req.params;
+      const status = await userService.getFriendRequestStatus(req.user!.userId, userId);
+      sendSuccess(res, { status }, 'Kiểm tra hoàn tất');
+    } catch (error) { next(error); }
+  },
+
+  getPendingRequests: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const pendingRequests = await userService.getPendingRequests(req.user!.userId);
+      sendSuccess(res, pendingRequests, 'Lấy danh sách lời mời thành công');
+    } catch (error) { next(error); }
+  },
+
+  checkFriendship: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { friendId } = req.params;
+      const isFriend = await userService.checkFriendship(req.user!.userId, friendId);
+      sendSuccess(res, { isFriend }, 'Kiểm tra hoàn tất');
+    } catch (error) { next(error); }
+  },
+
+  removeFriend: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { friendId } = req.params;
+      const message = await userService.removeFriend(req.user!.userId, friendId);
+      sendSuccess(res, null, message);
+    } catch (error) { next(error); }
+  },
+
+  getFriends: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { limit = '50', offset = '0' } = req.query as { limit?: string; offset?: string };
+      const friends = await userService.getFriends(
+        req.user!.userId,
+        parseInt(limit) || 50,
+        parseInt(offset) || 0
+      );
+      sendSuccess(res, friends, 'Lấy danh sách bạn bè thành công');
+    } catch (error) { next(error); }
+  },
 };

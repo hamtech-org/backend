@@ -1,6 +1,6 @@
+import { kafka } from '@/config/kafka.js';
 import { logger } from '@/shared/utils/logger.js';
-
-const TOPIC = 'search.index';
+import { elasticsearchUtils } from '@/shared/utils/elasticsearch.js';
 
 interface ISearchIndexEvent {
   action: 'index' | 'update' | 'delete';
@@ -10,28 +10,38 @@ interface ISearchIndexEvent {
 }
 
 export const startSearchConsumer = async (): Promise<void> => {
-  // TODO: Khởi tạo Kafka consumer, subscribe vào topic
-  // const consumer = kafka.consumer({ groupId: 'search-indexer' });
-  // await consumer.connect();
-  // await consumer.subscribe({ topic: TOPIC, fromBeginning: false });
+  const consumer = kafka.consumer({ groupId: 'search-indexer' });
 
-  logger.info(`Search consumer đã subscribe topic: ${TOPIC}`);
+  await consumer.connect();
+  await consumer.subscribe({ topic: 'search.index', fromBeginning: false });
 
-  // TODO: Xử lý từng message để đồng bộ dữ liệu vào Elasticsearch
-  // await consumer.run({
-  //   eachMessage: async ({ message }) => {
-  //     const event = JSON.parse(message.value!.toString()) as ISearchIndexEvent;
-  //     switch (event.action) {
-  //       case 'index':
-  //       case 'update':
-  //         // await esClient.index({ index: event.indexName, id: event.documentId, body: event.document });
-  //         break;
-  //       case 'delete':
-  //         // await esClient.delete({ index: event.indexName, id: event.documentId });
-  //         break;
-  //     }
-  //   },
-  // });
+  logger.info('🔍 Search consumer started, listening for index updates...');
 
-  void TOPIC;
+  await consumer.run({
+    eachMessage: async ({ message }) => {
+      try {
+        const event = JSON.parse(message.value!.toString()) as ISearchIndexEvent;
+        
+        logger.debug(`Processing ${event.action} event for ${event.indexName}/${event.documentId}`);
+
+        switch (event.action) {
+          case 'index':
+          case 'update':
+            if (event.indexName === 'users') {
+              await elasticsearchUtils.indexUser(event.documentId, event.document || {});
+            }
+            break;
+          case 'delete':
+            if (event.indexName === 'users') {
+              await elasticsearchUtils.deleteUser(event.documentId);
+            }
+            break;
+        }
+
+        logger.debug(`Successfully processed ${event.action} for ${event.documentId}`);
+      } catch (error) {
+        logger.error('Error processing search index event:', error);
+      }
+    },
+  });
 };
