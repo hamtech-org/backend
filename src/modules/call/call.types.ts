@@ -3,6 +3,7 @@ export type CallType = 'audio' | 'video';
 export interface CallInitiatePayload {
   calleeId: string;
   type: CallType;
+  conversationId: string;
 }
 
 export interface CallIncomingPayload {
@@ -10,21 +11,37 @@ export interface CallIncomingPayload {
   callerName: string;
   type: CallType;
   channelName: string;
+  conversationId: string;
 }
 
 export interface CallAcceptPayload {
   channelName: string;
   callerId: string;
+  conversationId: string;
+  type: CallType;
 }
 
 export interface CallRejectPayload {
   channelName: string;
   callerId: string;
+  conversationId: string;
+  type: CallType;
 }
 
 export interface CallEndPayload {
   channelName: string;
   peerId: string;
+  conversationId: string;
+  type: CallType;
+  durationSec?: number;
+  result?: 'completed' | 'missed' | 'rejected';
+}
+
+export interface CallMissedPayload {
+  channelName: string;
+  peerId: string;
+  conversationId: string;
+  type: CallType;
 }
 
 export interface CallUpgradeRequestPayload {
