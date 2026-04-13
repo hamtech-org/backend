@@ -21,7 +21,7 @@ const mediaishTypes = ['image', 'video', 'file', 'audio'] as const;
 
 export const sendMessageSchema = z
   .object({
-    type: z.enum(['text', 'image', 'video', 'file', 'sticker', 'emoji', 'location', 'poll', 'schedule']),
+    type: z.enum(['text', 'image', 'video', 'file', 'sticker', 'emoji', 'location', 'poll', 'schedule','call']),
     content: z.string().max(10000),
     mediaUrl: z.string().url().optional(),
     mediaId: z.string().uuid().optional(),
