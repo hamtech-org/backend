@@ -446,6 +446,7 @@ export const chatService = {
 
   // ─── Group Management Service Extensions ──────────────────────────
 
+
   updateGroup: async (
     requesterId: string,
     conversationId: string,
@@ -460,8 +461,62 @@ export const chatService = {
       throw new ForbiddenError('Chỉ Admin/Owner mới có quyền cập nhật nhóm');
     }
 
+    // Detect group name change
+    const oldName = conversation.name || '';
+    const newName = data.name || oldName;
+    const isNameChanged = data.name && data.name !== oldName;
+
     await chatRepository.updateConversation(conversationId, data);
-    return { ...conversation, ...data, updatedAt: new Date().toISOString() };
+    const updatedConversation = { ...conversation, ...data, updatedAt: new Date().toISOString() };
+
+    // If group name changed, create and broadcast a system message
+    if (isNameChanged) {
+      // Get requester display name
+      const users = await userRepository.findByIds([requesterId]);
+      const userName = users[0]?.displayName || 'Ai đó';
+      const now = new Date().toISOString();
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: userName,
+        type: 'system' as any, // Not in MessageType union, but used for system messages
+        content: `${userName} đổi tên nhóm thành '${newName}'`,
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      // Optionally update lastMessage for conversation
+      await chatRepository.updateConversationLastMessage(conversationId, {
+        messageId,
+        senderId: requesterId,
+        content: systemMessage.content,
+        type: 'system' as any,
+        createdAt: now,
+        senderDisplayName: userName,
+      }, now);
+      // Broadcast to all members
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore broadcast errors */}
+    }
+
+    return updatedConversation;
   },
 
   deleteGroup: async (requesterId: string, conversationId: string): Promise<void> => {
