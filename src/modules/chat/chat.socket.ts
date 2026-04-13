@@ -7,13 +7,23 @@ import { logger } from '@/shared/utils/logger.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 
 // Schema validate data gửi qua socket
-const sendMessageSocketSchema = z.object({
-  conversationId: z.string().uuid(),
-  type: z.enum(['text', 'image', 'video', 'file', 'sticker', 'emoji', 'location', 'poll', 'schedule', 'call']),
-  content: z.string().max(10000),
-  mediaUrl: z.string().url().optional(),
-  replyTo: z.string().uuid().optional(),
-});
+const sendMessageSocketSchema = z
+  .object({
+    conversationId: z.string().uuid(),
+    type: z.enum(['text', 'image', 'video', 'file', 'sticker', 'emoji', 'location', 'poll', 'schedule', 'call']),
+    content: z.string().max(10000),
+    mediaUrl: z.string().url().optional(),
+    mediaId: z.string().uuid().optional(),
+    replyTo: z.string().uuid().optional(),
+  })
+  .refine(
+    (data) => {
+      const m = ['image', 'video', 'file', 'audio'] as const;
+      if (!m.includes(data.type as (typeof m)[number])) return true;
+      return !!(data.mediaUrl ?? data.mediaId);
+    },
+    { message: 'Tin có media cần mediaUrl hoặc mediaId' },
+  );
 
 const readMessageSocketSchema = z.object({
   conversationId: z.string().uuid(),

@@ -255,6 +255,7 @@ async function seedMessage(def: MessageDef): Promise<void> {
     mediaUrl: null,
     mediaType: null,
     mediaSize: null,
+    mediaOriginalName: null,
     thumbnailUrl: null,
     replyTo: null,
     forwardFrom: null,
