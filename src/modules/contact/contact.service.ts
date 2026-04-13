@@ -30,7 +30,6 @@ export const contactService = {
     
     // Fetch user profiles for all friends
     const friendProfiles = await userRepository.findMultipleById(friendIds);
-    console.log('👤 Friend profiles:', friendProfiles);
     
     // Create a map for quick lookup
     const profileMap = new Map(friendProfiles.map((p) => [p.userId, p]));
