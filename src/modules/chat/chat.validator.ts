@@ -17,12 +17,23 @@ export const updateGroupSchema = z.object({
   message: 'Phải cung cấp ít nhất một trường để cập nhật (name hoặc avatar)',
 });
 
-export const sendMessageSchema = z.object({
-  type: z.enum(['text', 'image', 'video', 'file', 'sticker', 'emoji', 'location', 'poll', 'schedule']),
-  content: z.string().max(10000),
-  mediaUrl: z.string().url().optional(),
-  replyTo: z.string().uuid().optional(),
-});
+const mediaishTypes = ['image', 'video', 'file', 'audio'] as const;
+
+export const sendMessageSchema = z
+  .object({
+    type: z.enum(['text', 'image', 'video', 'file', 'sticker', 'emoji', 'location', 'poll', 'schedule']),
+    content: z.string().max(10000),
+    mediaUrl: z.string().url().optional(),
+    mediaId: z.string().uuid().optional(),
+    replyTo: z.string().uuid().optional(),
+  })
+  .refine(
+    (data) => {
+      if (!mediaishTypes.includes(data.type as (typeof mediaishTypes)[number])) return true;
+      return !!(data.mediaUrl ?? data.mediaId);
+    },
+    { message: 'Tin có media cần mediaUrl hoặc mediaId', path: ['mediaId'] },
+  );
 
 export const editMessageSchema = z.object({
   content: z.string().min(1).max(10000),
