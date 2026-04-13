@@ -1,5 +1,5 @@
 import { userRepository } from './user.repository.js';
-import type { IUser, IUserPublic, IUpdateProfileDto, IFriendshipResponse, IFriendsList, IPendingRequests } from './user.types.js';
+import type { IUser, IUserPublic, IUpdateProfileDto, IFriendshipResponse, IFriendsList, IPendingRequests, IFriendRequestResponse } from './user.types.js';
 import { NotFoundError, ConflictError, ValidationError } from '@/shared/utils/errors.js';
 import { getKafkaProducer } from '@/config/kafka.js';
 import { logger } from '@/shared/utils/logger.js';

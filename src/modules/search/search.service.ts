@@ -166,7 +166,7 @@ export const searchService = {
             console.log(`Checking friendship for user ${user.userId} against currentUser ${options.userId}`);
             
             // Double-check friendship status directly from DB to ensure accuracy
-            if (userFriendIdsSet.has(user.userId)) {
+            if (userFriendIdsSet.has(user.userId) && options.userId) {
               console.log(`User ${user.userId} is in friend list`);
               const isFriendConfirmed = await userRepository.checkFriendship(options.userId, user.userId);
               if (isFriendConfirmed) {
