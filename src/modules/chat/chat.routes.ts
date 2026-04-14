@@ -68,6 +68,10 @@ router.post('/groups/:groupId/polls', authenticate, chatController.createPoll);
 router.post('/groups/:groupId/polls/:pollId/vote', authenticate, chatController.votePoll);
 // Hủy bỏ phiếu
 router.post('/groups/:groupId/polls/:pollId/unvote', authenticate, chatController.unvotePoll);
+// Thêm lựa chọn
+router.post('/groups/:groupId/polls/:pollId/options', authenticate, chatController.addPollOption);
+// Đóng bình chọn
+router.post('/groups/:groupId/polls/:pollId/close', authenticate, chatController.closePoll);
 
 // ─── Tasks (Công việc) ───────────────────────────────────────────────
 // Lấy danh sách công việc
