@@ -1,3 +1,4 @@
+// ...existing code...
 import { v4 as uuidv4 } from 'uuid';
 import { chatRepository } from './chat.repository.js';
 import type {
@@ -96,6 +97,12 @@ async function attachReplyToDetails(
 }
 
 export const chatService = {
+    /**
+     * Lấy danh sách thành viên nhóm (group)
+     */
+    getGroupMembers: async (groupId: string): Promise<IConversationMember[]> => {
+      return chatRepository.getConversationMembers(groupId);
+    },
   // ─── Conversations ────────────────────────────────────────────────────
 
   getConversations: async (userId: string): Promise<IConversation[]> => {
@@ -187,6 +194,52 @@ export const chatService = {
         return chatRepository.addConversationMember(member);
       }),
     );
+
+    // Tạo system message thông báo tạo nhóm mới
+    if (data.type === 'group') {
+      let creatorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([creatorId]);
+        creatorName = users[0]?.displayName || 'Ai đó';
+      } catch {}
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: creatorId,
+        senderDisplayName: creatorName,
+        type: 'system' as any,
+        content: `${creatorName} đã tạo nhóm${data.name ? ` "${data.name}"` : ''}`,
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(conversationId, {
+        messageId,
+        senderId: creatorId,
+        content: systemMessage.content,
+        type: 'system' as any,
+        createdAt: now,
+        senderDisplayName: creatorName,
+      }, now);
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore broadcast errors */}
+    }
 
     return conversation;
   },
@@ -457,23 +510,29 @@ export const chatService = {
     if (conversation.type !== 'group') throw new ForbiddenError('Đây không phải nhóm chat');
 
     const member = await chatRepository.getMember(conversationId, requesterId);
-    if (!member || !['owner', 'admin'].includes(member.role)) {
-      throw new ForbiddenError('Chỉ Admin/Owner mới có quyền cập nhật nhóm');
+    if (!member) {
+      throw new ForbiddenError('Bạn không phải thành viên của nhóm này');
     }
 
-    // Detect group name change
+
+    // Detect group name/avatar change
     const oldName = conversation.name || '';
-    const newName = data.name || oldName;
-    const isNameChanged = data.name && data.name !== oldName;
+    const oldAvatar = conversation.avatar || '';
+    const newAvatar = data.avatar || oldAvatar;
+    const isAvatarChanged = data.avatar && data.avatar !== oldAvatar;
 
     await chatRepository.updateConversation(conversationId, data);
     const updatedConversation = { ...conversation, ...data, updatedAt: new Date().toISOString() };
 
-    // If group name changed, create and broadcast a system message
-    if (isNameChanged) {
-      // Get requester display name
+    // Get requester display name (for both cases)
+    let userName = '';
+    try {
       const users = await userRepository.findByIds([requesterId]);
-      const userName = users[0]?.displayName || 'Ai đó';
+      userName = users[0]?.displayName || 'Ai đó';
+    } catch { userName = 'Ai đó'; }
+
+    // If group name changed, create and broadcast a system message
+    if (data.name && data.name !== oldName) {
       const now = new Date().toISOString();
       const messageId = uuidv4();
       const systemMessage: IMessage = {
@@ -481,16 +540,16 @@ export const chatService = {
         conversationId,
         senderId: requesterId,
         senderDisplayName: userName,
-        type: 'system' as any, // Not in MessageType union, but used for system messages
-        content: `${userName} đổi tên nhóm thành '${newName}'`,
-        encryptedContent: null,
-        mediaUrl: null,
-        mediaType: null,
-        mediaSize: null,
-        thumbnailUrl: null,
-        replyTo: null,
-        replyToDetails: null,
-        forwardFrom: null,
+        type: 'system' as any,
+        content: `${userName} đổi tên nhóm thành '${data.name}'`,
+        encryptedContent: undefined,
+        mediaUrl: undefined,
+        mediaType: undefined,
+        mediaSize: undefined,
+        thumbnailUrl: undefined,
+        replyTo: undefined,
+        replyToDetails: undefined,
+        forwardFrom: undefined,
         isPinned: false,
         isEdited: false,
         isRecalled: false,
@@ -500,7 +559,6 @@ export const chatService = {
         updatedAt: now,
       };
       await chatRepository.createMessage(systemMessage);
-      // Optionally update lastMessage for conversation
       await chatRepository.updateConversationLastMessage(conversationId, {
         messageId,
         senderId: requesterId,
@@ -509,7 +567,48 @@ export const chatService = {
         createdAt: now,
         senderDisplayName: userName,
       }, now);
-      // Broadcast to all members
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore broadcast errors */}
+    }
+
+    // If group avatar changed, create and broadcast a system message
+    if (data.avatar && data.avatar !== oldAvatar) {
+      const now = new Date().toISOString();
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: userName,
+        type: 'system' as any,
+        content: `${userName} đã cập nhật ảnh đại diện nhóm`,
+        encryptedContent: undefined,
+        mediaUrl: data.avatar,
+        mediaType: 'image',
+        mediaSize: undefined,
+        thumbnailUrl: undefined,
+        replyTo: undefined,
+        replyToDetails: undefined,
+        forwardFrom: undefined,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(conversationId, {
+        messageId,
+        senderId: requesterId,
+        content: systemMessage.content,
+        type: 'system' as any,
+        createdAt: now,
+        senderDisplayName: userName,
+      }, now);
       try {
         const { broadcastMessageNew } = await import('./chat.broadcast.js');
         await broadcastMessageNew(systemMessage);
