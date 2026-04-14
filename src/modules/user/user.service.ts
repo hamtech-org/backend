@@ -4,6 +4,8 @@ import { NotFoundError, ConflictError, ValidationError } from '@/shared/utils/er
 import { getKafkaProducer } from '@/config/kafka.js';
 import { getIO } from '@/socket/index.js';
 import { logger } from '@/shared/utils/logger.js';
+import { putObject, deleteObjectKey, getSignedGetUrl } from '@/shared/services/s3Media.service.js';
+import { v4 as uuidv4 } from 'uuid';
 
 /**
  * Emit search index event to Kafka for Elasticsearch synchronization
@@ -73,7 +75,46 @@ export const userService = {
   },
 
   updateProfile: async (userId: string, data: IUpdateProfileDto): Promise<IUser> => {
-    const updated = await userRepository.update(userId, data);
+    const updateData: IUpdateProfileDto = {
+      displayName: data.displayName,
+      bio: data.bio,
+      phone: data.phone,
+    };
+
+    // Handle avatar upload to S3
+    if (data.avatarFile) {
+      try {
+        // Validate file is an image
+        if (!data.avatarFile.mimetype?.startsWith('image/')) {
+          throw new ValidationError('Chỉ chấp nhận file ảnh');
+        }
+
+        // Upload to S3
+        const avatarId = uuidv4();
+        const ext = data.avatarFile.mimetype === 'image/jpeg' ? '.jpg' : '.png';
+        const s3Key = `avatars/${userId}/${avatarId}${ext}`;
+
+        await putObject({
+          key: s3Key,
+          body: data.avatarFile.buffer,
+          contentType: data.avatarFile.mimetype,
+        });
+
+        // Get signed URL for avatar (max 7 days for S3 presigned URLs)
+        const avatarUrl = await getSignedGetUrl(s3Key, 604800); // 7 days expiry
+        updateData.avatar = avatarUrl;
+
+        logger.info(`Avatar uploaded for user ${userId}: ${s3Key}`);
+      } catch (error) {
+        logger.error(`Failed to upload avatar for user ${userId}:`, error);
+        if (error instanceof ValidationError) {
+          throw error;
+        }
+        throw new Error('Không thể tải lên ảnh. Vui lòng thử lại.');
+      }
+    }
+
+    const updated = await userRepository.update(userId, updateData);
 
     // Emit event to sync with Elasticsearch
     await emitSearchIndexEvent('update', updated);

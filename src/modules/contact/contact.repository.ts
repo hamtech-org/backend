@@ -8,8 +8,7 @@ const GROUPS_TABLE = 'Zalogram_Groups';
 export const contactRepository = {
   getFriends: async (userId: string): Promise<IContact[]> => {
     const pk = `USER#${userId}`;
-    console.log('🔍 Querying friends for PK:', pk, 'from table:', USERS_TABLE);
-    
+
     const result = await dynamoClient.send(new QueryCommand({
       TableName: USERS_TABLE,
       KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
@@ -29,8 +28,6 @@ export const contactRepository = {
         requestedBy: item.requestedBy,
         createdAt: item.createdAt,
       })) as IContact[];
-    
-    console.log('✅ Filtered friends (status=friend):', friends);
     
     return friends;
   },
