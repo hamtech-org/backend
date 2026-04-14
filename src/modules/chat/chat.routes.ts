@@ -34,6 +34,8 @@ router.delete('/messages/:messageId/pin', authenticate, chatController.unpinMess
 router.post('/messages/:messageId/react', authenticate, validate(reactMessageSchema), chatController.reactToMessage);
 
 // ─── Group Management ────────────────────────────────────────────────────────
+// Lấy danh sách thành viên nhóm
+router.get('/groups/:groupId/members', authenticate, chatController.getGroupMembers);
 // Cập nhật thông tin nhóm (tên / avatar nhóm)
 router.put('/groups/:groupId', authenticate, validate(updateGroupSchema), chatController.updateGroup);
 // Xóa nhóm (Giải tán nhóm)
@@ -66,6 +68,10 @@ router.post('/groups/:groupId/polls', authenticate, chatController.createPoll);
 router.post('/groups/:groupId/polls/:pollId/vote', authenticate, chatController.votePoll);
 // Hủy bỏ phiếu
 router.post('/groups/:groupId/polls/:pollId/unvote', authenticate, chatController.unvotePoll);
+// Thêm lựa chọn
+router.post('/groups/:groupId/polls/:pollId/options', authenticate, chatController.addPollOption);
+// Đóng bình chọn
+router.post('/groups/:groupId/polls/:pollId/close', authenticate, chatController.closePoll);
 
 // ─── Tasks (Công việc) ───────────────────────────────────────────────
 // Lấy danh sách công việc
@@ -74,6 +80,8 @@ router.get('/groups/:groupId/tasks', authenticate, chatController.getTasks);
 router.post('/groups/:groupId/tasks', authenticate, chatController.createTask);
 // Cập nhật trạng thái công việc
 router.put('/groups/:groupId/tasks/:taskId', authenticate, chatController.updateTaskStatus);
+// Tham gia công việc
+router.post('/groups/:groupId/tasks/:taskId/join', authenticate, chatController.joinTask);
 
 // ─── AI Recap ───────────────────────────────────────────────────────
 // Tạo AI Recap

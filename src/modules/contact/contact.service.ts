@@ -49,9 +49,29 @@ export const contactService = {
     });
   },
 
-  sendFriendRequest: async (_userId: string, _targetUserId: string): Promise<void> => {
-    // TODO: Tạo friend request, gửi notification
-    throw new Error('Chưa triển khai');
+  /**
+   * MVP: Kết bạn ngay lập tức (auto-accept) để phục vụ UI "Kết bạn" trong modal thành viên nhóm.
+   * Nếu muốn quy trình lời mời/duyệt kết bạn chuẩn, có thể mở rộng sau.
+   */
+  sendFriendRequest: async (userId: string, targetUserId: string): Promise<void> => {
+    if (!targetUserId || targetUserId === userId) return;
+    const now = new Date().toISOString();
+    await Promise.all([
+      contactRepository.addFriend({
+        userId,
+        friendId: targetUserId,
+        status: 'accepted' as any,
+        requestedBy: userId,
+        createdAt: now,
+      }),
+      contactRepository.addFriend({
+        userId: targetUserId,
+        friendId: userId,
+        status: 'accepted' as any,
+        requestedBy: userId,
+        createdAt: now,
+      }),
+    ]);
   },
 
   acceptFriendRequest: async (_userId: string, _requestId: string): Promise<void> => {

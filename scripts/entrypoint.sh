@@ -23,6 +23,10 @@ echo ""
 # npx tsx scripts/database/insert-data.ts
 # echo ""
 
+echo "[4/5] Waiting for Elasticsearch..."
+npx tsx scripts/database/wait-for-elasticsearch.ts
+echo ""
+
 echo "[5/5] Syncing users to Elasticsearch..." 
 npx tsx scripts/database/sync-users-to-es.ts
 echo ""

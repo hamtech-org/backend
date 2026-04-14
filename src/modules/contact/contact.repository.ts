@@ -20,7 +20,7 @@ export const contactRepository = {
     
     // Filter only confirmed friendships (status='friend')
     const friends = (result.Items as any[] ?? [])
-      .filter(item => item.status === 'friend')
+      .filter((item) => item?.status === 'friend' || item?.status === 'accepted')
       .map(item => ({
         userId: item.PK.substring('USER#'.length),
         friendId: item.SK.substring('FRIEND#'.length),
