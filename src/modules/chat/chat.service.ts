@@ -102,7 +102,25 @@ export const chatService = {
      * Lấy danh sách thành viên nhóm (group)
      */
     getGroupMembers: async (groupId: string): Promise<IConversationMember[]> => {
-      return chatRepository.getConversationMembers(groupId);
+      const members = await chatRepository.getConversationMembers(groupId);
+      if (members.length === 0) return members;
+
+      // Enrich để FE hiển thị avatar/name đồng bộ (không phá compatibility: vẫn giữ fields gốc).
+      try {
+        const userIds = members.map((m) => m.userId);
+        const users = await userRepository.findByIds(userIds);
+        const byId = new Map(users.map((u) => [u.userId, u]));
+        return members.map((m) => {
+          const u = byId.get(m.userId);
+          return {
+            ...m,
+            name: u?.displayName ?? u?.email ?? m.userId,
+            avatar: u?.avatar ?? null,
+          } as any;
+        });
+      } catch {
+        return members;
+      }
     },
   // ─── Conversations ────────────────────────────────────────────────────
 
@@ -215,6 +233,7 @@ export const chatService = {
         mediaUrl: null,
         mediaType: null,
         mediaSize: null,
+        mediaOriginalName: null,
         thumbnailUrl: null,
         replyTo: null,
         replyToDetails: null,
@@ -570,14 +589,15 @@ export const chatService = {
         senderDisplayName: userName,
         type: 'system' as any,
         content: `${userName} đổi tên nhóm thành '${data.name}'`,
-        encryptedContent: undefined,
-        mediaUrl: undefined,
-        mediaType: undefined,
-        mediaSize: undefined,
-        thumbnailUrl: undefined,
-        replyTo: undefined,
-        replyToDetails: undefined,
-        forwardFrom: undefined,
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
         isPinned: false,
         isEdited: false,
         isRecalled: false,
@@ -605,13 +625,7 @@ export const chatService = {
     if (data.avatar && data.avatar !== oldAvatar) {
       const now = new Date().toISOString();
       const messageId = uuidv4();
-      // Nếu người gửi là chính họ, xưng "Bạn"; còn lại dùng tên
-      let content = '';
-      if (requesterId === conversation.currentUserId) {
-        content = 'Ảnh đại diện nhóm đã thay đổi';
-      } else {
-        content = `${userName} đã cập nhật ảnh đại diện nhóm`;
-      }
+      const content = `${userName} đã cập nhật ảnh đại diện nhóm`;
       const systemMessage: IMessage = {
         messageId,
         conversationId,
@@ -619,14 +633,15 @@ export const chatService = {
         senderDisplayName: userName,
         type: 'system' as any,
         content,
-        encryptedContent: undefined,
+        encryptedContent: null,
         mediaUrl: data.avatar,
         mediaType: 'image',
-        mediaSize: undefined,
-        thumbnailUrl: undefined,
-        replyTo: undefined,
-        replyToDetails: undefined,
-        forwardFrom: undefined,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
         isPinned: false,
         isEdited: false,
         isRecalled: false,
