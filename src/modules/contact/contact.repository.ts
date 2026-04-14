@@ -8,8 +8,7 @@ const GROUPS_TABLE = 'Zalogram_Groups';
 export const contactRepository = {
   getFriends: async (userId: string): Promise<IContact[]> => {
     const pk = `USER#${userId}`;
-    console.log('🔍 Querying friends for PK:', pk, 'from table:', USERS_TABLE);
-    
+
     const result = await dynamoClient.send(new QueryCommand({
       TableName: USERS_TABLE,
       KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
@@ -19,15 +18,7 @@ export const contactRepository = {
       },
     }));
     
-    console.log('📊 DynamoDB response:', {
-      Count: result.Count,
-      Items: result.Items?.length ?? 0,
-      RawItems: result.Items
-    });
-    
-    // Filter only confirmed friendships.
-    // Legacy data có thể dùng `status: "friend"`; code/types mới dùng `accepted`.
-    // Giữ check cũ và mở rộng để không làm rỗng list bạn bè.
+    // Filter only confirmed friendships (status='friend')
     const friends = (result.Items as any[] ?? [])
       .filter((item) => item?.status === 'friend' || item?.status === 'accepted')
       .map(item => ({
@@ -37,8 +28,6 @@ export const contactRepository = {
         requestedBy: item.requestedBy,
         createdAt: item.createdAt,
       })) as IContact[];
-    
-    console.log('✅ Filtered friends (status=friend|accepted):', friends);
     
     return friends;
   },

@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { userService } from './user.service.js';
 import { sendSuccess } from '@/shared/utils/response.js';
-import { NotFoundError } from '@/shared/utils/errors.js';
+import { NotFoundError, ValidationError } from '@/shared/utils/errors.js';
 
 export const userController = {
   getProfile: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -14,7 +14,28 @@ export const userController = {
 
   updateProfile: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const updated = await userService.updateProfile(req.user!.userId, req.body);
+      const { displayName, bio, phone } = req.body;
+      const file = req.file as Express.Multer.File | undefined;
+
+      // Validate inputs
+      if (displayName && (typeof displayName !== 'string' || displayName.length < 2 || displayName.length > 50)) {
+        throw new ValidationError('Tên hiển thị phải có 2-50 ký tự');
+      }
+
+      if (bio && (typeof bio !== 'string' || bio.length > 500)) {
+        throw new ValidationError('Bio không quá 500 ký tự');
+      }
+
+      if (phone && (typeof phone !== 'string' || !/^(\+84\d{9,10})?$/.test(phone))) {
+        throw new ValidationError('Số điện thoại không hợp lệ (định dạng: +84901234567)');
+      }
+
+      const updated = await userService.updateProfile(req.user!.userId, {
+        displayName,
+        bio,
+        phone,
+        avatarFile: file,
+      });
       sendSuccess(res, updated, 'Cập nhật thành công');
     } catch (error) { next(error); }
   },
@@ -123,6 +144,14 @@ export const userController = {
         parseInt(offset) || 0
       );
       sendSuccess(res, friends, 'Lấy danh sách bạn bè thành công');
+    } catch (error) { next(error); }
+  },
+
+  getSuggestedFriends: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { limit = '10' } = req.query as { limit?: string };
+      const suggested = await userService.getSuggestedFriends(req.user!.userId, parseInt(limit) || 10);
+      sendSuccess(res, suggested, 'Lấy danh sách gợi ý thành công');
     } catch (error) { next(error); }
   },
 };

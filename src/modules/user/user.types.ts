@@ -1,5 +1,6 @@
 import type { TimestampFields } from '@/shared/types/common.types.js';
 import type { UserStatus, UserRole, OAuthProvider } from '@/shared/types/user.types.js';
+import type { Express } from 'express';
 
 export interface IUser extends TimestampFields {
   userId: string;
@@ -46,6 +47,9 @@ export interface IUpdateProfileDto {
   bio?: string;
   avatar?: string;
   phone?: string;
+  avatarFile?: Express.Multer.File;
+  status?: 'online' | 'offline' | 'away';
+  lastSeen?: string;
 }
 
 export interface IFriendship {

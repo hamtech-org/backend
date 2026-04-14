@@ -15,9 +15,7 @@ export const contactService = {
     phone: string | null;
     status: string;
   }>> => {
-    console.log('👥 getFriends called for userId:', userId);
     const contacts = await contactRepository.getFriends(userId);
-    console.log('📝 Contacts from repo:', contacts);
     
     if (contacts.length === 0) {
       console.log('⚠️ No contacts found');
@@ -26,11 +24,9 @@ export const contactService = {
 
     // Extract friend IDs from contacts
     const friendIds = contacts.map((c) => c.friendId);
-    console.log('🔗 Friend IDs:', friendIds);
     
     // Fetch user profiles for all friends
     const friendProfiles = await userRepository.findMultipleById(friendIds);
-    console.log('👤 Friend profiles:', friendProfiles);
     
     // Create a map for quick lookup
     const profileMap = new Map(friendProfiles.map((p) => [p.userId, p]));
