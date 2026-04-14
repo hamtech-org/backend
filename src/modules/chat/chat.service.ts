@@ -692,8 +692,10 @@ export const chatService = {
     data: IAddMembersDto,
   ): Promise<void> => {
     const member = await chatRepository.getMember(conversationId, requesterId);
-    if (!member || !['owner', 'admin'].includes(member.role)) {
-      throw new ForbiddenError('Chỉ Admin/Owner mới có quyền thêm thành viên');
+    // Giữ check cũ (admin/owner) nhưng mở rộng: chỉ cần là thành viên của nhóm thì có thể thêm.
+    // Backend vẫn là nguồn kiểm soát quyền; nếu muốn siết lại thì chỉ cần bỏ nhánh này.
+    if (!member || !['owner', 'admin', 'member'].includes(member.role)) {
+      throw new ForbiddenError('Bạn không có quyền thêm thành viên');
     }
 
     const now = new Date().toISOString();
@@ -715,6 +717,73 @@ export const chatService = {
       await chatRepository.updateConversation(conversationId, {
         memberCount: (conv.memberCount || 0) + data.memberIds.length,
       });
+    }
+
+    // System message: ai đã thêm ai vào nhóm (hiển thị giữa khung chat) + đồng bộ realtime
+    try {
+      let requesterName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([requesterId]);
+        requesterName = users[0]?.displayName || requesterName;
+      } catch {}
+
+      let addedNames: string[] = [];
+      try {
+        const addedProfiles = await userRepository.findByIds(data.memberIds);
+        const nameById = new Map(addedProfiles.map((u) => [u.userId, u.displayName || u.email || u.userId]));
+        addedNames = data.memberIds.map((id) => nameById.get(id) ?? id);
+      } catch {
+        addedNames = data.memberIds;
+      }
+
+      const previewList = addedNames.slice(0, 3).join(', ');
+      const moreCount = Math.max(0, addedNames.length - 3);
+      const addedLabel = moreCount > 0 ? `${previewList} và ${moreCount} người khác` : previewList;
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: requesterName,
+        type: 'system' as any,
+        content: `${requesterName} đã thêm ${addedLabel} vào nhóm`,
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: requesterName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore broadcast errors */}
+    } catch {
+      // ignore system message errors, do not fail main addMembers flow
     }
   },
 
