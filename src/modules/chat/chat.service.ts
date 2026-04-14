@@ -1038,19 +1038,88 @@ export const chatService = {
 
   // ─── Polls (Bình chọn) ───────────────────────────────────────────────
 
-  createPoll: async (requesterId: string, conversationId: string, data: any): Promise<void> => {
+  createPoll: async (requesterId: string, conversationId: string, data: any): Promise<IMessage | null> => {
+    const member = await chatRepository.getMember(conversationId, requesterId);
+    if (!member) throw new ForbiddenError('Bạn không thuộc nhóm');
+
     const pollId = uuidv4();
+    const now = new Date().toISOString();
     const poll = {
       pollId,
       conversationId,
       creatorId: requesterId,
       question: data.question,
-      options: data.options.map((opt: string) => ({ text: opt, vofers: [] })),
+      options: data.options.map((opt: string) => ({ text: opt, voters: [] })),
       isMultipleChoice: data.isMultipleChoice || false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     };
     await chatRepository.createPoll(poll);
+
+    // System message: thông báo tạo bình chọn trong khung chat
+    try {
+      let creatorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([requesterId]);
+        creatorName = users[0]?.displayName || creatorName;
+      } catch {}
+
+      const payload = {
+        kind: 'poll_created',
+        poll: {
+          pollId: String(pollId),
+          question: String(data.question ?? ''),
+        },
+        actor: { userId: requesterId, name: creatorName },
+        createdAt: now,
+      };
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: creatorName,
+        type: 'system' as any,
+        content: JSON.stringify(payload),
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: creatorName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore */}
+      return systemMessage;
+    } catch {/* ignore */}
+
+    return null;
   },
 
   getPolls: async (conversationId: string): Promise<any[]> => {
@@ -1058,13 +1127,29 @@ export const chatService = {
   },
 
   votePoll: async (userId: string, conversationId: string, pollId: string, optionIndex: number): Promise<void> => {
+    const member = await chatRepository.getMember(conversationId, userId);
+    if (!member) throw new ForbiddenError('Bạn không thuộc nhóm');
+
     const polls = await chatRepository.getPolls(conversationId);
     const poll = polls.find(p => p.pollId === pollId);
     if (!poll) throw new NotFoundError('Bình chọn');
 
-    // Logic bỏ phiếu (đơn giản hóa: bỏ phiếu cho 1 option)
+    // Logic bỏ phiếu
     if (!poll.options[optionIndex]) throw new Error('Lựa chọn không hợp lệ');
     
+    const prevVotedIndexes: number[] = [];
+    (poll.options ?? []).forEach((opt: any, idx: number) => {
+      if (Array.isArray(opt?.voters) && opt.voters.includes(userId)) prevVotedIndexes.push(idx);
+    });
+
+    // Single choice: remove previous votes first
+    if (!poll.isMultipleChoice) {
+      poll.options = (poll.options ?? []).map((opt: any) => ({
+        ...opt,
+        voters: Array.isArray(opt.voters) ? opt.voters.filter((id: string) => id !== userId) : [],
+      }));
+    }
+
     // Nếu chưa bầu thì thêm vào
     if (!poll.options[optionIndex].voters) poll.options[optionIndex].voters = [];
     if (!poll.options[optionIndex].voters.includes(userId)) {
@@ -1072,9 +1157,90 @@ export const chatService = {
     }
     
     await chatRepository.updatePollVotes(conversationId, pollId, poll.options);
+
+    // System message: ai đã bình chọn / thay đổi bình chọn (để member khác thấy realtime trong khung chat)
+    try {
+      const now = new Date().toISOString();
+      let actorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([userId]);
+        actorName = users[0]?.displayName || actorName;
+      } catch {}
+
+      const optionText = String(poll?.options?.[optionIndex]?.text ?? '').trim();
+      const question = String(poll?.question ?? '').trim();
+      const changed =
+        !poll.isMultipleChoice &&
+        prevVotedIndexes.length > 0 &&
+        !prevVotedIndexes.includes(optionIndex);
+      const prevOptionText =
+        changed && poll?.options?.[prevVotedIndexes[0]]?.text
+          ? String(poll.options[prevVotedIndexes[0]].text)
+          : '';
+
+      const payload = {
+        kind: changed ? 'poll_vote_changed' : 'poll_voted',
+        poll: {
+          pollId: String(pollId),
+          question,
+          optionIndex,
+          optionText,
+          prevOptionIndex: changed ? prevVotedIndexes[0] : null,
+          prevOptionText: changed ? String(prevOptionText ?? '') : null,
+        },
+        actor: { userId, name: actorName },
+        createdAt: now,
+      };
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: userId,
+        senderDisplayName: actorName,
+        type: 'system' as any,
+        content: JSON.stringify(payload),
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: userId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: actorName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore */}
+    } catch {/* ignore */}
   },
 
   unvotePoll: async (userId: string, conversationId: string, pollId: string, optionIndex: number): Promise<void> => {
+    const member = await chatRepository.getMember(conversationId, userId);
+    if (!member) throw new ForbiddenError('Bạn không thuộc nhóm');
+
     const polls = await chatRepository.getPolls(conversationId);
     const poll = polls.find(p => p.pollId === pollId);
     if (!poll) throw new NotFoundError('Bình chọn');
@@ -1083,6 +1249,231 @@ export const chatService = {
       poll.options[optionIndex].voters = poll.options[optionIndex].voters.filter((id: string) => id !== userId);
       await chatRepository.updatePollVotes(conversationId, pollId, poll.options);
     }
+
+    // System message: ai đã rút phiếu
+    try {
+      const now = new Date().toISOString();
+      let actorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([userId]);
+        actorName = users[0]?.displayName || actorName;
+      } catch {}
+
+      const optionText = String(poll?.options?.[optionIndex]?.text ?? '').trim();
+      const question = String(poll?.question ?? '').trim();
+
+      const payload = {
+        kind: 'poll_unvoted',
+        poll: {
+          pollId: String(pollId),
+          question,
+          optionIndex,
+          optionText,
+        },
+        actor: { userId, name: actorName },
+        createdAt: now,
+      };
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: userId,
+        senderDisplayName: actorName,
+        type: 'system' as any,
+        content: JSON.stringify(payload),
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: userId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: actorName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore */}
+    } catch {/* ignore */}
+  },
+
+  addPollOption: async (
+    requesterId: string,
+    conversationId: string,
+    pollId: string,
+    text: string,
+  ): Promise<void> => {
+    const member = await chatRepository.getMember(conversationId, requesterId);
+    if (!member) throw new ForbiddenError('Bạn không thuộc nhóm');
+
+    const optionText = String(text ?? '').trim();
+    if (!optionText) throw new Error('Nội dung lựa chọn không hợp lệ');
+
+    const polls = await chatRepository.getPolls(conversationId);
+    const poll = polls.find((p) => p.pollId === pollId);
+    if (!poll) throw new NotFoundError('Bình chọn');
+
+    const nextOptions = Array.isArray(poll.options) ? [...poll.options] : [];
+    nextOptions.push({ text: optionText, voters: [] });
+    await chatRepository.updatePoll(conversationId, pollId, { options: nextOptions });
+
+    try {
+      const now = new Date().toISOString();
+      let actorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([requesterId]);
+        actorName = users[0]?.displayName || actorName;
+      } catch {}
+
+      const payload = {
+        kind: 'poll_option_added',
+        poll: {
+          pollId: String(pollId),
+          question: String(poll.question ?? ''),
+          optionText,
+        },
+        actor: { userId: requesterId, name: actorName },
+        createdAt: now,
+      };
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: actorName,
+        type: 'system' as any,
+        content: JSON.stringify(payload),
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: actorName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore */}
+    } catch {/* ignore */}
+  },
+
+  closePoll: async (requesterId: string, conversationId: string, pollId: string): Promise<void> => {
+    const member = await chatRepository.getMember(conversationId, requesterId);
+    if (!member) throw new ForbiddenError('Bạn không thuộc nhóm');
+
+    const polls = await chatRepository.getPolls(conversationId);
+    const poll = polls.find((p) => p.pollId === pollId);
+    if (!poll) throw new NotFoundError('Bình chọn');
+
+    await chatRepository.updatePoll(conversationId, pollId, { isClosed: true });
+
+    try {
+      const now = new Date().toISOString();
+      let actorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([requesterId]);
+        actorName = users[0]?.displayName || actorName;
+      } catch {}
+
+      const payload = {
+        kind: 'poll_closed',
+        poll: {
+          pollId: String(pollId),
+          question: String(poll.question ?? ''),
+        },
+        actor: { userId: requesterId, name: actorName },
+        createdAt: now,
+      };
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: actorName,
+        type: 'system' as any,
+        content: JSON.stringify(payload),
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: actorName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore */}
+    } catch {/* ignore */}
   },
 
   deletePoll: async (requesterId: string, conversationId: string, pollId: string): Promise<void> => {
