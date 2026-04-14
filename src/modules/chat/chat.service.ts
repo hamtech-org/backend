@@ -1,6 +1,6 @@
-// ...existing code...
 import { v4 as uuidv4 } from 'uuid';
 import { chatRepository } from './chat.repository.js';
+import { messageUserHideRepository } from './message-user-hide.repository.js';
 import type {
   IConversation,
   IConversationMember,
@@ -20,9 +20,13 @@ import { mediaService } from '@/modules/media/media.service.js';
 import { contactRepository } from '@/modules/contact/contact.repository.js';
 import type { MemberRole } from '@/shared/types/chat.types.js';
 
-async function lastMessageSnapshotFromNewest(messages: IMessage[]): Promise<ILastMessage | null> {
-  if (messages.length === 0) return null;
-  const m = messages[0];
+/** Tin không hiển thị với viewer: legacy soft-delete toàn cục hoặc user đã ẩn. */
+function isMessageHiddenFromViewer(m: IMessage, hiddenMessageIds: Set<string>): boolean {
+  if (m.isDeleted) return true;
+  return hiddenMessageIds.has(m.messageId);
+}
+
+async function messageToLastMessageSnapshot(m: IMessage): Promise<ILastMessage> {
   let content = m.content ?? '';
   if (m.isRecalled) content = 'Tin nhắn đã được thu hồi';
   else if (m.isDeleted) content = 'Tin nhắn đã được xóa';
@@ -36,6 +40,24 @@ async function lastMessageSnapshotFromNewest(messages: IMessage[]): Promise<ILas
     createdAt: m.createdAt,
     senderDisplayName,
   };
+}
+
+async function lastMessageSnapshotFromNewest(messages: IMessage[]): Promise<ILastMessage | null> {
+  if (messages.length === 0) return null;
+  return messageToLastMessageSnapshot(messages[0]);
+}
+
+/** Tin nhắn cuối còn thấy được với user (bỏ qua ẩn-theo-user và isDeleted legacy). */
+async function resolveLastVisibleLastMessageSnapshot(
+  conversationId: string,
+  hiddenForUser: Set<string>,
+): Promise<ILastMessage | null> {
+  const messages = await chatRepository.getMessages(conversationId, 100);
+  for (const m of messages) {
+    if (isMessageHiddenFromViewer(m, hiddenForUser)) continue;
+    return messageToLastMessageSnapshot(m);
+  }
+  return null;
 }
 
 async function syncConversationLastMessageMeta(conversationId: string): Promise<void> {
@@ -62,6 +84,7 @@ async function attachSenderDisplayNames(messages: IMessage[]): Promise<IMessage[
 async function attachReplyToDetails(
   conversationId: string,
   messages: IMessage[],
+  hiddenMessageIdsForViewer: Set<string>,
 ): Promise<IMessage[]> {
   const replyToIds = messages
     .map((m) => m.replyTo)
@@ -82,8 +105,9 @@ async function attachReplyToDetails(
     if (!original) return msg;
 
     let content = original.content;
-    if (original.isRecalled) content = 'Tin nhắn đã được thu hồi';
-    if (original.isDeleted) content = 'Tin nhắn đã được xóa';
+    if (isMessageHiddenFromViewer(original, hiddenMessageIdsForViewer))
+      content = '[Tin nhắn không khả dụng]';
+    else if (original.isRecalled) content = 'Tin nhắn đã được thu hồi';
 
     return {
       ...msg,
@@ -99,34 +123,46 @@ async function attachReplyToDetails(
 }
 
 export const chatService = {
-    /**
-     * Lấy danh sách thành viên nhóm (group)
-     */
-    getGroupMembers: async (groupId: string): Promise<IConversationMember[]> => {
-      const members = await chatRepository.getConversationMembers(groupId);
-      if (members.length === 0) return members;
+  /**
+   * Lấy danh sách thành viên nhóm (group)
+   */
+  getGroupMembers: async (groupId: string): Promise<IConversationMember[]> => {
+    const members = await chatRepository.getConversationMembers(groupId);
+    if (members.length === 0) return members;
 
-      // Enrich để FE hiển thị avatar/name đồng bộ (không phá compatibility: vẫn giữ fields gốc).
-      try {
-        const userIds = members.map((m) => m.userId);
-        const users = await userRepository.findByIds(userIds);
-        const byId = new Map(users.map((u) => [u.userId, u]));
-        return members.map((m) => {
-          const u = byId.get(m.userId);
-          return {
-            ...m,
-            name: u?.displayName ?? u?.email ?? m.userId,
-            avatar: u?.avatar ?? null,
-          } as any;
-        });
-      } catch {
-        return members;
-      }
-    },
+    // Enrich để FE hiển thị avatar/name đồng bộ (không phá compatibility: vẫn giữ fields gốc).
+    try {
+      const userIds = members.map((m) => m.userId);
+      const users = await userRepository.findByIds(userIds);
+      const byId = new Map(users.map((u) => [u.userId, u]));
+      return members.map((m) => {
+        const u = byId.get(m.userId);
+        return {
+          ...m,
+          name: u?.displayName ?? u?.email ?? m.userId,
+          avatar: u?.avatar ?? null,
+        } as any;
+      });
+    } catch {
+      return members;
+    }
+  },
   // ─── Conversations ────────────────────────────────────────────────────
 
   getConversations: async (userId: string): Promise<IConversation[]> => {
     const conversations = await chatRepository.getConversations(userId);
+    const hiddenByConv =
+      await messageUserHideRepository.queryAllHiddenGroupedByConversation(userId);
+    for (const conv of conversations) {
+      const lm = conv.lastMessage;
+      if (!lm?.messageId) continue;
+      const hidden = hiddenByConv.get(conv.conversationId);
+      if (!hidden?.has(lm.messageId)) continue;
+      const resolved = await resolveLastVisibleLastMessageSnapshot(conv.conversationId, hidden);
+      if (resolved) conv.lastMessage = resolved;
+      else delete conv.lastMessage;
+    }
+
     const directConversations = conversations.filter(
       (conversation) => conversation.type === 'direct',
     );
@@ -248,18 +284,24 @@ export const chatService = {
         updatedAt: now,
       };
       await chatRepository.createMessage(systemMessage);
-      await chatRepository.updateConversationLastMessage(conversationId, {
-        messageId,
-        senderId: creatorId,
-        content: systemMessage.content,
-        type: 'system' as any,
-        createdAt: now,
-        senderDisplayName: creatorName,
-      }, now);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: creatorId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: creatorName,
+        },
+        now,
+      );
       try {
         const { broadcastMessageNew } = await import('./chat.broadcast.js');
         await broadcastMessageNew(systemMessage);
-      } catch {/* ignore broadcast errors */}
+      } catch {
+        /* ignore broadcast errors */
+      }
     }
 
     return conversation;
@@ -279,10 +321,27 @@ export const chatService = {
 
   // ─── Messages ─────────────────────────────────────────────────────────
 
-  getMessages: async (conversationId: string, limit?: number): Promise<IMessage[]> => {
-    const messages = await chatRepository.getMessages(conversationId, limit);
-    const withNames = await attachSenderDisplayNames(messages);
-    return attachReplyToDetails(conversationId, withNames);
+  getMessages: async (
+    conversationId: string,
+    viewerUserId: string,
+    limit?: number,
+  ): Promise<IMessage[]> => {
+    const member = await chatRepository.getMember(conversationId, viewerUserId);
+    if (!member) throw new ForbiddenError('Bạn không phải thành viên của hội thoại này');
+
+    const effectiveLimit = limit ?? 20;
+    // Lấy gấp đôi rồi lọc ẩn-theo-user để giảm lỗ hổng phân trang (Dynamo Limit áp trước khi lọc).
+    const fetchLimit = Math.min(Math.max(effectiveLimit * 2, effectiveLimit), 100);
+    const raw = await chatRepository.getMessages(conversationId, fetchLimit);
+    const hidden = await messageUserHideRepository.queryHiddenMessageIdsForConversation(
+      viewerUserId,
+      conversationId,
+    );
+    const filtered = raw
+      .filter((m) => !isMessageHiddenFromViewer(m, hidden))
+      .slice(0, effectiveLimit);
+    const withNames = await attachSenderDisplayNames(filtered);
+    return attachReplyToDetails(conversationId, withNames, hidden);
   },
 
   /**
@@ -346,7 +405,15 @@ export const chatService = {
     const senderDisplayName = senders[0]?.displayName?.trim() ?? null;
 
     const withSenderName: IMessage = { ...message, senderDisplayName };
-    const [messageForClient] = await attachReplyToDetails(conversationId, [withSenderName]);
+    const hiddenForSender = await messageUserHideRepository.queryHiddenMessageIdsForConversation(
+      senderId,
+      conversationId,
+    );
+    const [messageForClient] = await attachReplyToDetails(
+      conversationId,
+      [withSenderName],
+      hiddenForSender,
+    );
 
     const lastPreviewContent =
       message.content.trim() !== ''
@@ -422,24 +489,20 @@ export const chatService = {
   },
 
   /**
-   * Soft delete tin nhắn.
+   * Ẩn tin nhắn chỉ phía user đang gọi (không sửa bản ghi message, không broadcast phòng).
    */
   deleteMessage: async (
     messageId: string,
-    senderId: string,
+    userId: string,
     conversationId: string,
     createdAt: string,
   ): Promise<void> => {
     const message = await chatRepository.getMessageById(conversationId, messageId, createdAt);
     if (!message) throw new NotFoundError('Tin nhắn');
-    if (message.senderId !== senderId) throw new ForbiddenError('Chỉ người gửi mới được xóa');
+    const member = await chatRepository.getMember(conversationId, userId);
+    if (!member) throw new ForbiddenError('Bạn không phải thành viên của hội thoại này');
 
-    const sortKey = `MSG#${message.createdAt}#${messageId}`;
-    await chatRepository.updateMessage(conversationId, messageId, sortKey, {
-      isDeleted: true,
-      isPinned: false,
-    });
-    await syncConversationLastMessageMeta(conversationId);
+    await messageUserHideRepository.putHide(userId, conversationId, messageId);
   },
 
   /**
@@ -547,7 +610,6 @@ export const chatService = {
 
   // ─── Group Management Service Extensions ──────────────────────────
 
-
   updateGroup: async (
     requesterId: string,
     conversationId: string,
@@ -561,7 +623,6 @@ export const chatService = {
     if (!member) {
       throw new ForbiddenError('Bạn không phải thành viên của nhóm này');
     }
-
 
     // Detect group name/avatar change
     const oldName = conversation.name || '';
@@ -577,7 +638,9 @@ export const chatService = {
     try {
       const users = await userRepository.findByIds([requesterId]);
       userName = users[0]?.displayName || 'Ai đó';
-    } catch { userName = 'Ai đó'; }
+    } catch {
+      userName = 'Ai đó';
+    }
 
     // If group name changed, create and broadcast a system message
     if (data.name && data.name !== oldName) {
@@ -608,18 +671,24 @@ export const chatService = {
         updatedAt: now,
       };
       await chatRepository.createMessage(systemMessage);
-      await chatRepository.updateConversationLastMessage(conversationId, {
-        messageId,
-        senderId: requesterId,
-        content: systemMessage.content,
-        type: 'system' as any,
-        createdAt: now,
-        senderDisplayName: userName,
-      }, now);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: userName,
+        },
+        now,
+      );
       try {
         const { broadcastMessageNew } = await import('./chat.broadcast.js');
         await broadcastMessageNew(systemMessage);
-      } catch {/* ignore broadcast errors */}
+      } catch {
+        /* ignore broadcast errors */
+      }
     }
 
     // If group avatar changed, create and broadcast a system message
@@ -652,18 +721,24 @@ export const chatService = {
         updatedAt: now,
       };
       await chatRepository.createMessage(systemMessage);
-      await chatRepository.updateConversationLastMessage(conversationId, {
-        messageId,
-        senderId: requesterId,
-        content: systemMessage.content,
-        type: 'system' as any,
-        createdAt: now,
-        senderDisplayName: userName,
-      }, now);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: userName,
+        },
+        now,
+      );
       try {
         const { broadcastMessageNew } = await import('./chat.broadcast.js');
         await broadcastMessageNew(systemMessage);
-      } catch {/* ignore broadcast errors */}
+      } catch {
+        /* ignore broadcast errors */
+      }
     }
 
     return updatedConversation;
@@ -728,7 +803,9 @@ export const chatService = {
     if (memberIdsToInvite.length === 0) return;
 
     await Promise.all(
-      memberIdsToInvite.map((userId) => chatRepository.createGroupRequest(conversationId, userId, 'invited')),
+      memberIdsToInvite.map((userId) =>
+        chatRepository.createGroupRequest(conversationId, userId, 'invited'),
+      ),
     );
 
     // System message: ai đã mời ai vào nhóm (hiển thị giữa khung chat) + đồng bộ realtime
@@ -742,7 +819,9 @@ export const chatService = {
       let invitedNames: string[] = [];
       try {
         const invitedProfiles = await userRepository.findByIds(memberIdsToInvite);
-        const nameById = new Map(invitedProfiles.map((u) => [u.userId, u.displayName || u.email || u.userId]));
+        const nameById = new Map(
+          invitedProfiles.map((u) => [u.userId, u.displayName || u.email || u.userId]),
+        );
         invitedNames = memberIdsToInvite.map((id) => nameById.get(id) ?? id);
       } catch {
         invitedNames = memberIdsToInvite;
@@ -750,7 +829,8 @@ export const chatService = {
 
       const previewList = invitedNames.slice(0, 3).join(', ');
       const moreCount = Math.max(0, invitedNames.length - 3);
-      const invitedLabel = moreCount > 0 ? `${previewList} và ${moreCount} người khác` : previewList;
+      const invitedLabel =
+        moreCount > 0 ? `${previewList} và ${moreCount} người khác` : previewList;
 
       const messageId = uuidv4();
       const systemMessage: IMessage = {
@@ -793,7 +873,9 @@ export const chatService = {
       try {
         const { broadcastMessageNew } = await import('./chat.broadcast.js');
         await broadcastMessageNew(systemMessage);
-      } catch {/* ignore broadcast errors */}
+      } catch {
+        /* ignore broadcast errors */
+      }
     } catch {
       // ignore system message errors, do not fail main addMembers flow
     }
@@ -877,7 +959,9 @@ export const chatService = {
       try {
         const { broadcastMessageNew } = await import('./chat.broadcast.js');
         await broadcastMessageNew(systemMessage);
-      } catch {/* ignore broadcast errors */}
+      } catch {
+        /* ignore broadcast errors */
+      }
     } catch {
       // ignore system message errors
     }
@@ -943,12 +1027,16 @@ export const chatService = {
     });
   },
 
-  approveRequest: async (conversationId: string, requesterId: string, targetUserId: string): Promise<void> => {
+  approveRequest: async (
+    conversationId: string,
+    requesterId: string,
+    targetUserId: string,
+  ): Promise<void> => {
     const member = await chatRepository.getMember(conversationId, requesterId);
     if (!member || !['owner', 'admin'].includes(member.role)) {
       throw new ForbiddenError('Chỉ Admin/Owner mới có quyền duyệt');
     }
-    
+
     const exists = await chatRepository.getMember(conversationId, targetUserId);
     if (exists) {
       await chatRepository.removeGroupRequest(conversationId, targetUserId);
@@ -964,12 +1052,14 @@ export const chatService = {
       unreadCount: 0,
       isMuted: false,
     });
-    
+
     const conv = await chatRepository.getConversationById(conversationId);
     if (conv) {
-      await chatRepository.updateConversation(conversationId, { memberCount: (conv.memberCount || 0) + 1 });
+      await chatRepository.updateConversation(conversationId, {
+        memberCount: (conv.memberCount || 0) + 1,
+      });
     }
-    
+
     await chatRepository.removeGroupRequest(conversationId, targetUserId);
 
     // System message: thành viên được duyệt vào nhóm + realtime
@@ -1024,11 +1114,19 @@ export const chatService = {
       try {
         const { broadcastMessageNew } = await import('./chat.broadcast.js');
         await broadcastMessageNew(systemMessage);
-      } catch {/* ignore */}
-    } catch {/* ignore */}
+      } catch {
+        /* ignore */
+      }
+    } catch {
+      /* ignore */
+    }
   },
 
-  rejectRequest: async (conversationId: string, requesterId: string, targetUserId: string): Promise<void> => {
+  rejectRequest: async (
+    conversationId: string,
+    requesterId: string,
+    targetUserId: string,
+  ): Promise<void> => {
     const member = await chatRepository.getMember(conversationId, requesterId);
     if (!member || !['owner', 'admin'].includes(member.role)) {
       throw new ForbiddenError('Chỉ Admin/Owner mới có quyền từ chối');
@@ -1038,7 +1136,11 @@ export const chatService = {
 
   // ─── Polls (Bình chọn) ───────────────────────────────────────────────
 
-  createPoll: async (requesterId: string, conversationId: string, data: any): Promise<IMessage | null> => {
+  createPoll: async (
+    requesterId: string,
+    conversationId: string,
+    data: any,
+  ): Promise<IMessage | null> => {
     const member = await chatRepository.getMember(conversationId, requesterId);
     if (!member) throw new ForbiddenError('Bạn không thuộc nhóm');
 
@@ -1115,9 +1217,13 @@ export const chatService = {
       try {
         const { broadcastMessageNew } = await import('./chat.broadcast.js');
         await broadcastMessageNew(systemMessage);
-      } catch {/* ignore */}
+      } catch {
+        /* ignore */
+      }
       return systemMessage;
-    } catch {/* ignore */}
+    } catch {
+      /* ignore */
+    }
 
     return null;
   },
@@ -1126,17 +1232,22 @@ export const chatService = {
     return chatRepository.getPolls(conversationId);
   },
 
-  votePoll: async (userId: string, conversationId: string, pollId: string, optionIndex: number): Promise<void> => {
+  votePoll: async (
+    userId: string,
+    conversationId: string,
+    pollId: string,
+    optionIndex: number,
+  ): Promise<void> => {
     const member = await chatRepository.getMember(conversationId, userId);
     if (!member) throw new ForbiddenError('Bạn không thuộc nhóm');
 
     const polls = await chatRepository.getPolls(conversationId);
-    const poll = polls.find(p => p.pollId === pollId);
+    const poll = polls.find((p) => p.pollId === pollId);
     if (!poll) throw new NotFoundError('Bình chọn');
 
     // Logic bỏ phiếu
     if (!poll.options[optionIndex]) throw new Error('Lựa chọn không hợp lệ');
-    
+
     const prevVotedIndexes: number[] = [];
     (poll.options ?? []).forEach((opt: any, idx: number) => {
       if (Array.isArray(opt?.voters) && opt.voters.includes(userId)) prevVotedIndexes.push(idx);
@@ -1155,7 +1266,7 @@ export const chatService = {
     if (!poll.options[optionIndex].voters.includes(userId)) {
       poll.options[optionIndex].voters.push(userId);
     }
-    
+
     await chatRepository.updatePollVotes(conversationId, pollId, poll.options);
 
     // System message: ai đã bình chọn / thay đổi bình chọn (để member khác thấy realtime trong khung chat)
@@ -1233,20 +1344,31 @@ export const chatService = {
       try {
         const { broadcastMessageNew } = await import('./chat.broadcast.js');
         await broadcastMessageNew(systemMessage);
-      } catch {/* ignore */}
-    } catch {/* ignore */}
+      } catch {
+        /* ignore */
+      }
+    } catch {
+      /* ignore */
+    }
   },
 
-  unvotePoll: async (userId: string, conversationId: string, pollId: string, optionIndex: number): Promise<void> => {
+  unvotePoll: async (
+    userId: string,
+    conversationId: string,
+    pollId: string,
+    optionIndex: number,
+  ): Promise<void> => {
     const member = await chatRepository.getMember(conversationId, userId);
     if (!member) throw new ForbiddenError('Bạn không thuộc nhóm');
 
     const polls = await chatRepository.getPolls(conversationId);
-    const poll = polls.find(p => p.pollId === pollId);
+    const poll = polls.find((p) => p.pollId === pollId);
     if (!poll) throw new NotFoundError('Bình chọn');
 
     if (poll.options[optionIndex] && poll.options[optionIndex].voters) {
-      poll.options[optionIndex].voters = poll.options[optionIndex].voters.filter((id: string) => id !== userId);
+      poll.options[optionIndex].voters = poll.options[optionIndex].voters.filter(
+        (id: string) => id !== userId,
+      );
       await chatRepository.updatePollVotes(conversationId, pollId, poll.options);
     }
 
@@ -1315,8 +1437,12 @@ export const chatService = {
       try {
         const { broadcastMessageNew } = await import('./chat.broadcast.js');
         await broadcastMessageNew(systemMessage);
-      } catch {/* ignore */}
-    } catch {/* ignore */}
+      } catch {
+        /* ignore */
+      }
+    } catch {
+      /* ignore */
+    }
   },
 
   addPollOption: async (
@@ -1399,8 +1525,12 @@ export const chatService = {
       try {
         const { broadcastMessageNew } = await import('./chat.broadcast.js');
         await broadcastMessageNew(systemMessage);
-      } catch {/* ignore */}
-    } catch {/* ignore */}
+      } catch {
+        /* ignore */
+      }
+    } catch {
+      /* ignore */
+    }
   },
 
   closePoll: async (requesterId: string, conversationId: string, pollId: string): Promise<void> => {
@@ -1472,16 +1602,25 @@ export const chatService = {
       try {
         const { broadcastMessageNew } = await import('./chat.broadcast.js');
         await broadcastMessageNew(systemMessage);
-      } catch {/* ignore */}
-    } catch {/* ignore */}
+      } catch {
+        /* ignore */
+      }
+    } catch {
+      /* ignore */
+    }
   },
 
-  deletePoll: async (requesterId: string, conversationId: string, pollId: string): Promise<void> => {
+  deletePoll: async (
+    requesterId: string,
+    conversationId: string,
+    pollId: string,
+  ): Promise<void> => {
     const polls = await chatRepository.getPolls(conversationId);
-    const poll = polls.find(p => p.pollId === pollId);
+    const poll = polls.find((p) => p.pollId === pollId);
     if (!poll) throw new NotFoundError('Bình chọn');
-    if (poll.creatorId !== requesterId) throw new ForbiddenError('Chỉ người tạo mới được xóa bình chọn');
-    
+    if (poll.creatorId !== requesterId)
+      throw new ForbiddenError('Chỉ người tạo mới được xóa bình chọn');
+
     await chatRepository.deletePoll(conversationId, pollId);
   },
 
@@ -1601,8 +1740,12 @@ export const chatService = {
       try {
         const { broadcastMessageNew } = await import('./chat.broadcast.js');
         await broadcastMessageNew(systemMessage);
-      } catch {/* ignore */}
-    } catch {/* ignore */}
+      } catch {
+        /* ignore */
+      }
+    } catch {
+      /* ignore */
+    }
 
     return task;
   },
@@ -1611,7 +1754,11 @@ export const chatService = {
     return chatRepository.getTasks(conversationId);
   },
 
-  updateTaskStatus: async (conversationId: string, taskId: string, status: string): Promise<void> => {
+  updateTaskStatus: async (
+    conversationId: string,
+    taskId: string,
+    status: string,
+  ): Promise<void> => {
     await chatRepository.updateTask(conversationId, taskId, { status });
   },
 
@@ -1630,7 +1777,9 @@ export const chatService = {
     }
 
     // Only assignees can join (assignToAll -> assignees already includes everyone)
-    const assignees = Array.isArray((task as any).assignees) ? ((task as any).assignees as string[]) : [];
+    const assignees = Array.isArray((task as any).assignees)
+      ? ((task as any).assignees as string[])
+      : [];
     if (!assignees.includes(requesterId)) {
       throw new ForbiddenError('Bạn không được giao công việc này');
     }
@@ -1703,13 +1852,21 @@ export const chatService = {
       try {
         const { broadcastMessageNew } = await import('./chat.broadcast.js');
         await broadcastMessageNew(systemMessage);
-      } catch {/* ignore */}
-    } catch {/* ignore */}
+      } catch {
+        /* ignore */
+      }
+    } catch {
+      /* ignore */
+    }
 
     return { ...task, participants: next };
   },
 
-  deleteTask: async (requesterId: string, conversationId: string, taskId: string): Promise<void> => {
+  deleteTask: async (
+    requesterId: string,
+    conversationId: string,
+    taskId: string,
+  ): Promise<void> => {
     // Logic tương tự deletePoll
     await chatRepository.deleteTask(conversationId, taskId);
   },
@@ -1719,18 +1876,18 @@ export const chatService = {
   generateRecap: async (conversationId: string): Promise<any> => {
     // 1. Lấy tin nhắn gần đây
     const messages = await chatRepository.getMessages(conversationId, 50);
-    const text = messages.map(m => `${m.senderId}: ${m.content}`).join('\n');
-    
+    const text = messages.map((m) => `${m.senderId}: ${m.content}`).join('\n');
+
     // 2. Gọi AI (Mock)
     const summaryText = `[AI Tóm tắt]: Cuộc hội thoại xoay quanh việc ${text.length > 0 ? 'trao đổi thông tin dự án' : 'chưa có nội dung mới'}.`;
-    
+
     const summary = {
       summaryId: uuidv4(),
       conversationId,
       content: summaryText,
       createdAt: new Date().toISOString(),
     };
-    
+
     await chatRepository.saveAISummary(conversationId, summary);
     return summary;
   },

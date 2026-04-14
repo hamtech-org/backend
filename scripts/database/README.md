@@ -35,6 +35,7 @@ Tat ca file trong `data/`:
 - `Conversations.json`
 - `Messages.json`
 - `MessageStatus.json`
+- `MessageUserHide.json`
 - `Contacts.json`
 - `Groups.json`
 - `Posts.json`

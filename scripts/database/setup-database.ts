@@ -130,6 +130,20 @@ const tableDefinitions: CreateTableCommandInput[] = [
     BillingMode: 'PAY_PER_REQUEST',
   },
 
+  // 5b. MessageUserHide (ẩn tin theo từng user)
+  {
+    TableName: tableName('MessageUserHide'),
+    KeySchema: [
+      { AttributeName: 'PK', KeyType: HASH },
+      { AttributeName: 'SK', KeyType: RANGE },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: 'PK', AttributeType: S },
+      { AttributeName: 'SK', AttributeType: S },
+    ],
+    BillingMode: 'PAY_PER_REQUEST',
+  },
+
   // 6. Contacts
   {
     TableName: tableName('Contacts'),
