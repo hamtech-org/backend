@@ -25,9 +25,11 @@ export const contactRepository = {
       RawItems: result.Items
     });
     
-    // Filter only confirmed friendships (status='friend')
+    // Filter only confirmed friendships.
+    // Legacy data có thể dùng `status: "friend"`; code/types mới dùng `accepted`.
+    // Giữ check cũ và mở rộng để không làm rỗng list bạn bè.
     const friends = (result.Items as any[] ?? [])
-      .filter(item => item.status === 'friend')
+      .filter((item) => item?.status === 'friend' || item?.status === 'accepted')
       .map(item => ({
         userId: item.PK.substring('USER#'.length),
         friendId: item.SK.substring('FRIEND#'.length),
@@ -36,7 +38,7 @@ export const contactRepository = {
         createdAt: item.createdAt,
       })) as IContact[];
     
-    console.log('✅ Filtered friends (status=friend):', friends);
+    console.log('✅ Filtered friends (status=friend|accepted):', friends);
     
     return friends;
   },
