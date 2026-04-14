@@ -44,7 +44,11 @@ export const chatController = {
   getMessages: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
-      const messages = await chatService.getMessages(req.params.conversationId, limit);
+      const messages = await chatService.getMessages(
+        req.params.conversationId,
+        req.user!.userId,
+        limit,
+      );
       sendSuccess(res, messages);
     } catch (error) {
       console.error('[getMessages]', error);
@@ -107,14 +111,9 @@ export const chatController = {
         createdAt,
       );
       try {
-        getIO().to(`conv:${conversationId}`).emit('message:deleted', {
+        getIO().to(`user:${req.user!.userId}`).emit('message:hidden_for_me', {
           messageId: req.params.messageId,
           conversationId,
-        });
-        getIO().to(`conv:${conversationId}`).emit('message:pin_updated', {
-          messageId: req.params.messageId,
-          conversationId,
-          isPinned: false,
         });
       } catch { /* socket chưa khởi tạo */ }
       sendSuccess(res, null, 'Xóa thành công');
