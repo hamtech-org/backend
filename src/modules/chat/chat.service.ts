@@ -17,6 +17,7 @@ import { kafkaProducer } from '@/shared/kafka/producer.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { mediaService } from '@/modules/media/media.service.js';
+import { contactRepository } from '@/modules/contact/contact.repository.js';
 import type { MemberRole } from '@/shared/types/chat.types.js';
 
 async function lastMessageSnapshotFromNewest(messages: IMessage[]): Promise<ILastMessage | null> {
@@ -714,27 +715,23 @@ export const chatService = {
     }
 
     const now = new Date().toISOString();
+
+    // Nghiệp vụ mới:
+    // - Người được "thêm" sẽ nằm ở Chờ duyệt (invited) và CHƯA là thành viên.
+    // - Chỉ khi được duyệt (approveRequest) mới add vào members + tăng memberCount.
+    const memberIdsToInvite: string[] = [];
+    for (const userId of data.memberIds) {
+      const alreadyMember = await chatRepository.getMember(conversationId, userId);
+      if (alreadyMember) continue;
+      memberIdsToInvite.push(userId);
+    }
+    if (memberIdsToInvite.length === 0) return;
+
     await Promise.all(
-      data.memberIds.map((userId) =>
-        chatRepository.addConversationMember({
-          conversationId,
-          userId,
-          role: 'member',
-          joinedAt: now,
-          unreadCount: 0,
-          isMuted: false,
-        }),
-      ),
+      memberIdsToInvite.map((userId) => chatRepository.createGroupRequest(conversationId, userId, 'invited')),
     );
 
-    const conv = await chatRepository.getConversationById(conversationId);
-    if (conv) {
-      await chatRepository.updateConversation(conversationId, {
-        memberCount: (conv.memberCount || 0) + data.memberIds.length,
-      });
-    }
-
-    // System message: ai đã thêm ai vào nhóm (hiển thị giữa khung chat) + đồng bộ realtime
+    // System message: ai đã mời ai vào nhóm (hiển thị giữa khung chat) + đồng bộ realtime
     try {
       let requesterName = 'Ai đó';
       try {
@@ -742,18 +739,18 @@ export const chatService = {
         requesterName = users[0]?.displayName || requesterName;
       } catch {}
 
-      let addedNames: string[] = [];
+      let invitedNames: string[] = [];
       try {
-        const addedProfiles = await userRepository.findByIds(data.memberIds);
-        const nameById = new Map(addedProfiles.map((u) => [u.userId, u.displayName || u.email || u.userId]));
-        addedNames = data.memberIds.map((id) => nameById.get(id) ?? id);
+        const invitedProfiles = await userRepository.findByIds(memberIdsToInvite);
+        const nameById = new Map(invitedProfiles.map((u) => [u.userId, u.displayName || u.email || u.userId]));
+        invitedNames = memberIdsToInvite.map((id) => nameById.get(id) ?? id);
       } catch {
-        addedNames = data.memberIds;
+        invitedNames = memberIdsToInvite;
       }
 
-      const previewList = addedNames.slice(0, 3).join(', ');
-      const moreCount = Math.max(0, addedNames.length - 3);
-      const addedLabel = moreCount > 0 ? `${previewList} và ${moreCount} người khác` : previewList;
+      const previewList = invitedNames.slice(0, 3).join(', ');
+      const moreCount = Math.max(0, invitedNames.length - 3);
+      const invitedLabel = moreCount > 0 ? `${previewList} và ${moreCount} người khác` : previewList;
 
       const messageId = uuidv4();
       const systemMessage: IMessage = {
@@ -762,7 +759,7 @@ export const chatService = {
         senderId: requesterId,
         senderDisplayName: requesterName,
         type: 'system' as any,
-        content: `${requesterName} đã thêm ${addedLabel} vào nhóm`,
+        content: `${requesterName} đã mời ${invitedLabel} vào nhóm`,
         encryptedContent: null,
         mediaUrl: null,
         mediaType: null,
@@ -824,6 +821,66 @@ export const chatService = {
         memberCount: Math.max(0, (conv.memberCount || 0) - 1),
       });
     }
+
+    // System message: ai đã mời ai ra khỏi nhóm + đồng bộ realtime
+    try {
+      const now = new Date().toISOString();
+      let requesterName = 'Ai đó';
+      let targetName = targetUserId;
+      try {
+        const users = await userRepository.findByIds([requesterId, targetUserId]);
+        const byId = new Map(users.map((u) => [u.userId, u]));
+        requesterName = byId.get(requesterId)?.displayName ?? requesterName;
+        targetName = byId.get(targetUserId)?.displayName ?? targetName;
+      } catch {
+        // ignore
+      }
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: requesterName,
+        type: 'system' as any,
+        content: `${requesterName} đã mời ${targetName} ra khỏi nhóm`,
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: requesterName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore broadcast errors */}
+    } catch {
+      // ignore system message errors
+    }
   },
 
   changeMemberRole: async (
@@ -853,7 +910,37 @@ export const chatService = {
     if (!member || !['owner', 'admin'].includes(member.role)) {
       throw new ForbiddenError('Chỉ Admin/Owner mới xem được danh sách chờ');
     }
-    return chatRepository.getGroupRequests(conversationId);
+    const requests = await chatRepository.getGroupRequests(conversationId);
+    if (!requests.length) return [];
+
+    // Enrich: trả về name/avatar để FE hiển thị đúng tên dù chưa kết bạn.
+    const userIds = requests.map((r) => r.userId).filter(Boolean);
+    let users: any[] = [];
+    try {
+      users = await userRepository.findByIds(userIds);
+    } catch {
+      users = [];
+    }
+    const byId = new Map(users.map((u) => [u.userId, u]));
+
+    // Check friend status (đã kết bạn hay chưa) để FE show nút "Kết bạn"
+    let friendSet = new Set<string>();
+    try {
+      const friends = await contactRepository.getFriends(requesterId);
+      friendSet = new Set(friends.map((f) => f.friendId));
+    } catch {
+      friendSet = new Set();
+    }
+
+    return requests.map((r) => {
+      const u = byId.get(r.userId);
+      return {
+        ...r,
+        name: u?.displayName ?? u?.email ?? r.userId,
+        avatar: u?.avatar ?? null,
+        isFriend: friendSet.has(r.userId),
+      };
+    });
   },
 
   approveRequest: async (conversationId: string, requesterId: string, targetUserId: string): Promise<void> => {
@@ -862,11 +949,18 @@ export const chatService = {
       throw new ForbiddenError('Chỉ Admin/Owner mới có quyền duyệt');
     }
     
+    const exists = await chatRepository.getMember(conversationId, targetUserId);
+    if (exists) {
+      await chatRepository.removeGroupRequest(conversationId, targetUserId);
+      return;
+    }
+
+    const now = new Date().toISOString();
     await chatRepository.addConversationMember({
       conversationId,
       userId: targetUserId,
       role: 'member',
-      joinedAt: new Date().toISOString(),
+      joinedAt: now,
       unreadCount: 0,
       isMuted: false,
     });
@@ -877,6 +971,61 @@ export const chatService = {
     }
     
     await chatRepository.removeGroupRequest(conversationId, targetUserId);
+
+    // System message: thành viên được duyệt vào nhóm + realtime
+    try {
+      let approverName = 'Ai đó';
+      let targetName = targetUserId;
+      try {
+        const users = await userRepository.findByIds([requesterId, targetUserId]);
+        const byId = new Map(users.map((u) => [u.userId, u]));
+        approverName = byId.get(requesterId)?.displayName ?? approverName;
+        targetName = byId.get(targetUserId)?.displayName ?? targetName;
+      } catch {}
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: approverName,
+        type: 'system' as any,
+        content: `${targetName} đã tham gia nhóm`,
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: approverName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore */}
+    } catch {/* ignore */}
   },
 
   rejectRequest: async (conversationId: string, requesterId: string, targetUserId: string): Promise<void> => {
