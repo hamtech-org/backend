@@ -273,12 +273,13 @@ export const chatController = {
     try {
       await chatService.addMembers(req.user!.userId, req.params.groupId, req.body);
       try {
-        getIO().to(`conv:${req.params.groupId}`).emit('group:members_added', {
+        // Nghiệp vụ: "mời vào nhóm" -> tạo request chờ duyệt
+        getIO().to(`conv:${req.params.groupId}`).emit('group:join_request_new', {
           groupId: req.params.groupId,
           memberIds: req.body.memberIds,
         });
       } catch { /* ignore */ }
-      sendSuccess(res, null, 'Thêm thành viên thành công');
+      sendSuccess(res, null, 'Đã gửi lời mời vào nhóm');
     } catch (error) {
       console.error('[addMembers]', error);
       next(error);
