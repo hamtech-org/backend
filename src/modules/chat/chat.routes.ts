@@ -34,6 +34,8 @@ router.delete('/messages/:messageId/pin', authenticate, chatController.unpinMess
 router.post('/messages/:messageId/react', authenticate, validate(reactMessageSchema), chatController.reactToMessage);
 
 // ─── Group Management ────────────────────────────────────────────────────────
+// Lấy danh sách thành viên nhóm
+router.get('/groups/:groupId/members', authenticate, chatController.getGroupMembers);
 // Cập nhật thông tin nhóm (tên / avatar nhóm)
 router.put('/groups/:groupId', authenticate, validate(updateGroupSchema), chatController.updateGroup);
 // Xóa nhóm (Giải tán nhóm)
