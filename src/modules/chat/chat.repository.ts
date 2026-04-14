@@ -369,7 +369,11 @@ export const chatRepository = {
 
   // ─── Group Requests (Duyệt thành viên) ───────────────────────────────
 
-  createGroupRequest: async (conversationId: string, userId: string): Promise<void> => {
+  createGroupRequest: async (
+    conversationId: string,
+    userId: string,
+    status: 'pending' | 'invited' = 'pending',
+  ): Promise<void> => {
     await dynamoClient.send(
       new PutCommand({
         TableName: CONVERSATIONS_TABLE,
@@ -378,7 +382,7 @@ export const chatRepository = {
           SK: `REQUEST#${userId}`,
           conversationId,
           userId,
-          status: 'pending',
+          status,
           requestedAt: new Date().toISOString(),
         },
       }),
