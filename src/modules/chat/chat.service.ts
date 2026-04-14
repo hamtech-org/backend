@@ -1096,21 +1096,124 @@ export const chatService = {
 
   // ─── Tasks (Công việc) ───────────────────────────────────────────────
 
-  createTask: async (requesterId: string, conversationId: string, data: any): Promise<void> => {
+  createTask: async (requesterId: string, conversationId: string, data: any): Promise<any> => {
     const taskId = uuidv4();
+    const now = new Date().toISOString();
+
+    // assign to all members if requested
+    let assignees: string[] = Array.isArray(data.assignees) ? data.assignees : [];
+    if (data.assignToAll === true) {
+      try {
+        const members = await chatRepository.getConversationMembers(conversationId);
+        assignees = members.map((m) => m.userId);
+      } catch {
+        assignees = [];
+      }
+    }
+
     const task = {
       taskId,
       conversationId,
       creatorId: requesterId,
       title: data.title,
       description: data.description,
-      assignees: data.assignees || [],
+      assignees,
+      participants: [],
       status: 'todo', // todo, in_progress, done
       dueDate: data.dueDate,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     };
     await chatRepository.createTask(task);
+
+    // System message + realtime: thông báo giao việc trong khung chat
+    try {
+      let creatorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([requesterId]);
+        creatorName = users[0]?.displayName || creatorName;
+      } catch {}
+
+      let assigneeLabel = 'cả nhóm';
+      if (data.assignToAll !== true) {
+        try {
+          const assigneeProfiles = await userRepository.findByIds(assignees);
+          const nameById = new Map(
+            assigneeProfiles.map((u) => [u.userId, u.displayName || u.email || u.userId]),
+          );
+          const names = assignees.map((id) => nameById.get(id) ?? id);
+          const preview = names.slice(0, 3).join(', ');
+          const more = Math.max(0, names.length - 3);
+          assigneeLabel = more > 0 ? `${preview} và ${more} người khác` : preview || 'cả nhóm';
+        } catch {
+          assigneeLabel = assignees.length > 0 ? `${assignees.length} người` : 'cả nhóm';
+        }
+      }
+
+      const messageId = uuidv4();
+      const note = String(task.description ?? '').trim();
+      const payload = {
+        kind: 'task_assigned',
+        task: {
+          taskId: String(task.taskId),
+          title: String(task.title ?? ''),
+          dueDate: task.dueDate ?? null,
+          note: note || null,
+          assigneeLabel: assigneeLabel || 'cả nhóm',
+          assignToAll: data.assignToAll === true,
+          assigneesCount: Array.isArray(assignees) ? assignees.length : 0,
+        },
+        actor: {
+          userId: requesterId,
+          name: creatorName,
+        },
+        createdAt: now,
+      };
+
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: creatorName,
+        type: 'system' as any,
+        content: JSON.stringify(payload),
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: creatorName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore */}
+    } catch {/* ignore */}
+
+    return task;
   },
 
   getTasks: async (conversationId: string): Promise<any[]> => {
@@ -1119,6 +1222,100 @@ export const chatService = {
 
   updateTaskStatus: async (conversationId: string, taskId: string, status: string): Promise<void> => {
     await chatRepository.updateTask(conversationId, taskId, { status });
+  },
+
+  joinTask: async (requesterId: string, conversationId: string, taskId: string): Promise<any> => {
+    // Ensure requester is a group member
+    const members = await chatRepository.getConversationMembers(conversationId);
+    const isMember = members.some((m) => m.userId === requesterId);
+    if (!isMember) {
+      throw new ForbiddenError('Bạn không thuộc nhóm');
+    }
+
+    const tasks = await chatRepository.getTasks(conversationId);
+    const task = tasks.find((t: any) => String(t?.taskId) === String(taskId));
+    if (!task) {
+      throw new NotFoundError('Công việc');
+    }
+
+    // Only assignees can join (assignToAll -> assignees already includes everyone)
+    const assignees = Array.isArray((task as any).assignees) ? ((task as any).assignees as string[]) : [];
+    if (!assignees.includes(requesterId)) {
+      throw new ForbiddenError('Bạn không được giao công việc này');
+    }
+
+    const prev = Array.isArray((task as any).participants) ? (task as any).participants : [];
+    const next = prev.includes(requesterId) ? prev : [...prev, requesterId];
+    await chatRepository.updateTask(conversationId, taskId, { participants: next });
+
+    // System message: ai đã tham gia công việc (hiển thị dưới khung chat)
+    try {
+      const now = new Date().toISOString();
+      let actorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([requesterId]);
+        actorName = users[0]?.displayName || actorName;
+      } catch {}
+
+      const payload = {
+        kind: 'task_joined',
+        task: {
+          taskId: String((task as any).taskId ?? taskId),
+          title: String((task as any).title ?? ''),
+        },
+        actor: {
+          userId: requesterId,
+          name: actorName,
+        },
+        participantsCount: next.length,
+        createdAt: now,
+      };
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: actorName,
+        type: 'system' as any,
+        content: JSON.stringify(payload),
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: actorName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore */}
+    } catch {/* ignore */}
+
+    return { ...task, participants: next };
   },
 
   deleteTask: async (requesterId: string, conversationId: string, taskId: string): Promise<void> => {
