@@ -53,6 +53,7 @@ export interface IMessage extends TimestampFields {
   mediaUrl: string | null;
   mediaType: string | null;
   mediaSize: number | null;
+  mediaOriginalName: string | null;
   thumbnailUrl: string | null;
   replyTo: string | null;
   replyToDetails?: IReplyToDetails | null;
@@ -89,6 +90,7 @@ export interface ISendMessageDto {
   type: MessageType;
   content: string;
   mediaUrl?: string;
+  mediaId?: string;
   replyTo?: string;
 }
 

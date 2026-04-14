@@ -45,6 +45,8 @@ const envSchema = z.object({
   S3_REGION: z.string().default('us-east-1'),
   CLOUDFRONT_DOMAIN: z.string().default(''),
 
+  API_PUBLIC_ORIGIN: z.string().default('http://localhost:3000'),
+
   SES_FROM_EMAIL: z.string().default('noreply@zalogram.vn'),
   SES_REGION: z.string().default('us-east-1'),
   SNS_REGION: z.string().default('us-east-1'),

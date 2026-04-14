@@ -1,10 +1,9 @@
 import { z } from 'zod';
 
-export const uploadSchema = z.object({
+export const uploadBodySchema = z.object({
   mediaType: z.enum(['image', 'video', 'audio', 'file']),
 });
 
-export const uploadMultiSchema = z.object({
-  mediaType: z.enum(['image', 'video', 'audio', 'file']),
-  count: z.number().int().min(1).max(10).optional(),
+export const uploadMultiBodySchema = z.object({
+  mediaType: z.enum(['image', 'video', 'audio', 'file']).optional(),
 });

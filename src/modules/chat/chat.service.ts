@@ -16,6 +16,7 @@ import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
 import { kafkaProducer } from '@/shared/kafka/producer.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { userRepository } from '@/modules/user/user.repository.js';
+import { mediaService } from '@/modules/media/media.service.js';
 import type { MemberRole } from '@/shared/types/chat.types.js';
 
 async function lastMessageSnapshotFromNewest(messages: IMessage[]): Promise<ILastMessage | null> {
@@ -281,6 +282,21 @@ export const chatService = {
     const now = new Date().toISOString();
     const messageId = uuidv4();
 
+    let mediaUrl: string | null = data.mediaUrl ?? null;
+    let mediaType: string | null = null;
+    let mediaSize: number | null = null;
+    let mediaOriginalName: string | null = null;
+    let thumbnailUrl: string | null = null;
+
+    if (data.mediaId) {
+      const resolved = await mediaService.getMediaForMessageAttach(data.mediaId, senderId);
+      mediaUrl = resolved.mediaUrl;
+      mediaType = resolved.mediaType;
+      mediaSize = resolved.mediaSize;
+      mediaOriginalName = resolved.originalName;
+      thumbnailUrl = resolved.thumbnailUrl;
+    }
+
     const message: IMessage = {
       messageId,
       conversationId,
@@ -288,10 +304,11 @@ export const chatService = {
       type: data.type,
       content: data.content,
       encryptedContent: null,
-      mediaUrl: data.mediaUrl ?? null,
-      mediaType: null,
-      mediaSize: null,
-      thumbnailUrl: null,
+      mediaUrl,
+      mediaType,
+      mediaSize,
+      mediaOriginalName,
+      thumbnailUrl,
       replyTo: data.replyTo ?? null,
       forwardFrom: null,
       isPinned: false,
@@ -311,13 +328,24 @@ export const chatService = {
     const withSenderName: IMessage = { ...message, senderDisplayName };
     const [messageForClient] = await attachReplyToDetails(conversationId, [withSenderName]);
 
+    const lastPreviewContent =
+      message.content.trim() !== ''
+        ? message.content
+        : message.type === 'image'
+          ? '[Ảnh]'
+          : message.type === 'video'
+            ? '[Video]'
+            : message.type === 'file'
+              ? '[File]'
+              : message.content;
+
     // Cập nhật lastMessage trên conversation
     await chatRepository.updateConversationLastMessage(
       conversationId,
       {
         messageId,
         senderId,
-        content: data.content,
+        content: lastPreviewContent,
         type: data.type,
         createdAt: now,
         senderDisplayName,
@@ -341,7 +369,7 @@ export const chatService = {
           conversationId,
           senderId,
           messageId,
-          messagePreview: data.content.slice(0, 100),
+          messagePreview: lastPreviewContent.slice(0, 100),
           recipientIds: otherMembers.map((m) => m.userId),
         },
       }),
