@@ -437,9 +437,9 @@ export const chatController = {
 
   createTask: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      await chatService.createTask(req.user!.userId, req.params.groupId, req.body);
-      getIO().to(`conv:${req.params.groupId}`).emit('group:task_new', { groupId: req.params.groupId });
-      sendCreated(res, null, 'Đã tạo công việc');
+      const task = await chatService.createTask(req.user!.userId, req.params.groupId, req.body);
+      getIO().to(`conv:${req.params.groupId}`).emit('group:task_new', { groupId: req.params.groupId, taskId: task.taskId });
+      sendCreated(res, task, 'Đã tạo công việc');
     } catch (error) {
       console.error('[createTask]', error);
       next(error);
@@ -463,6 +463,17 @@ export const chatController = {
       sendSuccess(res, null, 'Cập nhật trạng thái thành công');
     } catch (error) {
       console.error('[updateTaskStatus]', error);
+      next(error);
+    }
+  },
+
+  joinTask: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const task = await chatService.joinTask(req.user!.userId, req.params.groupId, req.params.taskId);
+      getIO().to(`conv:${req.params.groupId}`).emit('group:task_updated', { taskId: req.params.taskId });
+      sendSuccess(res, task, 'Đã tham gia công việc');
+    } catch (error) {
+      console.error('[joinTask]', error);
       next(error);
     }
   },
