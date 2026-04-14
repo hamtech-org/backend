@@ -76,6 +76,8 @@ router.get('/groups/:groupId/tasks', authenticate, chatController.getTasks);
 router.post('/groups/:groupId/tasks', authenticate, chatController.createTask);
 // Cập nhật trạng thái công việc
 router.put('/groups/:groupId/tasks/:taskId', authenticate, chatController.updateTaskStatus);
+// Tham gia công việc
+router.post('/groups/:groupId/tasks/:taskId/join', authenticate, chatController.joinTask);
 
 // ─── AI Recap ───────────────────────────────────────────────────────
 // Tạo AI Recap
