@@ -5,6 +5,13 @@ import { getIO } from '@/socket/index.js';
 import { broadcastMessageNew } from './chat.broadcast.js';
 
 export const chatController = {
+    // Lấy danh sách thành viên nhóm
+    getGroupMembers: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+      try {
+        const members = await chatService.getGroupMembers(req.params.groupId);
+        sendSuccess(res, members);
+      } catch (error) { next(error); }
+    },
   // ─── Conversations / Groups ────────────────────────────────────────────────────
 
   getConversations: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -28,7 +35,10 @@ export const chatController = {
         req.user!.userId,
       );
       sendSuccess(res, conversation);
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[getConversation]', error);
+      next(error);
+    }
   },
 
   getMessages: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -36,7 +46,10 @@ export const chatController = {
       const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : undefined;
       const messages = await chatService.getMessages(req.params.conversationId, limit);
       sendSuccess(res, messages);
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[getMessages]', error);
+      next(error);
+    }
   },
 
   sendMessage: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -50,7 +63,10 @@ export const chatController = {
         await broadcastMessageNew(message);
       } catch { /* socket chưa khởi tạo hoặc lỗi broadcast */ }
       sendCreated(res, message);
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[sendMessage]', error);
+      next(error);
+    }
   },
 
   editMessage: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -75,7 +91,10 @@ export const chatController = {
         });
       } catch { /* socket chưa khởi tạo */ }
       sendSuccess(res, null, 'Chỉnh sửa thành công');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[editMessage]', error);
+      next(error);
+    }
   },
 
   deleteMessage: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -99,7 +118,10 @@ export const chatController = {
         });
       } catch { /* socket chưa khởi tạo */ }
       sendSuccess(res, null, 'Xóa thành công');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[deleteMessage]', error);
+      next(error);
+    }
   },
 
   recallMessage: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -123,7 +145,10 @@ export const chatController = {
         });
       } catch { /* socket chưa khởi tạo */ }
       sendSuccess(res, null, 'Thu hồi thành công');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[recallMessage]', error);
+      next(error);
+    }
   },
 
   markAsRead: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -131,7 +156,10 @@ export const chatController = {
       const { messageId } = req.body as { messageId: string };
       await chatService.markAsRead(req.params.conversationId, req.user!.userId, messageId);
       sendSuccess(res, null, 'Đã đánh dấu đã đọc');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[markAsRead]', error);
+      next(error);
+    }
   },
 
   pinMessage: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -146,7 +174,10 @@ export const chatController = {
         });
       } catch { /* socket chưa khởi tạo */ }
       sendSuccess(res, null, 'Đã ghim tin nhắn');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[pinMessage]', error);
+      next(error);
+    }
   },
 
   unpinMessage: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -161,7 +192,10 @@ export const chatController = {
         });
       } catch { /* socket chưa khởi tạo */ }
       sendSuccess(res, null, 'Đã bỏ ghim tin nhắn');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[unpinMessage]', error);
+      next(error);
+    }
   },
 
   reactToMessage: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -176,7 +210,10 @@ export const chatController = {
         });
       } catch { /* socket chưa khởi tạo */ }
       sendSuccess(res, reactions, 'Đã thả cảm xúc');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[reactToMessage]', error);
+      next(error);
+    }
   },
 
   // ─── Group Management Controller Extensions ──────────────────────────
@@ -189,10 +226,18 @@ export const chatController = {
         req.body,
       );
       try {
-        getIO().to(`conv:${req.params.groupId}`).emit('group:updated', group);
+        const io = getIO();
+        io.to(`conv:${req.params.groupId}`).emit('group:updated', group);
+        const members = await chatService.getGroupMembers(req.params.groupId);
+        for (const m of members) {
+          io.to(`user:${m.userId}`).emit('group:updated', group);
+        }
       } catch { /* ignore */ }
       sendSuccess(res, group, 'Cập nhật nhóm thành công');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[updateGroup]', error);
+      next(error);
+    }
   },
 
   deleteGroup: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -202,7 +247,10 @@ export const chatController = {
         getIO().to(`conv:${req.params.groupId}`).emit('group:deleted', { groupId: req.params.groupId });
       } catch { /* ignore */ }
       sendSuccess(res, null, 'Giải tán nhóm thành công');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[deleteGroup]', error);
+      next(error);
+    }
   },
 
   leaveGroup: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -215,7 +263,10 @@ export const chatController = {
         });
       } catch { /* ignore */ }
       sendSuccess(res, null, 'Rời nhóm thành công');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[leaveGroup]', error);
+      next(error);
+    }
   },
 
   addMembers: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -228,7 +279,10 @@ export const chatController = {
         });
       } catch { /* ignore */ }
       sendSuccess(res, null, 'Thêm thành viên thành công');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[addMembers]', error);
+      next(error);
+    }
   },
 
   removeMember: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -245,7 +299,10 @@ export const chatController = {
         });
       } catch { /* ignore */ }
       sendSuccess(res, null, 'Xóa thành viên thành công');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[removeMember]', error);
+      next(error);
+    }
   },
 
   changeMemberRole: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -264,7 +321,10 @@ export const chatController = {
         });
       } catch { /* ignore */ }
       sendSuccess(res, null, 'Thay đổi quyền thành công');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[changeMemberRole]', error);
+      next(error);
+    }
   },
 
   // ─── Member Requests (Duyệt thành viên) ──────────────────────────────
@@ -277,14 +337,20 @@ export const chatController = {
         getIO().to(`conv:${req.params.groupId}`).emit('group:join_request_new', { groupId: req.params.groupId });
       } catch { /* ignore */ }
       sendSuccess(res, null, 'Đã gửi yêu cầu tham gia');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[joinRequest]', error);
+      next(error);
+    }
   },
 
   getGroupRequests: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const requests = await chatService.getGroupRequests(req.params.groupId, req.user!.userId);
       sendSuccess(res, requests);
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[getGroupRequests]', error);
+      next(error);
+    }
   },
 
   approveRequest: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -299,7 +365,10 @@ export const chatController = {
         getIO().to(`user:${req.params.userId}`).emit('group:request_approved', { groupId: req.params.groupId });
       } catch { /* ignore */ }
       sendSuccess(res, null, 'Đã duyệt thành viên');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[approveRequest]', error);
+      next(error);
+    }
   },
 
   rejectRequest: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -310,7 +379,10 @@ export const chatController = {
         getIO().to(`conv:${req.params.groupId}`).emit('group:join_request_updated', { groupId: req.params.groupId });
       } catch { /* ignore */ }
       sendSuccess(res, null, 'Đã từ chối yêu cầu');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[rejectRequest]', error);
+      next(error);
+    }
   },
 
   // ─── Polls (Bình chọn) ───────────────────────────────────────────────
@@ -320,14 +392,20 @@ export const chatController = {
       await chatService.createPoll(req.user!.userId, req.params.groupId, req.body);
       getIO().to(`conv:${req.params.groupId}`).emit('group:poll_new', { groupId: req.params.groupId });
       sendCreated(res, null, 'Tạo bình chọn thành công');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[createPoll]', error);
+      next(error);
+    }
   },
 
   getPolls: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const polls = await chatService.getPolls(req.params.groupId);
       sendSuccess(res, polls);
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[getPolls]', error);
+      next(error);
+    }
   },
 
   votePoll: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -336,7 +414,10 @@ export const chatController = {
       await chatService.votePoll(req.user!.userId, req.params.groupId, req.params.pollId, optionIndex);
       getIO().to(`conv:${req.params.groupId}`).emit('group:poll_updated', { pollId: req.params.pollId });
       sendSuccess(res, null, 'Đã bình chọn');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[votePoll]', error);
+      next(error);
+    }
   },
 
   unvotePoll: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -345,7 +426,10 @@ export const chatController = {
       await chatService.unvotePoll(req.user!.userId, req.params.groupId, req.params.pollId, optionIndex);
       getIO().to(`conv:${req.params.groupId}`).emit('group:poll_updated', { pollId: req.params.pollId });
       sendSuccess(res, null, 'Đã rút phiếu');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[unvotePoll]', error);
+      next(error);
+    }
   },
 
   // ─── Tasks (Công việc) ───────────────────────────────────────────────
@@ -355,14 +439,20 @@ export const chatController = {
       await chatService.createTask(req.user!.userId, req.params.groupId, req.body);
       getIO().to(`conv:${req.params.groupId}`).emit('group:task_new', { groupId: req.params.groupId });
       sendCreated(res, null, 'Đã tạo công việc');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[createTask]', error);
+      next(error);
+    }
   },
 
   getTasks: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const tasks = await chatService.getTasks(req.params.groupId);
       sendSuccess(res, tasks);
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[getTasks]', error);
+      next(error);
+    }
   },
 
   updateTaskStatus: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -370,7 +460,10 @@ export const chatController = {
       await chatService.updateTaskStatus(req.params.groupId, req.params.taskId, req.body.status);
       getIO().to(`conv:${req.params.groupId}`).emit('group:task_updated', { taskId: req.params.taskId });
       sendSuccess(res, null, 'Cập nhật trạng thái thành công');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[updateTaskStatus]', error);
+      next(error);
+    }
   },
 
   // ─── AI Recap ───────────────────────────────────────────────────────
@@ -382,13 +475,19 @@ export const chatController = {
         getIO().to(`conv:${req.params.groupId}`).emit('group:recap_new', { groupId: req.params.groupId, summary });
       } catch { /* ignore */ }
       sendSuccess(res, summary, 'Tóm tắt thành công');
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[generateAIRecap]', error);
+      next(error);
+    }
   },
 
   getLatestAIRecap: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const summary = await chatService.getLatestRecap(req.params.groupId);
       sendSuccess(res, summary);
-    } catch (error) { next(error); }
+    } catch (error) {
+      console.error('[getLatestAIRecap]', error);
+      next(error);
+    }
   },
 };
