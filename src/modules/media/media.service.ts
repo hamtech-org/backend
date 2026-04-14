@@ -31,6 +31,8 @@ function extFromMime(mime: string): string {
     'image/png': '.png',
     'image/gif': '.gif',
     'image/webp': '.webp',
+    'image/heic': '.heic',
+    'image/heif': '.heif',
     'video/mp4': '.mp4',
     'video/webm': '.webm',
     'video/quicktime': '.mov',
