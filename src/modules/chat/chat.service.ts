@@ -605,13 +605,20 @@ export const chatService = {
     if (data.avatar && data.avatar !== oldAvatar) {
       const now = new Date().toISOString();
       const messageId = uuidv4();
+      // Nếu người gửi là chính họ, xưng "Bạn"; còn lại dùng tên
+      let content = '';
+      if (requesterId === conversation.currentUserId) {
+        content = 'Ảnh đại diện nhóm đã thay đổi';
+      } else {
+        content = `${userName} đã cập nhật ảnh đại diện nhóm`;
+      }
       const systemMessage: IMessage = {
         messageId,
         conversationId,
         senderId: requesterId,
         senderDisplayName: userName,
         type: 'system' as any,
-        content: `${userName} đã cập nhật ảnh đại diện nhóm`,
+        content,
         encryptedContent: undefined,
         mediaUrl: data.avatar,
         mediaType: 'image',
