@@ -125,4 +125,12 @@ export const userController = {
       sendSuccess(res, friends, 'Lấy danh sách bạn bè thành công');
     } catch (error) { next(error); }
   },
+
+  getSuggestedFriends: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { limit = '10' } = req.query as { limit?: string };
+      const suggested = await userService.getSuggestedFriends(req.user!.userId, parseInt(limit) || 10);
+      sendSuccess(res, suggested, 'Lấy danh sách gợi ý thành công');
+    } catch (error) { next(error); }
+  },
 };

@@ -301,7 +301,6 @@ export const userRepository = {
     }));
     
     const isFriend = !!result.Item && result.Item.status === 'friend';
-    console.log(`checkFriendship: ${userId} <-> ${friendId}:`, isFriend, 'Item:', result.Item);
     return isFriend;
   },
 

@@ -29,7 +29,8 @@ router.post('/friends/:receiverId/cancel', authenticate, userController.cancelFr
 // Get pending requests (both received and sent)
 router.get('/friends/requests/pending', authenticate, userController.getPendingRequests);
 
-// Check friend status (friend | pending_sent | pending_received | none)
+// Get suggested friends
+router.get('/friends/suggestions', authenticate, userController.getSuggestedFriends);
 router.get('/friends/:userId/status', authenticate, userController.getFriendRequestStatus);
 
 // Remove/unfriend

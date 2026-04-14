@@ -2,6 +2,7 @@ import { userRepository } from './user.repository.js';
 import type { IUser, IUserPublic, IUpdateProfileDto, IFriendshipResponse, IFriendsList, IPendingRequests, IFriendRequestResponse } from './user.types.js';
 import { NotFoundError, ConflictError, ValidationError } from '@/shared/utils/errors.js';
 import { getKafkaProducer } from '@/config/kafka.js';
+import { getIO } from '@/socket/index.js';
 import { logger } from '@/shared/utils/logger.js';
 
 /**
@@ -123,11 +124,49 @@ export const userService = {
       // Auto-accept if they sent you a request
       await userRepository.acceptFriendRequest(senderId, receiverId);
       logger.info(`Auto-accepted friend request: ${senderId} <-> ${receiverId}`);
+      
+      // Emit socket events for auto-accept
+      try {
+        const io = getIO();
+        io.to(`user:${receiverId}`).emit('friendRequest:accepted', {
+          userId: senderId,
+          timestamp: new Date(),
+        });
+        io.to(`user:${senderId}`).emit('friend:added', {
+          friendId: receiverId,
+          timestamp: new Date(),
+        });
+        io.to(`user:${receiverId}`).emit('friend:added', {
+          friendId: senderId,
+          timestamp: new Date(),
+        });
+      } catch (error) {
+        logger.error('Failed to emit socket events for auto-accept:', error);
+      }
+      
       return 'Lời mời đã được chấp nhận tự động';
     }
 
     await userRepository.sendFriendRequest(senderId, receiverId);
     logger.info(`Friend request sent: ${senderId} -> ${receiverId}`);
+    
+    // Emit socket event to notify receiver in real-time
+    try {
+      const io = getIO();
+      const sender = await userRepository.findById(senderId);
+      const payload = {
+        senderId,
+        senderName: sender?.displayName || 'Unknown',
+        senderAvatar: sender?.avatar || null,
+        timestamp: new Date(),
+      };
+      console.log(`📤 Emitting friendRequest:new to user:${receiverId}`, payload);
+      io.to(`user:${receiverId}`).emit('friendRequest:new', payload);
+    } catch (error) {
+      logger.error('Failed to emit socket event for friend request:', error);
+      console.error('❌ Socket emit error:', error);
+    }
+    
     return 'Lời mời kết bạn đã được gửi';
   },
 
@@ -140,6 +179,28 @@ export const userService = {
 
     await userRepository.acceptFriendRequest(userId, senderId);
     logger.info(`Friend request accepted: ${senderId} <-> ${userId}`);
+    
+    // Emit socket events
+    try {
+      const io = getIO();
+      io.to(`user:${senderId}`).emit('friendRequest:accepted', {
+        userId,
+        timestamp: new Date(),
+      });
+      
+      // Notify both users about new friendship
+      io.to(`user:${senderId}`).emit('friend:added', {
+        friendId: userId,
+        timestamp: new Date(),
+      });
+      io.to(`user:${userId}`).emit('friend:added', {
+        friendId: senderId,
+        timestamp: new Date(),
+      });
+    } catch (error) {
+      logger.error('Failed to emit socket events for accept friend request:', error);
+    }
+    
     return 'Lời mời đã được chấp nhận';
   },
 
@@ -152,6 +213,18 @@ export const userService = {
 
     await userRepository.rejectFriendRequest(userId, senderId);
     logger.info(`Friend request rejected: ${userId} rejected ${senderId}`);
+    
+    // Emit socket event
+    try {
+      const io = getIO();
+      io.to(`user:${senderId}`).emit('friendRequest:rejected', {
+        userId,
+        timestamp: new Date(),
+      });
+    } catch (error) {
+      logger.error('Failed to emit socket events for reject friend request:', error);
+    }
+    
     return 'Lời mời đã bị từ chối';
   },
 
@@ -215,6 +288,22 @@ export const userService = {
 
     await userRepository.removeFriend(userId, friendId);
     logger.info(`User ${userId} removed friend ${friendId}`);
+    
+    // Emit socket event to notify both users
+    try {
+      const io = getIO();
+      io.to(`user:${userId}`).emit('friend:removed', {
+        friendId,
+        timestamp: new Date(),
+      });
+      io.to(`user:${friendId}`).emit('friend:removed', {
+        userId,
+        timestamp: new Date(),
+      });
+    } catch (error) {
+      logger.error('Failed to emit socket events for remove friend:', error);
+    }
+    
     return 'Hủy kết bạn thành công';
   },
 
@@ -246,5 +335,42 @@ export const userService = {
 
   checkFriendship: async (userId: string, friendId: string): Promise<boolean> => {
     return userRepository.checkFriendship(userId, friendId);
+  },
+
+  getSuggestedFriends: async (userId: string, limit: number = 10): Promise<IUser[]> => {
+    // Get current user's friend IDs
+    const friendIds = await userRepository.getFriendIds(userId, 1000); // Get all friends
+    const friendIdsSet = new Set(friendIds);
+
+    // Get pending requests (both sent and received)
+    const { received, sent } = await userRepository.getPendingRequests(userId);
+    const pendingIdsSet = new Set([...received, ...sent]);
+
+    // Get all users (pagination would be ideal for production)
+    const allUsers = await userRepository.findMultipleById([]);
+    
+    // Filter to get suggested users:
+    // - Not the current user
+    // - Not already a friend
+    // - No pending request
+    // - Verified users preferred
+    const suggested = allUsers
+      .filter(
+        (user) =>
+          user.userId !== userId &&
+          !friendIdsSet.has(user.userId) &&
+          !pendingIdsSet.has(user.userId) &&
+          user.isVerified !== false,
+      )
+      .sort((a, b) => {
+        // Prefer verified users with bio
+        const scoreA = (a.isVerified ? 2 : 0) + (a.bio ? 1 : 0);
+        const scoreB = (b.isVerified ? 2 : 0) + (b.bio ? 1 : 0);
+        return scoreB - scoreA;
+      })
+      .slice(0, limit);
+
+    logger.info(`GetSuggestedFriends for ${userId}: found ${suggested.length} suggestions`);
+    return suggested;
   },
 };

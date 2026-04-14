@@ -19,12 +19,6 @@ export const contactRepository = {
       },
     }));
     
-    console.log('📊 DynamoDB response:', {
-      Count: result.Count,
-      Items: result.Items?.length ?? 0,
-      RawItems: result.Items
-    });
-    
     // Filter only confirmed friendships (status='friend')
     const friends = (result.Items as any[] ?? [])
       .filter(item => item.status === 'friend')
