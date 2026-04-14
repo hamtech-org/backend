@@ -109,11 +109,26 @@ export const registerUserHandlers = (io: Server, socket: Socket): void => {
 
   socket.on('friend:statusChanged', async (status: 'online' | 'offline' | 'away') => {
     try {
-      // Broadcast status to all rooms the user is in
+      // Update user status in database
+      await userService.updateUserStatus(userId, status);
+
+      // Get user's friends to notify them
+      const friends = await userService.getFriends(userId, 1000); // Get all friends
+      
+      // Broadcast status to all connected clients (for non-friend users too)
       socket.broadcast.emit('friend:statusChanged', {
         userId,
         status,
         timestamp: new Date(),
+      });
+
+      // Specifically notify friends
+      friends.friends.forEach((friend) => {
+        io.to(`user:${friend.userId}`).emit('friend:statusChanged', {
+          userId,
+          status,
+          timestamp: new Date(),
+        });
       });
 
       logger.debug(`User ${userId} status changed to ${status}`);

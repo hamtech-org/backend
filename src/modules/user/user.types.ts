@@ -48,6 +48,8 @@ export interface IUpdateProfileDto {
   avatar?: string;
   phone?: string;
   avatarFile?: Express.Multer.File;
+  status?: 'online' | 'offline' | 'away';
+  lastSeen?: string;
 }
 
 export interface IFriendship {

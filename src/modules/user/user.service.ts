@@ -414,4 +414,12 @@ export const userService = {
     logger.info(`GetSuggestedFriends for ${userId}: found ${suggested.length} suggestions`);
     return suggested;
   },
+
+  updateUserStatus: async (userId: string, status: 'online' | 'offline' | 'away'): Promise<void> => {
+    await userRepository.update(userId, {
+      status,
+      ...{ lastSeen: new Date().toISOString() },
+    });
+    logger.debug(`User ${userId} status updated to ${status}`);
+  },
 };
