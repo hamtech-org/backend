@@ -390,7 +390,14 @@ export const chatController = {
 
   createPoll: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      await chatService.createPoll(req.user!.userId, req.params.groupId, req.body);
+      const systemMessage = await chatService.createPoll(req.user!.userId, req.params.groupId, req.body);
+      // Fallback: đảm bảo luôn phát message:new cho mọi thành viên
+      try {
+        if (systemMessage) {
+          const { broadcastMessageNew } = await import('./chat.broadcast.js');
+          await broadcastMessageNew(systemMessage);
+        }
+      } catch { /* ignore */ }
       getIO().to(`conv:${req.params.groupId}`).emit('group:poll_new', { groupId: req.params.groupId });
       sendCreated(res, null, 'Tạo bình chọn thành công');
     } catch (error) {
@@ -413,7 +420,10 @@ export const chatController = {
     try {
       const { optionIndex } = req.body;
       await chatService.votePoll(req.user!.userId, req.params.groupId, req.params.pollId, optionIndex);
-      getIO().to(`conv:${req.params.groupId}`).emit('group:poll_updated', { pollId: req.params.pollId });
+      getIO().to(`conv:${req.params.groupId}`).emit('group:poll_updated', {
+        groupId: req.params.groupId,
+        pollId: req.params.pollId,
+      });
       sendSuccess(res, null, 'Đã bình chọn');
     } catch (error) {
       console.error('[votePoll]', error);
@@ -425,10 +435,42 @@ export const chatController = {
     try {
       const { optionIndex } = req.body;
       await chatService.unvotePoll(req.user!.userId, req.params.groupId, req.params.pollId, optionIndex);
-      getIO().to(`conv:${req.params.groupId}`).emit('group:poll_updated', { pollId: req.params.pollId });
+      getIO().to(`conv:${req.params.groupId}`).emit('group:poll_updated', {
+        groupId: req.params.groupId,
+        pollId: req.params.pollId,
+      });
       sendSuccess(res, null, 'Đã rút phiếu');
     } catch (error) {
       console.error('[unvotePoll]', error);
+      next(error);
+    }
+  },
+
+  addPollOption: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { text } = req.body;
+      await chatService.addPollOption(req.user!.userId, req.params.groupId, req.params.pollId, text);
+      getIO().to(`conv:${req.params.groupId}`).emit('group:poll_updated', {
+        groupId: req.params.groupId,
+        pollId: req.params.pollId,
+      });
+      sendSuccess(res, null, 'Đã thêm lựa chọn');
+    } catch (error) {
+      console.error('[addPollOption]', error);
+      next(error);
+    }
+  },
+
+  closePoll: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await chatService.closePoll(req.user!.userId, req.params.groupId, req.params.pollId);
+      getIO().to(`conv:${req.params.groupId}`).emit('group:poll_updated', {
+        groupId: req.params.groupId,
+        pollId: req.params.pollId,
+      });
+      sendSuccess(res, null, 'Đã đóng bình chọn');
+    } catch (error) {
+      console.error('[closePoll]', error);
       next(error);
     }
   },
