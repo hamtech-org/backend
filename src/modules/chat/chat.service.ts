@@ -1,3 +1,4 @@
+// ...existing code...
 import { v4 as uuidv4 } from 'uuid';
 import { chatRepository } from './chat.repository.js';
 import type {
@@ -16,6 +17,7 @@ import { kafkaProducer } from '@/shared/kafka/producer.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { mediaService } from '@/modules/media/media.service.js';
+import { contactRepository } from '@/modules/contact/contact.repository.js';
 import type { MemberRole } from '@/shared/types/chat.types.js';
 
 async function lastMessageSnapshotFromNewest(messages: IMessage[]): Promise<ILastMessage | null> {
@@ -97,6 +99,30 @@ async function attachReplyToDetails(
 }
 
 export const chatService = {
+    /**
+     * Lấy danh sách thành viên nhóm (group)
+     */
+    getGroupMembers: async (groupId: string): Promise<IConversationMember[]> => {
+      const members = await chatRepository.getConversationMembers(groupId);
+      if (members.length === 0) return members;
+
+      // Enrich để FE hiển thị avatar/name đồng bộ (không phá compatibility: vẫn giữ fields gốc).
+      try {
+        const userIds = members.map((m) => m.userId);
+        const users = await userRepository.findByIds(userIds);
+        const byId = new Map(users.map((u) => [u.userId, u]));
+        return members.map((m) => {
+          const u = byId.get(m.userId);
+          return {
+            ...m,
+            name: u?.displayName ?? u?.email ?? m.userId,
+            avatar: u?.avatar ?? null,
+          } as any;
+        });
+      } catch {
+        return members;
+      }
+    },
   // ─── Conversations ────────────────────────────────────────────────────
 
   getConversations: async (userId: string): Promise<IConversation[]> => {
@@ -188,6 +214,53 @@ export const chatService = {
         return chatRepository.addConversationMember(member);
       }),
     );
+
+    // Tạo system message thông báo tạo nhóm mới
+    if (data.type === 'group') {
+      let creatorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([creatorId]);
+        creatorName = users[0]?.displayName || 'Ai đó';
+      } catch {}
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: creatorId,
+        senderDisplayName: creatorName,
+        type: 'system' as any,
+        content: `${creatorName} đã tạo nhóm${data.name ? ` "${data.name}"` : ''}`,
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(conversationId, {
+        messageId,
+        senderId: creatorId,
+        content: systemMessage.content,
+        type: 'system' as any,
+        createdAt: now,
+        senderDisplayName: creatorName,
+      }, now);
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore broadcast errors */}
+    }
 
     return conversation;
   },
@@ -474,6 +547,7 @@ export const chatService = {
 
   // ─── Group Management Service Extensions ──────────────────────────
 
+
   updateGroup: async (
     requesterId: string,
     conversationId: string,
@@ -484,12 +558,115 @@ export const chatService = {
     if (conversation.type !== 'group') throw new ForbiddenError('Đây không phải nhóm chat');
 
     const member = await chatRepository.getMember(conversationId, requesterId);
-    if (!member || !['owner', 'admin'].includes(member.role)) {
-      throw new ForbiddenError('Chỉ Admin/Owner mới có quyền cập nhật nhóm');
+    if (!member) {
+      throw new ForbiddenError('Bạn không phải thành viên của nhóm này');
     }
 
+
+    // Detect group name/avatar change
+    const oldName = conversation.name || '';
+    const oldAvatar = conversation.avatar || '';
+    const newAvatar = data.avatar || oldAvatar;
+    const isAvatarChanged = data.avatar && data.avatar !== oldAvatar;
+
     await chatRepository.updateConversation(conversationId, data);
-    return { ...conversation, ...data, updatedAt: new Date().toISOString() };
+    const updatedConversation = { ...conversation, ...data, updatedAt: new Date().toISOString() };
+
+    // Get requester display name (for both cases)
+    let userName = '';
+    try {
+      const users = await userRepository.findByIds([requesterId]);
+      userName = users[0]?.displayName || 'Ai đó';
+    } catch { userName = 'Ai đó'; }
+
+    // If group name changed, create and broadcast a system message
+    if (data.name && data.name !== oldName) {
+      const now = new Date().toISOString();
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: userName,
+        type: 'system' as any,
+        content: `${userName} đổi tên nhóm thành '${data.name}'`,
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(conversationId, {
+        messageId,
+        senderId: requesterId,
+        content: systemMessage.content,
+        type: 'system' as any,
+        createdAt: now,
+        senderDisplayName: userName,
+      }, now);
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore broadcast errors */}
+    }
+
+    // If group avatar changed, create and broadcast a system message
+    if (data.avatar && data.avatar !== oldAvatar) {
+      const now = new Date().toISOString();
+      const messageId = uuidv4();
+      const content = `${userName} đã cập nhật ảnh đại diện nhóm`;
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: userName,
+        type: 'system' as any,
+        content,
+        encryptedContent: null,
+        mediaUrl: data.avatar,
+        mediaType: 'image',
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(conversationId, {
+        messageId,
+        senderId: requesterId,
+        content: systemMessage.content,
+        type: 'system' as any,
+        createdAt: now,
+        senderDisplayName: userName,
+      }, now);
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore broadcast errors */}
+    }
+
+    return updatedConversation;
   },
 
   deleteGroup: async (requesterId: string, conversationId: string): Promise<void> => {
@@ -531,29 +708,94 @@ export const chatService = {
     data: IAddMembersDto,
   ): Promise<void> => {
     const member = await chatRepository.getMember(conversationId, requesterId);
-    if (!member || !['owner', 'admin'].includes(member.role)) {
-      throw new ForbiddenError('Chỉ Admin/Owner mới có quyền thêm thành viên');
+    // Giữ check cũ (admin/owner) nhưng mở rộng: chỉ cần là thành viên của nhóm thì có thể thêm.
+    // Backend vẫn là nguồn kiểm soát quyền; nếu muốn siết lại thì chỉ cần bỏ nhánh này.
+    if (!member || !['owner', 'admin', 'member'].includes(member.role)) {
+      throw new ForbiddenError('Bạn không có quyền thêm thành viên');
     }
 
     const now = new Date().toISOString();
+
+    // Nghiệp vụ mới:
+    // - Người được "thêm" sẽ nằm ở Chờ duyệt (invited) và CHƯA là thành viên.
+    // - Chỉ khi được duyệt (approveRequest) mới add vào members + tăng memberCount.
+    const memberIdsToInvite: string[] = [];
+    for (const userId of data.memberIds) {
+      const alreadyMember = await chatRepository.getMember(conversationId, userId);
+      if (alreadyMember) continue;
+      memberIdsToInvite.push(userId);
+    }
+    if (memberIdsToInvite.length === 0) return;
+
     await Promise.all(
-      data.memberIds.map((userId) =>
-        chatRepository.addConversationMember({
-          conversationId,
-          userId,
-          role: 'member',
-          joinedAt: now,
-          unreadCount: 0,
-          isMuted: false,
-        }),
-      ),
+      memberIdsToInvite.map((userId) => chatRepository.createGroupRequest(conversationId, userId, 'invited')),
     );
 
-    const conv = await chatRepository.getConversationById(conversationId);
-    if (conv) {
-      await chatRepository.updateConversation(conversationId, {
-        memberCount: (conv.memberCount || 0) + data.memberIds.length,
-      });
+    // System message: ai đã mời ai vào nhóm (hiển thị giữa khung chat) + đồng bộ realtime
+    try {
+      let requesterName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([requesterId]);
+        requesterName = users[0]?.displayName || requesterName;
+      } catch {}
+
+      let invitedNames: string[] = [];
+      try {
+        const invitedProfiles = await userRepository.findByIds(memberIdsToInvite);
+        const nameById = new Map(invitedProfiles.map((u) => [u.userId, u.displayName || u.email || u.userId]));
+        invitedNames = memberIdsToInvite.map((id) => nameById.get(id) ?? id);
+      } catch {
+        invitedNames = memberIdsToInvite;
+      }
+
+      const previewList = invitedNames.slice(0, 3).join(', ');
+      const moreCount = Math.max(0, invitedNames.length - 3);
+      const invitedLabel = moreCount > 0 ? `${previewList} và ${moreCount} người khác` : previewList;
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: requesterName,
+        type: 'system' as any,
+        content: `${requesterName} đã mời ${invitedLabel} vào nhóm`,
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: requesterName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore broadcast errors */}
+    } catch {
+      // ignore system message errors, do not fail main addMembers flow
     }
   },
 
@@ -578,6 +820,66 @@ export const chatService = {
       await chatRepository.updateConversation(conversationId, {
         memberCount: Math.max(0, (conv.memberCount || 0) - 1),
       });
+    }
+
+    // System message: ai đã mời ai ra khỏi nhóm + đồng bộ realtime
+    try {
+      const now = new Date().toISOString();
+      let requesterName = 'Ai đó';
+      let targetName = targetUserId;
+      try {
+        const users = await userRepository.findByIds([requesterId, targetUserId]);
+        const byId = new Map(users.map((u) => [u.userId, u]));
+        requesterName = byId.get(requesterId)?.displayName ?? requesterName;
+        targetName = byId.get(targetUserId)?.displayName ?? targetName;
+      } catch {
+        // ignore
+      }
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: requesterName,
+        type: 'system' as any,
+        content: `${requesterName} đã mời ${targetName} ra khỏi nhóm`,
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: requesterName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore broadcast errors */}
+    } catch {
+      // ignore system message errors
     }
   },
 
@@ -608,7 +910,37 @@ export const chatService = {
     if (!member || !['owner', 'admin'].includes(member.role)) {
       throw new ForbiddenError('Chỉ Admin/Owner mới xem được danh sách chờ');
     }
-    return chatRepository.getGroupRequests(conversationId);
+    const requests = await chatRepository.getGroupRequests(conversationId);
+    if (!requests.length) return [];
+
+    // Enrich: trả về name/avatar để FE hiển thị đúng tên dù chưa kết bạn.
+    const userIds = requests.map((r) => r.userId).filter(Boolean);
+    let users: any[] = [];
+    try {
+      users = await userRepository.findByIds(userIds);
+    } catch {
+      users = [];
+    }
+    const byId = new Map(users.map((u) => [u.userId, u]));
+
+    // Check friend status (đã kết bạn hay chưa) để FE show nút "Kết bạn"
+    let friendSet = new Set<string>();
+    try {
+      const friends = await contactRepository.getFriends(requesterId);
+      friendSet = new Set(friends.map((f) => f.friendId));
+    } catch {
+      friendSet = new Set();
+    }
+
+    return requests.map((r) => {
+      const u = byId.get(r.userId);
+      return {
+        ...r,
+        name: u?.displayName ?? u?.email ?? r.userId,
+        avatar: u?.avatar ?? null,
+        isFriend: friendSet.has(r.userId),
+      };
+    });
   },
 
   approveRequest: async (conversationId: string, requesterId: string, targetUserId: string): Promise<void> => {
@@ -617,11 +949,18 @@ export const chatService = {
       throw new ForbiddenError('Chỉ Admin/Owner mới có quyền duyệt');
     }
     
+    const exists = await chatRepository.getMember(conversationId, targetUserId);
+    if (exists) {
+      await chatRepository.removeGroupRequest(conversationId, targetUserId);
+      return;
+    }
+
+    const now = new Date().toISOString();
     await chatRepository.addConversationMember({
       conversationId,
       userId: targetUserId,
       role: 'member',
-      joinedAt: new Date().toISOString(),
+      joinedAt: now,
       unreadCount: 0,
       isMuted: false,
     });
@@ -632,6 +971,61 @@ export const chatService = {
     }
     
     await chatRepository.removeGroupRequest(conversationId, targetUserId);
+
+    // System message: thành viên được duyệt vào nhóm + realtime
+    try {
+      let approverName = 'Ai đó';
+      let targetName = targetUserId;
+      try {
+        const users = await userRepository.findByIds([requesterId, targetUserId]);
+        const byId = new Map(users.map((u) => [u.userId, u]));
+        approverName = byId.get(requesterId)?.displayName ?? approverName;
+        targetName = byId.get(targetUserId)?.displayName ?? targetName;
+      } catch {}
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: approverName,
+        type: 'system' as any,
+        content: `${targetName} đã tham gia nhóm`,
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: approverName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore */}
+    } catch {/* ignore */}
   },
 
   rejectRequest: async (conversationId: string, requesterId: string, targetUserId: string): Promise<void> => {
@@ -644,19 +1038,88 @@ export const chatService = {
 
   // ─── Polls (Bình chọn) ───────────────────────────────────────────────
 
-  createPoll: async (requesterId: string, conversationId: string, data: any): Promise<void> => {
+  createPoll: async (requesterId: string, conversationId: string, data: any): Promise<IMessage | null> => {
+    const member = await chatRepository.getMember(conversationId, requesterId);
+    if (!member) throw new ForbiddenError('Bạn không thuộc nhóm');
+
     const pollId = uuidv4();
+    const now = new Date().toISOString();
     const poll = {
       pollId,
       conversationId,
       creatorId: requesterId,
       question: data.question,
-      options: data.options.map((opt: string) => ({ text: opt, vofers: [] })),
+      options: data.options.map((opt: string) => ({ text: opt, voters: [] })),
       isMultipleChoice: data.isMultipleChoice || false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     };
     await chatRepository.createPoll(poll);
+
+    // System message: thông báo tạo bình chọn trong khung chat
+    try {
+      let creatorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([requesterId]);
+        creatorName = users[0]?.displayName || creatorName;
+      } catch {}
+
+      const payload = {
+        kind: 'poll_created',
+        poll: {
+          pollId: String(pollId),
+          question: String(data.question ?? ''),
+        },
+        actor: { userId: requesterId, name: creatorName },
+        createdAt: now,
+      };
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: creatorName,
+        type: 'system' as any,
+        content: JSON.stringify(payload),
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: creatorName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore */}
+      return systemMessage;
+    } catch {/* ignore */}
+
+    return null;
   },
 
   getPolls: async (conversationId: string): Promise<any[]> => {
@@ -664,13 +1127,29 @@ export const chatService = {
   },
 
   votePoll: async (userId: string, conversationId: string, pollId: string, optionIndex: number): Promise<void> => {
+    const member = await chatRepository.getMember(conversationId, userId);
+    if (!member) throw new ForbiddenError('Bạn không thuộc nhóm');
+
     const polls = await chatRepository.getPolls(conversationId);
     const poll = polls.find(p => p.pollId === pollId);
     if (!poll) throw new NotFoundError('Bình chọn');
 
-    // Logic bỏ phiếu (đơn giản hóa: bỏ phiếu cho 1 option)
+    // Logic bỏ phiếu
     if (!poll.options[optionIndex]) throw new Error('Lựa chọn không hợp lệ');
     
+    const prevVotedIndexes: number[] = [];
+    (poll.options ?? []).forEach((opt: any, idx: number) => {
+      if (Array.isArray(opt?.voters) && opt.voters.includes(userId)) prevVotedIndexes.push(idx);
+    });
+
+    // Single choice: remove previous votes first
+    if (!poll.isMultipleChoice) {
+      poll.options = (poll.options ?? []).map((opt: any) => ({
+        ...opt,
+        voters: Array.isArray(opt.voters) ? opt.voters.filter((id: string) => id !== userId) : [],
+      }));
+    }
+
     // Nếu chưa bầu thì thêm vào
     if (!poll.options[optionIndex].voters) poll.options[optionIndex].voters = [];
     if (!poll.options[optionIndex].voters.includes(userId)) {
@@ -678,9 +1157,90 @@ export const chatService = {
     }
     
     await chatRepository.updatePollVotes(conversationId, pollId, poll.options);
+
+    // System message: ai đã bình chọn / thay đổi bình chọn (để member khác thấy realtime trong khung chat)
+    try {
+      const now = new Date().toISOString();
+      let actorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([userId]);
+        actorName = users[0]?.displayName || actorName;
+      } catch {}
+
+      const optionText = String(poll?.options?.[optionIndex]?.text ?? '').trim();
+      const question = String(poll?.question ?? '').trim();
+      const changed =
+        !poll.isMultipleChoice &&
+        prevVotedIndexes.length > 0 &&
+        !prevVotedIndexes.includes(optionIndex);
+      const prevOptionText =
+        changed && poll?.options?.[prevVotedIndexes[0]]?.text
+          ? String(poll.options[prevVotedIndexes[0]].text)
+          : '';
+
+      const payload = {
+        kind: changed ? 'poll_vote_changed' : 'poll_voted',
+        poll: {
+          pollId: String(pollId),
+          question,
+          optionIndex,
+          optionText,
+          prevOptionIndex: changed ? prevVotedIndexes[0] : null,
+          prevOptionText: changed ? String(prevOptionText ?? '') : null,
+        },
+        actor: { userId, name: actorName },
+        createdAt: now,
+      };
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: userId,
+        senderDisplayName: actorName,
+        type: 'system' as any,
+        content: JSON.stringify(payload),
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: userId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: actorName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore */}
+    } catch {/* ignore */}
   },
 
   unvotePoll: async (userId: string, conversationId: string, pollId: string, optionIndex: number): Promise<void> => {
+    const member = await chatRepository.getMember(conversationId, userId);
+    if (!member) throw new ForbiddenError('Bạn không thuộc nhóm');
+
     const polls = await chatRepository.getPolls(conversationId);
     const poll = polls.find(p => p.pollId === pollId);
     if (!poll) throw new NotFoundError('Bình chọn');
@@ -689,6 +1249,231 @@ export const chatService = {
       poll.options[optionIndex].voters = poll.options[optionIndex].voters.filter((id: string) => id !== userId);
       await chatRepository.updatePollVotes(conversationId, pollId, poll.options);
     }
+
+    // System message: ai đã rút phiếu
+    try {
+      const now = new Date().toISOString();
+      let actorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([userId]);
+        actorName = users[0]?.displayName || actorName;
+      } catch {}
+
+      const optionText = String(poll?.options?.[optionIndex]?.text ?? '').trim();
+      const question = String(poll?.question ?? '').trim();
+
+      const payload = {
+        kind: 'poll_unvoted',
+        poll: {
+          pollId: String(pollId),
+          question,
+          optionIndex,
+          optionText,
+        },
+        actor: { userId, name: actorName },
+        createdAt: now,
+      };
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: userId,
+        senderDisplayName: actorName,
+        type: 'system' as any,
+        content: JSON.stringify(payload),
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: userId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: actorName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore */}
+    } catch {/* ignore */}
+  },
+
+  addPollOption: async (
+    requesterId: string,
+    conversationId: string,
+    pollId: string,
+    text: string,
+  ): Promise<void> => {
+    const member = await chatRepository.getMember(conversationId, requesterId);
+    if (!member) throw new ForbiddenError('Bạn không thuộc nhóm');
+
+    const optionText = String(text ?? '').trim();
+    if (!optionText) throw new Error('Nội dung lựa chọn không hợp lệ');
+
+    const polls = await chatRepository.getPolls(conversationId);
+    const poll = polls.find((p) => p.pollId === pollId);
+    if (!poll) throw new NotFoundError('Bình chọn');
+
+    const nextOptions = Array.isArray(poll.options) ? [...poll.options] : [];
+    nextOptions.push({ text: optionText, voters: [] });
+    await chatRepository.updatePoll(conversationId, pollId, { options: nextOptions });
+
+    try {
+      const now = new Date().toISOString();
+      let actorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([requesterId]);
+        actorName = users[0]?.displayName || actorName;
+      } catch {}
+
+      const payload = {
+        kind: 'poll_option_added',
+        poll: {
+          pollId: String(pollId),
+          question: String(poll.question ?? ''),
+          optionText,
+        },
+        actor: { userId: requesterId, name: actorName },
+        createdAt: now,
+      };
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: actorName,
+        type: 'system' as any,
+        content: JSON.stringify(payload),
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: actorName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore */}
+    } catch {/* ignore */}
+  },
+
+  closePoll: async (requesterId: string, conversationId: string, pollId: string): Promise<void> => {
+    const member = await chatRepository.getMember(conversationId, requesterId);
+    if (!member) throw new ForbiddenError('Bạn không thuộc nhóm');
+
+    const polls = await chatRepository.getPolls(conversationId);
+    const poll = polls.find((p) => p.pollId === pollId);
+    if (!poll) throw new NotFoundError('Bình chọn');
+
+    await chatRepository.updatePoll(conversationId, pollId, { isClosed: true });
+
+    try {
+      const now = new Date().toISOString();
+      let actorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([requesterId]);
+        actorName = users[0]?.displayName || actorName;
+      } catch {}
+
+      const payload = {
+        kind: 'poll_closed',
+        poll: {
+          pollId: String(pollId),
+          question: String(poll.question ?? ''),
+        },
+        actor: { userId: requesterId, name: actorName },
+        createdAt: now,
+      };
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: actorName,
+        type: 'system' as any,
+        content: JSON.stringify(payload),
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: actorName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore */}
+    } catch {/* ignore */}
   },
 
   deletePoll: async (requesterId: string, conversationId: string, pollId: string): Promise<void> => {
@@ -702,21 +1487,124 @@ export const chatService = {
 
   // ─── Tasks (Công việc) ───────────────────────────────────────────────
 
-  createTask: async (requesterId: string, conversationId: string, data: any): Promise<void> => {
+  createTask: async (requesterId: string, conversationId: string, data: any): Promise<any> => {
     const taskId = uuidv4();
+    const now = new Date().toISOString();
+
+    // assign to all members if requested
+    let assignees: string[] = Array.isArray(data.assignees) ? data.assignees : [];
+    if (data.assignToAll === true) {
+      try {
+        const members = await chatRepository.getConversationMembers(conversationId);
+        assignees = members.map((m) => m.userId);
+      } catch {
+        assignees = [];
+      }
+    }
+
     const task = {
       taskId,
       conversationId,
       creatorId: requesterId,
       title: data.title,
       description: data.description,
-      assignees: data.assignees || [],
+      assignees,
+      participants: [],
       status: 'todo', // todo, in_progress, done
       dueDate: data.dueDate,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     };
     await chatRepository.createTask(task);
+
+    // System message + realtime: thông báo giao việc trong khung chat
+    try {
+      let creatorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([requesterId]);
+        creatorName = users[0]?.displayName || creatorName;
+      } catch {}
+
+      let assigneeLabel = 'cả nhóm';
+      if (data.assignToAll !== true) {
+        try {
+          const assigneeProfiles = await userRepository.findByIds(assignees);
+          const nameById = new Map(
+            assigneeProfiles.map((u) => [u.userId, u.displayName || u.email || u.userId]),
+          );
+          const names = assignees.map((id) => nameById.get(id) ?? id);
+          const preview = names.slice(0, 3).join(', ');
+          const more = Math.max(0, names.length - 3);
+          assigneeLabel = more > 0 ? `${preview} và ${more} người khác` : preview || 'cả nhóm';
+        } catch {
+          assigneeLabel = assignees.length > 0 ? `${assignees.length} người` : 'cả nhóm';
+        }
+      }
+
+      const messageId = uuidv4();
+      const note = String(task.description ?? '').trim();
+      const payload = {
+        kind: 'task_assigned',
+        task: {
+          taskId: String(task.taskId),
+          title: String(task.title ?? ''),
+          dueDate: task.dueDate ?? null,
+          note: note || null,
+          assigneeLabel: assigneeLabel || 'cả nhóm',
+          assignToAll: data.assignToAll === true,
+          assigneesCount: Array.isArray(assignees) ? assignees.length : 0,
+        },
+        actor: {
+          userId: requesterId,
+          name: creatorName,
+        },
+        createdAt: now,
+      };
+
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: creatorName,
+        type: 'system' as any,
+        content: JSON.stringify(payload),
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: creatorName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore */}
+    } catch {/* ignore */}
+
+    return task;
   },
 
   getTasks: async (conversationId: string): Promise<any[]> => {
@@ -725,6 +1613,100 @@ export const chatService = {
 
   updateTaskStatus: async (conversationId: string, taskId: string, status: string): Promise<void> => {
     await chatRepository.updateTask(conversationId, taskId, { status });
+  },
+
+  joinTask: async (requesterId: string, conversationId: string, taskId: string): Promise<any> => {
+    // Ensure requester is a group member
+    const members = await chatRepository.getConversationMembers(conversationId);
+    const isMember = members.some((m) => m.userId === requesterId);
+    if (!isMember) {
+      throw new ForbiddenError('Bạn không thuộc nhóm');
+    }
+
+    const tasks = await chatRepository.getTasks(conversationId);
+    const task = tasks.find((t: any) => String(t?.taskId) === String(taskId));
+    if (!task) {
+      throw new NotFoundError('Công việc');
+    }
+
+    // Only assignees can join (assignToAll -> assignees already includes everyone)
+    const assignees = Array.isArray((task as any).assignees) ? ((task as any).assignees as string[]) : [];
+    if (!assignees.includes(requesterId)) {
+      throw new ForbiddenError('Bạn không được giao công việc này');
+    }
+
+    const prev = Array.isArray((task as any).participants) ? (task as any).participants : [];
+    const next = prev.includes(requesterId) ? prev : [...prev, requesterId];
+    await chatRepository.updateTask(conversationId, taskId, { participants: next });
+
+    // System message: ai đã tham gia công việc (hiển thị dưới khung chat)
+    try {
+      const now = new Date().toISOString();
+      let actorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([requesterId]);
+        actorName = users[0]?.displayName || actorName;
+      } catch {}
+
+      const payload = {
+        kind: 'task_joined',
+        task: {
+          taskId: String((task as any).taskId ?? taskId),
+          title: String((task as any).title ?? ''),
+        },
+        actor: {
+          userId: requesterId,
+          name: actorName,
+        },
+        participantsCount: next.length,
+        createdAt: now,
+      };
+
+      const messageId = uuidv4();
+      const systemMessage: IMessage = {
+        messageId,
+        conversationId,
+        senderId: requesterId,
+        senderDisplayName: actorName,
+        type: 'system' as any,
+        content: JSON.stringify(payload),
+        encryptedContent: null,
+        mediaUrl: null,
+        mediaType: null,
+        mediaSize: null,
+        mediaOriginalName: null,
+        thumbnailUrl: null,
+        replyTo: null,
+        replyToDetails: null,
+        forwardFrom: null,
+        isPinned: false,
+        isEdited: false,
+        isRecalled: false,
+        isDeleted: false,
+        reactions: {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      await chatRepository.createMessage(systemMessage);
+      await chatRepository.updateConversationLastMessage(
+        conversationId,
+        {
+          messageId,
+          senderId: requesterId,
+          content: systemMessage.content,
+          type: 'system' as any,
+          createdAt: now,
+          senderDisplayName: actorName,
+        },
+        now,
+      );
+      try {
+        const { broadcastMessageNew } = await import('./chat.broadcast.js');
+        await broadcastMessageNew(systemMessage);
+      } catch {/* ignore */}
+    } catch {/* ignore */}
+
+    return { ...task, participants: next };
   },
 
   deleteTask: async (requesterId: string, conversationId: string, taskId: string): Promise<void> => {

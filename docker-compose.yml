@@ -27,6 +27,7 @@ services:
       - CHOKIDAR_USEPOLLING=true
       - CHOKIDAR_INTERVAL=1000
       - WATCHPACK_POLLING=true
+    restart: always
     networks:
       - zalogram-network
 
@@ -88,6 +89,7 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     depends_on:
       - zookeeper
+    restart: always
     networks:
       - zalogram-network
 

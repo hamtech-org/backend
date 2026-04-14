@@ -52,7 +52,7 @@ export const recallMessageSchema = z.object({
 });
 
 export const markAsReadSchema = z.object({
-  messageId: z.string().uuid(),
+  messageId: z.string().min(1),
 });
 
 export const reactMessageSchema = z.object({
