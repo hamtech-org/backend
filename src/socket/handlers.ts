@@ -1,5 +1,5 @@
 import { Server, Socket } from 'socket.io';
-import { registerChatHandlers } from '@/modules/chat/chat.socket.js';
+import { registerChatHandlers } from '@/modules/chat/index.js';
 import { registerCallHandlers } from '@/modules/call/call.socket.js';
 import { registerUserHandlers } from '@/modules/user/user.socket.js';
 

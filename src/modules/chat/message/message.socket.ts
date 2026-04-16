@@ -1,8 +1,8 @@
 import { Server, Socket } from 'socket.io';
 import { z } from 'zod';
-import { chatService } from './chat.service.js';
-import { chatRepository } from './chat.repository.js';
-import { broadcastMessageNew } from './chat.broadcast.js';
+import { messageService } from './message.service.js';
+import { conversationRepository } from '../conversation/conversation.repository.js';
+import { broadcastMessageNew } from '../shared/chat.broadcast.js';
 import { logger } from '@/shared/utils/logger.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 
@@ -57,7 +57,7 @@ export const registerChatHandlers = (io: Server, socket: Socket): void => {
 
       const { conversationId, ...messageData } = parsed.data;
 
-      const message = await chatService.sendMessage(userId, conversationId, messageData);
+      const message = await messageService.sendMessage(userId, conversationId, messageData);
 
       await broadcastMessageNew(message);
 
@@ -95,10 +95,10 @@ export const registerChatHandlers = (io: Server, socket: Socket): void => {
 
       const { conversationId, messageId } = parsed.data;
 
-      await chatService.markAsRead(conversationId, userId, messageId);
+      await messageService.markAsRead(conversationId, userId, messageId);
 
       // Cập nhật trạng thái read cho người gửi gốc
-      const members = await chatRepository.getConversationMembers(conversationId);
+      const members = await conversationRepository.getConversationMembers(conversationId);
       const membersExceptSelf = members.filter((m) => m.userId !== userId);
 
       // Thông báo cho các thành viên khác biết tin nhắn đã được đọc
@@ -118,7 +118,7 @@ export const registerChatHandlers = (io: Server, socket: Socket): void => {
 
   socket.on('message:recall', async (data: { messageId: string; conversationId: string; createdAt: string }) => {
     try {
-      await chatService.recallMessage(data.messageId, userId, data.conversationId, data.createdAt);
+      await messageService.recallMessage(data.messageId, userId, data.conversationId, data.createdAt);
       // Phát sự kiện thu hồi đến room
       io.to(`conv:${data.conversationId}`).emit('message:recall', {
         messageId: data.messageId,
