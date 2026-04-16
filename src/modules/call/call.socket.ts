@@ -1,8 +1,8 @@
 import { Server, Socket } from 'socket.io';
 import crypto from 'crypto';
 import { logger } from '@/shared/utils/logger.js';
-import { chatService } from '@/modules/chat/chat.service.js';
-import { broadcastMessageNew } from '@/modules/chat/chat.broadcast.js';
+import { messageService } from '@/modules/chat/message/message.service.js';
+import { broadcastMessageNew } from '@/modules/chat/shared/chat.broadcast.js';
 import type {
   CallInitiatePayload,
   CallAcceptPayload,
@@ -57,7 +57,7 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
 
     // Log: rejected call (no duration)
     try {
-      const message = await chatService.sendMessage(userId, data.conversationId, {
+      const message = await messageService.sendMessage(userId, data.conversationId, {
         type: 'call',
         content: JSON.stringify({
           kind: 'rejected',
@@ -81,7 +81,7 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
 
     // Log: completed (or custom result) with duration
     try {
-      const message = await chatService.sendMessage(userId, data.conversationId, {
+      const message = await messageService.sendMessage(userId, data.conversationId, {
         type: 'call',
         content: JSON.stringify({
           kind: data.result ?? 'completed',
@@ -104,7 +104,7 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
     });
 
     try {
-      const message = await chatService.sendMessage(userId, data.conversationId, {
+      const message = await messageService.sendMessage(userId, data.conversationId, {
         type: 'call',
         content: JSON.stringify({
           kind: 'missed',

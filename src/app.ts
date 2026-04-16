@@ -10,7 +10,7 @@ import { errorHandler } from '@/shared/middlewares/errorHandler.middleware.js';
 // Module routes
 import authRoutes from '@/modules/auth/auth.routes.js';
 import userRoutes from '@/modules/user/user.routes.js';
-import chatRoutes from '@/modules/chat/chat.routes.js';
+import chatRoutes from '@/modules/chat/index.js';
 import contactRoutes from '@/modules/contact/contact.routes.js';
 import newsfeedRoutes from '@/modules/newsfeed/newsfeed.routes.js';
 import mediaRoutes from '@/modules/media/media.routes.js';
