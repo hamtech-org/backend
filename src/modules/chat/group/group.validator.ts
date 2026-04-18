@@ -14,3 +14,31 @@ export const addMembersSchema = z.object({
 export const changeRoleSchema = z.object({
   role: z.enum(['owner', 'admin', 'member']),
 });
+
+const memberPermissionsPatch = z
+  .object({
+    changeNameAvatar: z.boolean().optional(),
+    pinMessages: z.boolean().optional(),
+    createNotesReminders: z.boolean().optional(),
+    createPolls: z.boolean().optional(),
+    sendMessages: z.boolean().optional(),
+  })
+  .strict();
+
+const adminSettingsPatch = z
+  .object({
+    approvalRequired: z.boolean().optional(),
+    highlightLeaderMessages: z.boolean().optional(),
+    newMembersReadRecent: z.boolean().optional(),
+    allowJoinLink: z.boolean().optional(),
+  })
+  .strict();
+
+/** PATCH body — có thể chỉ gửi một phần quyền (frontend bật/tắt từng dòng). */
+export const updateGroupSettingsSchema = z
+  .object({
+    memberPermissions: memberPermissionsPatch.optional(),
+    adminSettings: adminSettingsPatch.optional(),
+    regenerateJoinLink: z.boolean().optional(),
+  })
+  .strict();
