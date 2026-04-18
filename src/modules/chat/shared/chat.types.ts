@@ -1,6 +1,29 @@
 import type { TimestampFields } from '@/shared/types/common.types.js';
 import type { MessageType, ConversationType, MemberRole } from '@/shared/types/chat.types.js';
 
+/** Cài đặt nhóm (META conversation type group). */
+export interface IGroupMemberPermissions {
+  changeNameAvatar: boolean;
+  pinMessages: boolean;
+  createNotesReminders: boolean;
+  createPolls: boolean;
+  sendMessages: boolean;
+}
+
+export interface IGroupAdminSettings {
+  approvalRequired: boolean;
+  highlightLeaderMessages: boolean;
+  newMembersReadRecent: boolean;
+  allowJoinLink: boolean;
+}
+
+export interface IGroupSettings {
+  memberPermissions: IGroupMemberPermissions;
+  adminSettings: IGroupAdminSettings;
+  /** Hậu tố link tham gia (demo / refresh). */
+  joinLinkSuffix?: string;
+}
+
 export interface IConversation extends TimestampFields {
   conversationId: string;
   type: ConversationType;
@@ -12,6 +35,8 @@ export interface IConversation extends TimestampFields {
   memberCount: number;
   isEncrypted: boolean;
   isDeleted?: boolean;
+  /** Chỉ nhóm; đồng bộ realtime qua socket `group:settings_updated`. */
+  groupSettings?: IGroupSettings;
 }
 
 export interface ILastMessage {
