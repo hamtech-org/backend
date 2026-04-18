@@ -40,6 +40,10 @@ export interface IReplyToDetails {
   senderDisplayName: string | null;
   content: string;
   type: MessageType;
+  /** Preview ảnh/video trong dải trích dẫn (client dùng thumbnail khi có). */
+  mediaUrl?: string | null;
+  thumbnailUrl?: string | null;
+  mediaType?: string | null;
 }
 
 export interface IMessage extends TimestampFields {
