@@ -1,8 +1,10 @@
 import { conversationRepository } from '../conversation/conversation.repository.js';
+import { randomBytes } from 'node:crypto';
 import type {
   IConversationMember,
   IUpdateGroupDto,
   IAddMembersDto,
+  IGroupSettings,
 } from '../shared/chat.types.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
 import { userRepository } from '@/modules/user/user.repository.js';
@@ -12,6 +14,35 @@ import type { MemberRole } from '@/shared/types/chat.types.js';
 const sysMsgDeps = {
   createMessage: conversationRepository.createMessage,
   updateConversationLastMessage: conversationRepository.updateConversationLastMessage,
+};
+
+const DEFAULT_MEMBER_PERMS: IGroupSettings['memberPermissions'] = {
+  changeNameAvatar: true,
+  pinMessages: true,
+  createNotesReminders: true,
+  createPolls: true,
+  sendMessages: true,
+};
+
+const DEFAULT_ADMIN: IGroupSettings['adminSettings'] = {
+  approvalRequired: false,
+  highlightLeaderMessages: true,
+  newMembersReadRecent: true,
+  allowJoinLink: true,
+};
+
+export function mergeGroupSettings(raw: Partial<IGroupSettings> | undefined | null): IGroupSettings {
+  return {
+    memberPermissions: { ...DEFAULT_MEMBER_PERMS, ...raw?.memberPermissions },
+    adminSettings: { ...DEFAULT_ADMIN, ...raw?.adminSettings },
+    joinLinkSuffix: raw?.joinLinkSuffix,
+  };
+}
+
+export type UpdateGroupSettingsPayload = {
+  memberPermissions?: Partial<IGroupSettings['memberPermissions']>;
+  adminSettings?: Partial<IGroupSettings['adminSettings']>;
+  regenerateJoinLink?: boolean;
 };
 
 export const groupService = {
@@ -52,6 +83,16 @@ export const groupService = {
     const member = await conversationRepository.getMember(conversationId, requesterId);
     if (!member) {
       throw new ForbiddenError('Bạn không phải thành viên của nhóm này');
+    }
+
+    if (
+      (data.name !== undefined || data.avatar !== undefined) &&
+      member.role === 'member'
+    ) {
+      const s = mergeGroupSettings(conversation.groupSettings);
+      if (!s.memberPermissions.changeNameAvatar) {
+        throw new ForbiddenError('Nhóm không cho phép thành viên đổi tên hoặc ảnh đại diện nhóm');
+      }
     }
 
     const oldName = conversation.name || '';
@@ -243,5 +284,59 @@ export const groupService = {
     }
 
     await conversationRepository.updateMemberRole(conversationId, targetUserId, role);
+  },
+
+  getGroupSettings: async (conversationId: string): Promise<IGroupSettings> => {
+    const c = await conversationRepository.getConversationById(conversationId);
+    if (!c) throw new NotFoundError('Hội thoại');
+    if (c.type !== 'group') throw new ForbiddenError('Đây không phải nhóm chat');
+    return mergeGroupSettings(c.groupSettings);
+  },
+
+  updateGroupSettings: async (
+    requesterId: string,
+    conversationId: string,
+    patch: UpdateGroupSettingsPayload,
+  ): Promise<IGroupSettings> => {
+    const member = await conversationRepository.getMember(conversationId, requesterId);
+    if (!member || (member.role !== 'owner' && member.role !== 'admin')) {
+      throw new ForbiddenError('Chỉ trưởng nhóm hoặc phó nhóm mới chỉnh được cài đặt');
+    }
+    const c = await conversationRepository.getConversationById(conversationId);
+    if (!c) throw new NotFoundError('Hội thoại');
+    if (c.type !== 'group') throw new ForbiddenError('Đây không phải nhóm chat');
+
+    const current = mergeGroupSettings(c.groupSettings);
+    let joinLinkSuffix = current.joinLinkSuffix;
+    if (patch.regenerateJoinLink) {
+      joinLinkSuffix = randomBytes(6).toString('hex');
+    }
+    const next: IGroupSettings = {
+      memberPermissions: { ...current.memberPermissions, ...patch.memberPermissions },
+      adminSettings: { ...current.adminSettings, ...patch.adminSettings },
+      joinLinkSuffix,
+    };
+
+    await conversationRepository.updateConversation(conversationId, {
+      groupSettings: next,
+    } as any);
+    return next;
+  },
+
+  /**
+   * Kiểm tra thành viên có được ghim/bỏ ghim trong nhóm (theo groupSettings + role).
+   */
+  assertUserMayPinMessage: async (userId: string, conversationId: string): Promise<void> => {
+    const c = await conversationRepository.getConversationById(conversationId);
+    if (!c) throw new NotFoundError('Hội thoại');
+    if (c.type === 'group') {
+      const member = await conversationRepository.getMember(conversationId, userId);
+      if (!member) throw new ForbiddenError('Bạn không phải thành viên nhóm');
+      if (member.role === 'owner' || member.role === 'admin') return;
+      const s = mergeGroupSettings(c.groupSettings);
+      if (!s.memberPermissions.pinMessages) {
+        throw new ForbiddenError('Nhóm không cho phép thành viên ghim tin nhắn');
+      }
+    }
   },
 };
