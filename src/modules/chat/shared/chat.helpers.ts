@@ -1,4 +1,4 @@
-import type { IMessage, ILastMessage } from './chat.types.js';
+import type { IMessage, ILastMessage, IReplyToDetails } from './chat.types.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 
 /** Tin không hiển thị với viewer: legacy soft-delete toàn cục hoặc user đã ẩn. */
@@ -102,19 +102,28 @@ export async function attachReplyToDetails(
     if (!original) return msg;
 
     let content = original.content;
+    const hidden =
+      isMessageHiddenFromViewer(original, hiddenMessageIdsForViewer) || original.isRecalled;
     if (isMessageHiddenFromViewer(original, hiddenMessageIdsForViewer))
       content = '[Tin nhắn không khả dụng]';
     else if (original.isRecalled) content = 'Tin nhắn đã được thu hồi';
 
+    const replyToDetails: IReplyToDetails = {
+      messageId: original.messageId,
+      senderId: original.senderId,
+      senderDisplayName: nameById.get(original.senderId) ?? null,
+      content: content.slice(0, 100),
+      type: original.type,
+    };
+    if (!hidden) {
+      replyToDetails.mediaUrl = original.mediaUrl ?? null;
+      replyToDetails.thumbnailUrl = original.thumbnailUrl ?? null;
+      replyToDetails.mediaType = original.mediaType ?? null;
+    }
+
     return {
       ...msg,
-      replyToDetails: {
-        messageId: original.messageId,
-        senderId: original.senderId,
-        senderDisplayName: nameById.get(original.senderId) ?? null,
-        content: content.slice(0, 100),
-        type: original.type,
-      },
+      replyToDetails,
     };
   });
 }
