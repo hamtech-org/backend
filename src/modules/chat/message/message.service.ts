@@ -177,6 +177,9 @@ export const messageService = {
     const message = await conversationRepository.getMessageById(conversationId, messageId, createdAt);
     if (!message) throw new NotFoundError('Tin nhắn');
     if (message.senderId !== senderId) throw new ForbiddenError('Chỉ người gửi mới được chỉnh sửa');
+    if (message.type !== 'text') {
+      throw new ForbiddenError('Chỉ có thể sửa tin nhắn dạng chữ');
+    }
 
     const sortKey = `MSG#${message.createdAt}#${messageId}`;
     await conversationRepository.updateMessage(conversationId, messageId, sortKey, {
