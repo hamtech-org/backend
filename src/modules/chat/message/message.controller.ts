@@ -145,7 +145,10 @@ export const messageController = {
 
   unpinMessage: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { conversationId, createdAt } = req.body as { conversationId: string; createdAt: string };
+      const body = req.body as { conversationId?: string; createdAt?: string };
+      const q = req.query as { conversationId?: string; createdAt?: string };
+      const conversationId = (body.conversationId ?? q.conversationId) as string;
+      const createdAt = (body.createdAt ?? q.createdAt) as string;
       await messageService.unpinMessage(req.params.messageId, conversationId, createdAt);
       try {
         getIO().to(`conv:${conversationId}`).emit('message:pin_updated', {
