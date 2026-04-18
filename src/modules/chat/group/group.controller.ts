@@ -106,4 +106,39 @@ export const groupController = {
       next(error);
     }
   },
+
+  getGroupSettings: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const settings = await groupService.getGroupSettings(req.params.groupId);
+      sendSuccess(res, settings);
+    } catch (error) {
+      console.error('[getGroupSettings]', error);
+      next(error);
+    }
+  },
+
+  updateGroupSettings: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const settings = await groupService.updateGroupSettings(
+        req.user!.userId,
+        req.params.groupId,
+        req.body,
+      );
+      try {
+        const io = getIO();
+        const payload = { conversationId: req.params.groupId, groupSettings: settings };
+        io.to(`conv:${req.params.groupId}`).emit('group:settings_updated', payload);
+        const members = await groupService.getGroupMembers(req.params.groupId);
+        for (const m of members) {
+          io.to(`user:${m.userId}`).emit('group:settings_updated', payload);
+        }
+      } catch {
+        /* ignore */
+      }
+      sendSuccess(res, settings, 'Đã cập nhật cài đặt nhóm');
+    } catch (error) {
+      console.error('[updateGroupSettings]', error);
+      next(error);
+    }
+  },
 };
