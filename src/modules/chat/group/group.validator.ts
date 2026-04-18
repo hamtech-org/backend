@@ -41,4 +41,11 @@ export const updateGroupSettingsSchema = z
     adminSettings: adminSettingsPatch.optional(),
     regenerateJoinLink: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (d) =>
+      d.regenerateJoinLink === true ||
+      (d.memberPermissions != null && Object.keys(d.memberPermissions).length > 0) ||
+      (d.adminSettings != null && Object.keys(d.adminSettings).length > 0),
+    { message: 'Thiếu nội dung cập nhật' },
+  );
