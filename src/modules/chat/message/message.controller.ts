@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { messageService } from './message.service.js';
+import { groupService } from '../group/group.service.js';
 import { sendSuccess, sendCreated } from '@/shared/utils/response.js';
 import { getIO } from '@/socket/index.js';
 import { broadcastMessageNew } from '../shared/chat.broadcast.js';
@@ -128,6 +129,7 @@ export const messageController = {
   pinMessage: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { conversationId, createdAt } = req.body as { conversationId: string; createdAt: string };
+      await groupService.assertUserMayPinMessage(req.user!.userId, conversationId);
       await messageService.pinMessage(req.params.messageId, conversationId, createdAt);
       try {
         getIO().to(`conv:${conversationId}`).emit('message:pin_updated', {
@@ -149,6 +151,7 @@ export const messageController = {
       const q = req.query as { conversationId?: string; createdAt?: string };
       const conversationId = (body.conversationId ?? q.conversationId) as string;
       const createdAt = (body.createdAt ?? q.createdAt) as string;
+      await groupService.assertUserMayPinMessage(req.user!.userId, conversationId);
       await messageService.unpinMessage(req.params.messageId, conversationId, createdAt);
       try {
         getIO().to(`conv:${conversationId}`).emit('message:pin_updated', {
