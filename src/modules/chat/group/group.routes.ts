@@ -7,6 +7,7 @@ import {
   addMembersSchema,
   changeRoleSchema,
   updateGroupSettingsSchema,
+  leaveGroupSchema,
 } from './group.validator';
 
 const router = Router();
@@ -26,7 +27,12 @@ router.put(
   groupController.updateGroup,
 );
 router.delete('/groups/:groupId', authenticate, groupController.deleteGroup);
-router.post('/groups/:groupId/leave', authenticate, groupController.leaveGroup);
+router.post(
+  '/groups/:groupId/leave',
+  authenticate,
+  validate(leaveGroupSchema),
+  groupController.leaveGroup,
+);
 router.post(
   '/groups/:groupId/members',
   authenticate,
