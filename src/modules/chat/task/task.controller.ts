@@ -28,7 +28,10 @@ export const taskController = {
   updateTaskStatus: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await taskService.updateTaskStatus(req.params.groupId, req.params.taskId, req.body.status);
-      getIO().to(`conv:${req.params.groupId}`).emit('group:task_updated', { taskId: req.params.taskId });
+      getIO().to(`conv:${req.params.groupId}`).emit('group:task_updated', {
+        groupId: req.params.groupId,
+        taskId: req.params.taskId,
+      });
       sendSuccess(res, null, 'Cập nhật trạng thái thành công');
     } catch (error) {
       console.error('[updateTaskStatus]', error);
@@ -39,7 +42,10 @@ export const taskController = {
   joinTask: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const task = await taskService.joinTask(req.user!.userId, req.params.groupId, req.params.taskId);
-      getIO().to(`conv:${req.params.groupId}`).emit('group:task_updated', { taskId: req.params.taskId });
+      getIO().to(`conv:${req.params.groupId}`).emit('group:task_updated', {
+        groupId: req.params.groupId,
+        taskId: req.params.taskId,
+      });
       sendSuccess(res, task, 'Đã tham gia công việc');
     } catch (error) {
       console.error('[joinTask]', error);
