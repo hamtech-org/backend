@@ -15,6 +15,14 @@ export const changeRoleSchema = z.object({
   role: z.enum(['owner', 'admin', 'member']),
 });
 
+/** POST rời nhóm — body có thể rỗng; trưởng nhóm gửi `newOwnerUserId` (client chọn trong modal). */
+export const leaveGroupSchema = z.preprocess(
+  (raw) => (raw != null && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}),
+  z.object({
+    newOwnerUserId: z.string().uuid().optional(),
+  }),
+);
+
 const memberPermissionsPatch = z
   .object({
     changeNameAvatar: z.boolean().optional(),
