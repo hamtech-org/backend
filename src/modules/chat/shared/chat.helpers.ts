@@ -1,5 +1,22 @@
-import type { IMessage, ILastMessage, IReplyToDetails } from './chat.types.js';
+import type { IMessage, ILastMessage, IReplyToDetails, IConversationMember } from './chat.types.js';
 import { userRepository } from '@/modules/user/user.repository.js';
+
+/**
+ * Thành viên đang tắt thông báo **push** (giống Zalo): tin vẫn lưu DB, socket `message:new` vẫn tới app.
+ * Chỉ dùng để **không** đưa user vào danh sách nhận Kafka / FCM.
+ * - `isMuted`: tắt đến khi bật lại (hoặc “vĩnh viễn” tùy client).
+ * - `notificationsMutedUntil`: tắt tạm đến mốc thời gian (vd 1h, 8h).
+ */
+export function isConversationNotificationPushMuted(
+  member: Pick<IConversationMember, 'isMuted' | 'notificationsMutedUntil'>,
+): boolean {
+  if (member.isMuted) return true;
+  const until = member.notificationsMutedUntil;
+  if (until == null || until === '') return false;
+  const t = new Date(until).getTime();
+  if (Number.isNaN(t)) return false;
+  return t > Date.now();
+}
 
 /** Tin không hiển thị với viewer: legacy soft-delete toàn cục hoặc user đã ẩn. */
 export function isMessageHiddenFromViewer(m: IMessage, hiddenMessageIds: Set<string>): boolean {
@@ -11,6 +28,12 @@ export async function messageToLastMessageSnapshot(m: IMessage): Promise<ILastMe
   let content = m.content ?? '';
   if (m.isRecalled) content = 'Tin nhắn đã được thu hồi';
   else if (m.isDeleted) content = 'Tin nhắn đã được xóa';
+  else if (m.type === 'file') {
+    const trimmed = content.trim();
+    const name = m.mediaOriginalName?.trim();
+    if (name) content = name;
+    else if (!trimmed || trimmed === '[File]') content = 'Tệp tin';
+  }
   const senders = await userRepository.findByIds([m.senderId]);
   const senderDisplayName = senders[0]?.displayName?.trim() ?? null;
   return {

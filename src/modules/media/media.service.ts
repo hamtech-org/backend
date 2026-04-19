@@ -2,6 +2,20 @@ import { v4 as uuidv4 } from 'uuid';
 import sharp from 'sharp';
 import { mediaRepository } from './media.repository.js';
 import type { AllowedMimeType, IMedia, IUploadResult, MediaType } from './media.types.js';
+
+/** Trích mediaId từ URL download app: `.../api/v{n}/media/{uuid}/download` (origin tùy). */
+function parseMediaIdFromAppDownloadUrl(urlStr: string): string | null {
+  const trimmed = (urlStr ?? '').trim();
+  if (!trimmed) return null;
+  try {
+    const u = /^https?:\/\//i.test(trimmed) ? new URL(trimmed) : new URL(trimmed, 'http://local.invalid');
+    const path = u.pathname.replace(/\/+$/, '');
+    const m = path.match(/\/media\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/download$/i);
+    return m?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
 import { assertValidUploadBuffer, assertValidUploadBufferAuto } from './media.validation.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
 import { env } from '@/config/env.js';
@@ -195,6 +209,32 @@ export const mediaService = {
     if (media.uploaderId !== senderId) {
       throw new ForbiddenError('Không được dùng media của người khác');
     }
+    return {
+      mediaUrl: media.url,
+      mediaType: media.mimeType,
+      mediaSize: media.size,
+      thumbnailUrl: media.thumbnailUrl,
+      originalName: media.originalName,
+    };
+  },
+
+  /**
+   * Chuyển tiếp tin: URL download của app → metadata từ bản ghi media (không kiểm tra uploader).
+   * Trả null nếu URL không đúng dạng hoặc không có media.
+   */
+  resolveMediaFromAppDownloadUrl: async (
+    mediaUrl: string,
+  ): Promise<{
+    mediaUrl: string;
+    mediaType: string;
+    mediaSize: number;
+    thumbnailUrl: string | null;
+    originalName: string;
+  } | null> => {
+    const id = parseMediaIdFromAppDownloadUrl(mediaUrl);
+    if (!id) return null;
+    const media = await mediaRepository.findById(id);
+    if (!media) return null;
     return {
       mediaUrl: media.url,
       mediaType: media.mimeType,

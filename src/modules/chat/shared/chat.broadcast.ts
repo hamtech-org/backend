@@ -26,9 +26,14 @@ export async function broadcastMessageNew(message: IMessage): Promise<void> {
     return;
   }
   const { conversationId } = message;
-  io.to(`conv:${conversationId}`).emit('message:new', message);
+  const { outboundStatus: _ob, status: _st, readBy: _rb, ...publicMessage } = message as IMessage & {
+    outboundStatus?: unknown;
+    status?: unknown;
+    readBy?: unknown;
+  };
+  io.to(`conv:${conversationId}`).emit('message:new', publicMessage);
   const members = await getConversationMembers(conversationId);
   for (const m of members) {
-    io.to(`user:${m.userId}`).emit('message:new', message);
+    io.to(`user:${m.userId}`).emit('message:new', publicMessage);
   }
 }

@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { conversationRepository } from '../conversation/conversation.repository.js';
 import { taskRepository } from './task.repository.js';
+import type { IMessage } from '../shared/chat.types.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { createAndBroadcastSystemMessage } from '../shared/system-message.factory.js';
@@ -40,7 +41,7 @@ export const taskService = {
     };
     await taskRepository.createTask(task);
 
-    // System message
+    let systemMessage: IMessage | null = null;
     try {
       let creatorName = 'Ai đó';
       try {
@@ -78,17 +79,40 @@ export const taskService = {
         createdAt: now,
       };
 
-      await createAndBroadcastSystemMessage(
+      systemMessage = await createAndBroadcastSystemMessage(
         { conversationId, senderId: requesterId, content: JSON.stringify(payload) },
         sysMsgDeps,
       );
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
 
-    return task;
+    const explicitSource =
+      typeof data.sourceMessageId === 'string' && data.sourceMessageId.trim().length > 0
+        ? data.sourceMessageId.trim()
+        : null;
+    const sourceMessageId = systemMessage?.messageId ?? explicitSource ?? null;
+    if (sourceMessageId) {
+      try {
+        await taskRepository.updateTask(conversationId, taskId, { sourceMessageId });
+      } catch {
+        /* ignore */
+      }
+    }
+
+    return sourceMessageId ? { ...task, sourceMessageId } : task;
   },
 
   getTasks: async (conversationId: string): Promise<any[]> => {
-    return taskRepository.getTasks(conversationId);
+    const rows = await taskRepository.getTasks(conversationId);
+    const creatorIds = [...new Set(rows.map((t: { creatorId?: string }) => t.creatorId).filter(Boolean))] as string[];
+    if (creatorIds.length === 0) return rows;
+    const users = await userRepository.findByIds(creatorIds);
+    const nameById = new Map(users.map((u) => [u.userId, u.displayName?.trim() || null]));
+    return rows.map((t: { creatorId?: string }) => ({
+      ...t,
+      creatorDisplayName: t.creatorId ? nameById.get(t.creatorId) ?? null : null,
+    }));
   },
 
   updateTaskStatus: async (conversationId: string, taskId: string, status: string): Promise<void> => {

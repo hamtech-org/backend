@@ -1,5 +1,5 @@
 import type { TimestampFields } from '@/shared/types/common.types.js';
-import type { MessageType, ConversationType, MemberRole } from '@/shared/types/chat.types.js';
+import type { MessageType, ConversationType, MemberRole, MessageStatus } from '@/shared/types/chat.types.js';
 
 /** Cài đặt nhóm (META conversation type group). */
 export interface IGroupMemberPermissions {
@@ -37,6 +37,20 @@ export interface IConversation extends TimestampFields {
   isDeleted?: boolean;
   /** Chỉ nhóm; đồng bộ realtime qua socket `group:settings_updated`. */
   groupSettings?: IGroupSettings;
+  /** META: số tin đang ghim trong hội thoại (đồng bộ khi ghim/bỏ ghim/thu hồi tin). */
+  pinnedMessageCount?: number;
+  /**
+   * Trường gộp từ bản ghi MEMBER# của user đang gọi API (danh sách hội thoại / preferences).
+   * Không lưu trên META.
+   */
+  unreadCount?: number;
+  /**
+   * MEMBER#: tắt thông báo push đến thời điểm (vd 1h, 8h). Client có thể dùng cùng `isMuted` hiệu lực.
+   */
+  notificationsMutedUntil?: string | null;
+  isMuted?: boolean;
+  /** Ghim hội thoại lên đầu danh sách (cá nhân, giống Zalo). */
+  isPinnedToTop?: boolean;
 }
 
 export interface ILastMessage {
@@ -56,6 +70,10 @@ export interface IConversationMember {
   lastReadAt?: string;
   unreadCount: number;
   isMuted: boolean;
+  /** Tắt push tạm đến ISO time (hết hạn vẫn nhận tin/socket, chỉ không push). */
+  notificationsMutedUntil?: string | null;
+  /** Ghim cuộc trò chuyện lên đầu (theo user). */
+  isPinnedToTop?: boolean;
   nickname?: string;
 }
 
@@ -92,6 +110,17 @@ export interface IMessage extends TimestampFields {
   isRecalled: boolean;
   isDeleted: boolean;
   reactions: Record<string, string[]>;
+  /**
+   * Chat 1-1: tiến trình nhận từ phía người nhận (sent → delivered → read).
+   * Chỉ có ý nghĩa trên tin của người gửi; không trả về cho đối phương qua API.
+   */
+  outboundStatus?: MessageStatus;
+  /** Gộp khi trả API / socket: trạng thái hiển thị với người gửi (không lưu Dynamo). */
+  status?: MessageStatus;
+  /**
+   * Chỉ trên tin của chính viewer: ai đã đọc (so `MEMBER.lastReadAt` với `createdAt` của tin).
+   */
+  readBy?: { userId: string; displayName?: string | null }[];
 }
 
 export interface ICreateConversationDto {
