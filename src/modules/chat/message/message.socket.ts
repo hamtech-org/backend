@@ -30,6 +30,11 @@ const readMessageSocketSchema = z.object({
   messageId: z.string().uuid(),
 });
 
+const deliveredAckSocketSchema = z.object({
+  conversationId: z.string().uuid(),
+  messageId: z.string().uuid(),
+});
+
 export const registerChatHandlers = (io: Server, socket: Socket): void => {
   const userId = socket.data.userId as string;
 
@@ -60,9 +65,11 @@ export const registerChatHandlers = (io: Server, socket: Socket): void => {
       const message = await messageService.sendMessage(userId, conversationId, messageData);
 
       await broadcastMessageNew(message);
-
-      // Gửi xác nhận delivered cho người gửi
-      socket.emit('message:delivered', { messageId: message.messageId, conversationId });
+      io.to(`user:${userId}`).emit('message:status', {
+        messageId: message.messageId,
+        conversationId,
+        status: 'sent',
+      });
     } catch (error) {
       logger.error('Socket message:send lỗi:', error);
       socket.emit('message:error', { error: 'Gửi tin nhắn thất bại' });
@@ -70,6 +77,25 @@ export const registerChatHandlers = (io: Server, socket: Socket): void => {
   });
 
   // ─── Typing indicator ─────────────────────────────────────────────────
+
+  socket.on('message:delivered_ack', async (data: unknown) => {
+    try {
+      const parsed = deliveredAckSocketSchema.safeParse(data);
+      if (!parsed.success) return;
+      const { conversationId, messageId } = parsed.data;
+      const member = await conversationRepository.getMember(conversationId, userId);
+      if (!member) return;
+      const result = await messageService.markOutboundDelivered(conversationId, userId, messageId);
+      if (!result) return;
+      io.to(`user:${result.senderId}`).emit('message:status', {
+        conversationId,
+        messageId,
+        status: 'delivered',
+      });
+    } catch (error) {
+      logger.error('Socket message:delivered_ack lỗi:', error);
+    }
+  });
 
   socket.on('message:typing', async (conversationId: string) => {
     let displayName: string | null = null;
@@ -97,11 +123,20 @@ export const registerChatHandlers = (io: Server, socket: Socket): void => {
 
       await messageService.markAsRead(conversationId, userId, messageId);
 
-      // Cập nhật trạng thái read cho người gửi gốc
       const members = await conversationRepository.getConversationMembers(conversationId);
       const membersExceptSelf = members.filter((m) => m.userId !== userId);
+      const conv = await conversationRepository.getConversationById(conversationId);
 
-      // Thông báo cho các thành viên khác biết tin nhắn đã được đọc
+      if (conv?.type === 'direct') {
+        membersExceptSelf.forEach((member) => {
+          io.to(`user:${member.userId}`).emit('message:status', {
+            conversationId,
+            messageId,
+            status: 'read',
+          });
+        });
+      }
+
       membersExceptSelf.forEach((member) => {
         io.to(`user:${member.userId}`).emit('message:read_ack', {
           conversationId,

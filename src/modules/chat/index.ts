@@ -5,6 +5,7 @@ import groupRoutes from './group/group.routes.js';
 import memberRequestRoutes from './member-request/member-request.routes.js';
 import pollRoutes from './poll/poll.routes.js';
 import taskRoutes from './task/task.routes.js';
+import bulletinRoutes from './bulletin/bulletin.routes.js';
 import aiRecapRoutes from './ai-recap/ai-recap.routes.js';
 
 const router = Router();
@@ -14,6 +15,7 @@ router.use(groupRoutes);
 router.use(memberRequestRoutes);
 router.use(pollRoutes);
 router.use(taskRoutes);
+router.use(bulletinRoutes);
 router.use(aiRecapRoutes);
 
 export default router;
