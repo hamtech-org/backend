@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { logger } from '@/shared/utils/logger.js';
 import { messageService } from '@/modules/chat/message/message.service.js';
 import { broadcastMessageNew } from '@/modules/chat/shared/chat.broadcast.js';
+import { conversationRepository } from '@/modules/chat/conversation/conversation.repository.js';
 import type {
   CallInitiatePayload,
   CallAcceptPayload,
@@ -11,6 +12,10 @@ import type {
   CallMissedPayload,
   CallUpgradeRequestPayload,
   CallUpgradeResponsePayload,
+  CallGroupLeavePayload,
+  CallGroupEndAllPayload,
+  CallGroupMissedPayload,
+  CallGroupVacantPayload,
 } from './call.types.js';
 
 const buildChannelName = (userA: string, userB: string): string => {
@@ -19,10 +24,101 @@ const buildChannelName = (userA: string, userB: string): string => {
   return `call_${hash}`;
 };
 
+const buildGroupChannelName = (conversationId: string): string => {
+  const hash = crypto.createHash('md5').update(conversationId).digest('hex').substring(0, 16);
+  return `grp_${hash}`;
+};
+
+/** Kênh grp_* → host, phiên (sessionId), mốc thời gian để log duration khi client gửi 0. */
+const groupCallMeta = new Map<
+  string,
+  { hostId: string; conversationId: string; sessionId: string; startedAt: number }
+>();
+
+/** Chỉ `user:*` — tránh trùng socket vừa ở `conv:` vừa ở `user:`. */
+const emitToMemberUsers = (
+  io: Server,
+  memberUserIds: string[],
+  event: string,
+  payload: unknown,
+): void => {
+  for (const uid of memberUserIds) {
+    io.to(`user:${uid}`).emit(event, payload);
+  }
+};
+
 export const registerCallHandlers = (io: Server, socket: Socket): void => {
   const userId = socket.data.userId as string;
 
-  socket.on('call:initiate', (data: CallInitiatePayload) => {
+  socket.on('call:initiate', async (data: CallInitiatePayload) => {
+    const scope = data.scope ?? 'direct';
+
+    if (scope === 'group') {
+      try {
+        const conv = await conversationRepository.getConversationById(data.conversationId);
+        if (!conv || conv.type !== 'group') {
+          logger.warn(`call:initiate group: invalid conversation ${data.conversationId}`);
+          return;
+        }
+        const members = await conversationRepository.getConversationMembers(data.conversationId);
+        if (!members.some((m) => m.userId === userId)) {
+          logger.warn(`call:initiate group: ${userId} not a member`);
+          return;
+        }
+        const channelName = buildGroupChannelName(data.conversationId);
+        const sessionId = crypto.randomUUID();
+        const startedAt = Date.now();
+        groupCallMeta.set(channelName, {
+          hostId: userId,
+          conversationId: data.conversationId,
+          sessionId,
+          startedAt,
+        });
+
+        const incomingPayload = {
+          callerId: userId,
+          callerName: socket.data.displayName ?? userId,
+          type: data.type,
+          channelName,
+          conversationId: data.conversationId,
+          scope: 'group' as const,
+          hostId: userId,
+          sessionId,
+        };
+
+        const memberIds = members.map((m) => m.userId);
+        for (const m of members) {
+          if (m.userId === userId) continue;
+          io.to(`user:${m.userId}`).emit('call:incoming', incomingPayload);
+        }
+
+        emitToMemberUsers(io, memberIds, 'call:group-active', {
+          conversationId: data.conversationId,
+          channelName,
+          type: data.type,
+          hostId: userId,
+          sessionId,
+        });
+
+        socket.emit('call:channel-ready', {
+          channelName,
+          conversationId: data.conversationId,
+          scope: 'group',
+          hostId: userId,
+          sessionId,
+        });
+        logger.info(`Call group: ${userId} -> conv=${data.conversationId} (${data.type}) channel=${channelName}`);
+      } catch (e) {
+        logger.error('call:initiate group failed:', e);
+      }
+      return;
+    }
+
+    if (!data.calleeId) {
+      logger.warn('call:initiate direct: missing calleeId');
+      return;
+    }
+
     const channelName = buildChannelName(userId, data.calleeId);
 
     io.to(`user:${data.calleeId}`).emit('call:incoming', {
@@ -31,9 +127,10 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
       type: data.type,
       channelName,
       conversationId: data.conversationId,
+      scope: 'direct',
     });
 
-    socket.emit('call:channel-ready', { channelName, conversationId: data.conversationId });
+    socket.emit('call:channel-ready', { channelName, conversationId: data.conversationId, scope: 'direct' });
     logger.info(`Call: ${userId} -> ${data.calleeId} (${data.type}) channel=${channelName}`);
   });
 
@@ -48,6 +145,16 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
   });
 
   socket.on('call:reject', async (data: CallRejectPayload) => {
+    if (data.channelName.startsWith('grp_')) {
+      io.to(`user:${data.callerId}`).emit('call:group-member-declined', {
+        declinedBy: userId,
+        channelName: data.channelName,
+        conversationId: data.conversationId,
+      });
+      logger.info(`Call group member declined: ${userId} channel=${data.channelName}`);
+      return;
+    }
+
     io.to(`user:${data.callerId}`).emit('call:rejected', {
       calleeId: userId,
       channelName: data.channelName,
@@ -55,7 +162,6 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
     });
     logger.info(`Call rejected: ${userId} on channel=${data.channelName}`);
 
-    // Log: rejected call (no duration)
     try {
       const message = await messageService.sendMessage(userId, data.conversationId, {
         type: 'call',
@@ -72,6 +178,11 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
   });
 
   socket.on('call:end', async (data: CallEndPayload) => {
+    if (data.channelName.startsWith('grp_')) {
+      logger.info(`call:end ignored for group channel (use call:group-leave / call:group-end-all): ${data.channelName}`);
+      return;
+    }
+
     io.to(`user:${data.peerId}`).emit('call:ended', {
       userId,
       channelName: data.channelName,
@@ -79,7 +190,6 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
     });
     logger.info(`Call ended by ${userId} on channel=${data.channelName}`);
 
-    // Log: completed (or custom result) with duration
     try {
       const message = await messageService.sendMessage(userId, data.conversationId, {
         type: 'call',
@@ -96,7 +206,11 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
   });
 
   socket.on('call:missed', async (data: CallMissedPayload) => {
-    // Let callee auto-close incoming modal
+    if (data.channelName.startsWith('grp_')) {
+      logger.info(`call:missed for group — use call:group-missed from host`);
+      return;
+    }
+
     io.to(`user:${data.peerId}`).emit('call:ended', {
       userId,
       channelName: data.channelName,
@@ -115,6 +229,135 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
       await broadcastMessageNew(message);
     } catch (e) {
       logger.error('Create call log (missed) failed:', e);
+    }
+  });
+
+  socket.on('call:group-missed', async (data: CallGroupMissedPayload) => {
+    const meta = groupCallMeta.get(data.channelName);
+    if (!meta || meta.hostId !== userId) {
+      logger.warn('call:group-missed denied or unknown channel');
+      return;
+    }
+    try {
+      const members = await conversationRepository.getConversationMembers(data.conversationId);
+      const ids = members.map((m) => m.userId);
+      const sessionId = meta.sessionId;
+      const endPayload = {
+        userId,
+        channelName: data.channelName,
+        conversationId: data.conversationId,
+        reason: 'timeout' as const,
+        scope: 'group' as const,
+        sessionId,
+      };
+      emitToMemberUsers(io, ids, 'call:ended', endPayload);
+      emitToMemberUsers(io, ids, 'call:group-inactive', {
+        conversationId: data.conversationId,
+        sessionId,
+      });
+      groupCallMeta.delete(data.channelName);
+
+      const message = await messageService.sendMessage(userId, data.conversationId, {
+        type: 'call',
+        content: JSON.stringify({
+          kind: 'missed',
+          callType: data.type,
+          durationSec: 0,
+          scope: 'group',
+          sessionId,
+        }),
+      });
+      await broadcastMessageNew(message);
+    } catch (e) {
+      logger.error('call:group-missed failed:', e);
+    }
+  });
+
+  socket.on('call:group-leave', async (data: CallGroupLeavePayload) => {
+    try {
+      const members = await conversationRepository.getConversationMembers(data.conversationId);
+      const ids = members.map((m) => m.userId);
+      emitToMemberUsers(io, ids, 'call:group-participant-left', {
+        userId,
+        channelName: data.channelName,
+        conversationId: data.conversationId,
+      });
+      logger.info(`call:group-leave ${userId} channel=${data.channelName}`);
+    } catch (e) {
+      logger.error('call:group-leave failed:', e);
+    }
+  });
+
+  socket.on('call:group-end-all', async (data: CallGroupEndAllPayload) => {
+    const meta = groupCallMeta.get(data.channelName);
+    if (!meta || meta.hostId !== userId) {
+      logger.warn('call:group-end-all denied');
+      return;
+    }
+    try {
+      const members = await conversationRepository.getConversationMembers(data.conversationId);
+      const ids = members.map((m) => m.userId);
+      const sessionId = meta.sessionId;
+      const rawClient = data.durationSec;
+      const clientSecs =
+        typeof rawClient === 'number' && !Number.isNaN(rawClient)
+          ? rawClient
+          : Number(rawClient) || 0;
+      const serverSecs = Math.max(0, Math.floor((Date.now() - meta.startedAt) / 1000));
+      const durationSec = Math.max(serverSecs, clientSecs);
+
+      const endPayload = {
+        userId,
+        channelName: data.channelName,
+        conversationId: data.conversationId,
+        reason: 'host-ended' as const,
+        scope: 'group' as const,
+        sessionId,
+      };
+      emitToMemberUsers(io, ids, 'call:ended', endPayload);
+      emitToMemberUsers(io, ids, 'call:group-inactive', {
+        conversationId: data.conversationId,
+        sessionId,
+      });
+      groupCallMeta.delete(data.channelName);
+
+      const message = await messageService.sendMessage(userId, data.conversationId, {
+        type: 'call',
+        content: JSON.stringify({
+          kind: 'completed',
+          callType: data.type,
+          durationSec,
+          scope: 'group',
+          sessionId,
+        }),
+      });
+      await broadcastMessageNew(message);
+    } catch (e) {
+      logger.error('call:group-end-all failed:', e);
+    }
+  });
+
+  socket.on('call:group-vacant', async (data: CallGroupVacantPayload) => {
+    const meta = groupCallMeta.get(data.channelName);
+    if (!meta || meta.conversationId !== data.conversationId) {
+      return;
+    }
+    try {
+      const members = await conversationRepository.getConversationMembers(data.conversationId);
+      if (!members.some((m) => m.userId === userId)) {
+        logger.warn('call:group-vacant: not a member');
+        return;
+      }
+      const ids = members.map((m) => m.userId);
+      const sessionId = meta.sessionId;
+      emitToMemberUsers(io, ids, 'call:group-inactive', {
+        conversationId: data.conversationId,
+        sessionId,
+      });
+      groupCallMeta.delete(data.channelName);
+      logger.info(`call:group-vacant ${data.channelName} conv=${data.conversationId}`);
+    } catch (e) {
+      logger.error('call:group-vacant failed:', e);
     }
   });
 
