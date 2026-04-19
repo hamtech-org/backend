@@ -6,10 +6,11 @@ import type {
   IAddMembersDto,
   IGroupSettings,
 } from '../shared/chat.types.js';
-import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
+import { NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { createAndBroadcastSystemMessage } from '../shared/system-message.factory.js';
 import type { MemberRole } from '@/shared/types/chat.types.js';
+import { MIN_GROUP_MEMBERS } from './group.constants.js';
 
 const sysMsgDeps = {
   createMessage: conversationRepository.createMessage,
@@ -142,31 +143,133 @@ export const groupService = {
     const conversation = await conversationRepository.getConversationById(conversationId);
     if (!conversation) throw new NotFoundError('Nhóm');
     if (conversation.type !== 'group') throw new ForbiddenError('Đây không phải nhóm chat');
-    if (conversation.creatorId !== requesterId) {
-      throw new ForbiddenError('Chỉ người tạo nhóm mới có quyền giải tán');
+    const requesterMember = await conversationRepository.getMember(conversationId, requesterId);
+    if (!requesterMember || !['owner', 'admin'].includes(requesterMember.role)) {
+      throw new ForbiddenError('Chỉ trưởng nhóm hoặc phó nhóm mới có quyền giải tán nhóm');
+    }
+
+    const members = await conversationRepository.getConversationMembers(conversationId);
+
+    try {
+      await createAndBroadcastSystemMessage(
+        {
+          conversationId,
+          senderId: requesterId,
+          content: 'Nhóm đã được giải tán',
+        },
+        sysMsgDeps,
+      );
+    } catch {
+      /* vẫn giải tán nếu tin hệ thống lỗi */
     }
 
     await conversationRepository.updateConversation(conversationId, {
-      name: `[ĐÃ GIẢI TÁN] ${conversation.name}`,
+      name: `[ĐÃ GIẢI TÁN] ${conversation.name ?? 'Nhóm'}`,
       isDeleted: true,
+      memberCount: 0,
     } as any);
+
+    await Promise.all(members.map((m) => conversationRepository.removeMember(conversationId, m.userId)));
   },
 
-  leaveGroup: async (userId: string, conversationId: string): Promise<void> => {
+  leaveGroup: async (
+    userId: string,
+    conversationId: string,
+    options?: { newOwnerUserId?: string },
+  ): Promise<{ memberCount: number }> => {
     const member = await conversationRepository.getMember(conversationId, userId);
     if (!member) throw new NotFoundError('Thành viên nhóm');
-    if (member.role === 'owner') {
-      throw new Error('Chủ nhóm không thể rời. Hãy chuyển quyền hoặc giải tán nhóm.');
-    }
-
-    await conversationRepository.removeMember(conversationId, userId);
 
     const conv = await conversationRepository.getConversationById(conversationId);
-    if (conv) {
-      await conversationRepository.updateConversation(conversationId, {
-        memberCount: Math.max(0, (conv.memberCount || 0) - 1),
-      });
+    if (!conv || conv.type !== 'group') throw new NotFoundError('Nhóm');
+
+    const allMembers = await conversationRepository.getConversationMembers(conversationId);
+    const currentCount = allMembers.length;
+    const afterLeave = currentCount - 1;
+    if (afterLeave < MIN_GROUP_MEMBERS) {
+      throw new ValidationError(
+        `Nhóm cần tối thiểu ${MIN_GROUP_MEMBERS} thành viên. Hiện có ${currentCount} người — không thể rời nhóm (mời thêm thành viên hoặc dùng giải tán nhóm).`,
+      );
     }
+
+    if (member.role !== 'owner') {
+      let leaverName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([userId]);
+        leaverName = users[0]?.displayName?.trim() || leaverName;
+      } catch {
+        /* ignore */
+      }
+      try {
+        await createAndBroadcastSystemMessage(
+          {
+            conversationId,
+            senderId: userId,
+            content: `${leaverName} đã rời nhóm`,
+          },
+          sysMsgDeps,
+        );
+      } catch {
+        /* vẫn cho rời nếu tin hệ thống lỗi */
+      }
+
+      await conversationRepository.removeMember(conversationId, userId);
+      await conversationRepository.updateConversation(conversationId, {
+        memberCount: Math.max(0, afterLeave),
+      });
+      return { memberCount: Math.max(0, afterLeave) };
+    }
+
+    const others = allMembers.filter((m) => m.userId !== userId);
+    if (others.length === 0) {
+      throw new ForbiddenError(
+        'Bạn là thành viên duy nhất trong nhóm. Hãy giải tán nhóm thay vì rời nhóm.',
+      );
+    }
+
+    const newOwnerId = options?.newOwnerUserId?.trim();
+    if (!newOwnerId) {
+      throw new ValidationError('Trưởng nhóm cần chọn thành viên nhận quyền trưởng nhóm trước khi rời nhóm.');
+    }
+    const successor = allMembers.find((m) => m.userId === newOwnerId);
+    if (!successor || successor.userId === userId) {
+      throw new ValidationError('Thành viên được chọn không hợp lệ hoặc không thuộc nhóm.');
+    }
+
+    const newMemberCount = Math.max(0, afterLeave);
+
+    await conversationRepository.updateMemberRole(conversationId, successor.userId, 'owner');
+    await conversationRepository.updateConversation(conversationId, {
+      creatorId: successor.userId,
+      memberCount: newMemberCount,
+    });
+    await conversationRepository.removeMember(conversationId, userId);
+
+    try {
+      let leaverName = 'Ai đó';
+      let successorName = successor.userId;
+      try {
+        const users = await userRepository.findByIds([userId, successor.userId]);
+        const byId = new Map(users.map((u) => [u.userId, u]));
+        leaverName = byId.get(userId)?.displayName ?? leaverName;
+        successorName = byId.get(successor.userId)?.displayName ?? successorName;
+      } catch {
+        /* ignore */
+      }
+
+      await createAndBroadcastSystemMessage(
+        {
+          conversationId,
+          senderId: userId,
+          content: `${leaverName} đã rời nhóm. ${successorName} là trưởng nhóm mới.`,
+        },
+        sysMsgDeps,
+      );
+    } catch {
+      /* ignore system message errors */
+    }
+
+    return { memberCount: newMemberCount };
   },
 
   addMembers: async (
@@ -233,7 +336,7 @@ export const groupService = {
     requesterId: string,
     conversationId: string,
     targetUserId: string,
-  ): Promise<void> => {
+  ): Promise<{ memberCount: number }> => {
     const requester = await conversationRepository.getMember(conversationId, requesterId);
     if (!requester || !['owner', 'admin'].includes(requester.role)) {
       throw new ForbiddenError('Chỉ Admin/Owner mới có quyền xóa thành viên');
@@ -243,14 +346,19 @@ export const groupService = {
     if (!target) throw new NotFoundError('Thành viên');
     if (target.role === 'owner') throw new ForbiddenError('Không thể xóa chủ nhóm');
 
+    const allMembers = await conversationRepository.getConversationMembers(conversationId);
+    if (allMembers.length <= MIN_GROUP_MEMBERS) {
+      throw new ValidationError(
+        `Nhóm cần tối thiểu ${MIN_GROUP_MEMBERS} thành viên — không thể mời thành viên ra khi nhóm chỉ còn ${allMembers.length} người.`,
+      );
+    }
+
     await conversationRepository.removeMember(conversationId, targetUserId);
 
-    const conv = await conversationRepository.getConversationById(conversationId);
-    if (conv) {
-      await conversationRepository.updateConversation(conversationId, {
-        memberCount: Math.max(0, (conv.memberCount || 0) - 1),
-      });
-    }
+    const memberCount = Math.max(0, allMembers.length - 1);
+    await conversationRepository.updateConversation(conversationId, {
+      memberCount,
+    });
 
     // System message: ai đã mời ai ra khỏi nhóm
     try {
@@ -270,6 +378,8 @@ export const groupService = {
     } catch {
       // ignore system message errors
     }
+
+    return { memberCount };
   },
 
   changeMemberRole: async (
