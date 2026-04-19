@@ -29,4 +29,18 @@ export const conversationController = {
       next(error);
     }
   },
+
+  patchPreferences: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await conversationService.updateMyConversationPreferences(req.user!.userId, req.params.conversationId, {
+        isMuted: req.body?.isMuted,
+        isPinnedToTop: req.body?.isPinnedToTop,
+        notificationsMutedUntil: req.body?.notificationsMutedUntil,
+        muteFor: req.body?.muteFor,
+      });
+      sendSuccess(res, null);
+    } catch (error) {
+      next(error);
+    }
+  },
 };
