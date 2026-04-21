@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { memberRequestService } from './member-request.service.js';
 import { sendSuccess } from '@/shared/utils/response.js';
 import { getIO } from '@/socket/index.js';
+import { emitToConversationAndMembers } from '../shared/chat.broadcast.js';
 import { groupService } from '../group/group.service.js';
 
 export const memberRequestController = {
@@ -9,8 +10,12 @@ export const memberRequestController = {
     try {
       await memberRequestService.joinRequest(req.user!.userId, req.params.groupId);
       try {
-        getIO().to(`conv:${req.params.groupId}`).emit('group:join_request_new', { groupId: req.params.groupId });
-      } catch { /* ignore */ }
+        await emitToConversationAndMembers(req.params.groupId, 'group:join_request_new', {
+          groupId: req.params.groupId,
+        });
+      } catch {
+        /* ignore */
+      }
       sendSuccess(res, null, 'Đã gửi yêu cầu tham gia');
     } catch (error) {
       console.error('[joinRequest]', error);
@@ -64,7 +69,9 @@ export const memberRequestController = {
       await memberRequestService.rejectRequest(req.params.groupId, req.user!.userId, req.params.userId);
       try {
         getIO().to(`user:${req.params.userId}`).emit('group:request_rejected', { groupId: req.params.groupId });
-        getIO().to(`conv:${req.params.groupId}`).emit('group:join_request_updated', { groupId: req.params.groupId });
+        await emitToConversationAndMembers(req.params.groupId, 'group:join_request_updated', {
+          groupId: req.params.groupId,
+        });
       } catch { /* ignore */ }
       sendSuccess(res, null, 'Đã từ chối yêu cầu');
     } catch (error) {
