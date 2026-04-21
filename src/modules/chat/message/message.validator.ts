@@ -21,20 +21,23 @@ export const sendMessageSchema = z
     { message: 'Tin có media cần mediaUrl hoặc mediaId', path: ['mediaId'] },
   );
 
+/** ISO từ Dynamo/client — không dùng `.datetime()` nghiêm để tránh 400 khi format hơi lệch; server resolve tin theo `messageId` + fallback query. */
+const createdAtBodySchema = z.string().min(1).max(128);
+
 export const editMessageSchema = z.object({
   content: z.string().min(1).max(10000),
   conversationId: conversationIdBodySchema,
-  createdAt: z.string().datetime(),
+  createdAt: createdAtBodySchema,
 });
 
 export const deleteMessageSchema = z.object({
   conversationId: conversationIdBodySchema,
-  createdAt: z.string().datetime(),
+  createdAt: createdAtBodySchema,
 });
 
 export const recallMessageSchema = z.object({
   conversationId: conversationIdBodySchema,
-  createdAt: z.string().datetime(),
+  createdAt: createdAtBodySchema,
 });
 
 export const markAsReadSchema = z.object({
@@ -43,6 +46,6 @@ export const markAsReadSchema = z.object({
 
 export const reactMessageSchema = z.object({
   conversationId: conversationIdBodySchema,
-  createdAt: z.string().datetime(),
+  createdAt: createdAtBodySchema,
   emoji: z.string().min(1).max(20),
 });

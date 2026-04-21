@@ -17,6 +17,22 @@ import {
   isConversationNotificationPushMuted,
 } from '../shared/chat.helpers.js';
 
+/**
+ * Lấy tin theo PK+SK (nhanh) hoặc Query theo messageId — client có thể gửi `createdAt` hơi lệch
+ * so với chuỗi lưu trong SK Dynamo (millis / Z / parse JSON), khiến Get trả null.
+ */
+async function getMessageForMutation(
+  conversationId: string,
+  messageId: string,
+  createdAt: string,
+): Promise<IMessage> {
+  const byKey = await conversationRepository.getMessageById(conversationId, messageId, createdAt);
+  if (byKey) return byKey;
+  const byId = await conversationRepository.findMessageByMessageId(conversationId, messageId);
+  if (!byId) throw new NotFoundError('Tin nhắn');
+  return byId;
+}
+
 function attachPublicMessageStatus(
   conv: IConversation | null,
   viewerUserId: string,
@@ -447,8 +463,7 @@ export const messageService = {
     conversationId: string,
     createdAt: string,
   ): Promise<void> => {
-    const message = await conversationRepository.getMessageById(conversationId, messageId, createdAt);
-    if (!message) throw new NotFoundError('Tin nhắn');
+    const message = await getMessageForMutation(conversationId, messageId, createdAt);
     if (message.senderId !== senderId) throw new ForbiddenError('Chỉ người gửi mới được chỉnh sửa');
     if (message.type !== 'text') {
       throw new ForbiddenError('Chỉ có thể sửa tin nhắn dạng chữ');
@@ -475,8 +490,7 @@ export const messageService = {
     conversationId: string,
     createdAt: string,
   ): Promise<void> => {
-    const message = await conversationRepository.getMessageById(conversationId, messageId, createdAt);
-    if (!message) throw new NotFoundError('Tin nhắn');
+    await getMessageForMutation(conversationId, messageId, createdAt);
     const member = await conversationRepository.getMember(conversationId, userId);
     if (!member) throw new ForbiddenError('Bạn không phải thành viên của hội thoại này');
 
@@ -492,8 +506,7 @@ export const messageService = {
     conversationId: string,
     createdAt: string,
   ): Promise<void> => {
-    const message = await conversationRepository.getMessageById(conversationId, messageId, createdAt);
-    if (!message) throw new NotFoundError('Tin nhắn');
+    const message = await getMessageForMutation(conversationId, messageId, createdAt);
     if (message.senderId !== senderId) throw new ForbiddenError('Chỉ người gửi mới được thu hồi');
 
     const wasPinned = message.isPinned;
@@ -556,8 +569,7 @@ export const messageService = {
     conversationId: string,
     createdAt: string,
   ): Promise<void> => {
-    const message = await conversationRepository.getMessageById(conversationId, messageId, createdAt);
-    if (!message) throw new NotFoundError('Tin nhắn');
+    const message = await getMessageForMutation(conversationId, messageId, createdAt);
     if (message.isPinned) return;
 
     const convMeta = await conversationRepository.getConversationById(conversationId);
@@ -569,7 +581,7 @@ export const messageService = {
       );
     }
 
-    const sortKey = `MSG#${createdAt}#${messageId}`;
+    const sortKey = `MSG#${message.createdAt}#${messageId}`;
     await conversationRepository.updateMessage(conversationId, messageId, sortKey, {
       isPinned: true,
     });
@@ -581,11 +593,10 @@ export const messageService = {
     conversationId: string,
     createdAt: string,
   ): Promise<void> => {
-    const message = await conversationRepository.getMessageById(conversationId, messageId, createdAt);
-    if (!message) throw new NotFoundError('Tin nhắn');
+    const message = await getMessageForMutation(conversationId, messageId, createdAt);
     if (!message.isPinned) return;
 
-    const sortKey = `MSG#${createdAt}#${messageId}`;
+    const sortKey = `MSG#${message.createdAt}#${messageId}`;
     await conversationRepository.updateMessage(conversationId, messageId, sortKey, {
       isPinned: false,
     });
@@ -602,8 +613,7 @@ export const messageService = {
     createdAt: string,
     emoji: string,
   ): Promise<Record<string, string[]>> => {
-    const message = await conversationRepository.getMessageById(conversationId, messageId, createdAt);
-    if (!message) throw new NotFoundError('Tin nhắn');
+    const message = await getMessageForMutation(conversationId, messageId, createdAt);
 
     const reactions = { ...(message.reactions || {}) };
     let usersWithThisEmoji = reactions[emoji] || [];

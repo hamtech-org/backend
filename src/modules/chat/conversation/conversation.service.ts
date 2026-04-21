@@ -129,6 +129,7 @@ export const conversationService = {
       conversationId,
       type: data.type,
       ...(data.name != null && data.name !== '' ? { name: data.name } : {}),
+      ...(data.avatar != null && data.avatar.trim() !== '' ? { avatar: data.avatar.trim() } : {}),
       creatorId,
       memberCount: allMemberIds.length,
       isEncrypted: false,

@@ -37,3 +37,39 @@ export async function broadcastMessageNew(message: IMessage): Promise<void> {
     io.to(`user:${m.userId}`).emit('message:new', publicMessage);
   }
 }
+
+/**
+ * Phát một hoặc nhiều sự kiện tới `conv:` và tới `user:` của mọi thành viên
+ * (cùng mô hình `message:new` — vẫn nhận realtime khi client không join room hội thoại).
+ */
+export async function emitEventsToConversationAndMembers(
+  conversationId: string,
+  emissions: readonly { event: string; payload: unknown }[],
+): Promise<void> {
+  if (emissions.length === 0) return;
+  let io: ReturnType<typeof getIO>;
+  try {
+    io = getIO();
+  } catch {
+    return;
+  }
+  const room = `conv:${conversationId}`;
+  for (const { event, payload } of emissions) {
+    io.to(room).emit(event, payload);
+  }
+  const members = await getConversationMembers(conversationId);
+  for (const m of members) {
+    const userRoom = `user:${m.userId}`;
+    for (const { event, payload } of emissions) {
+      io.to(userRoom).emit(event, payload);
+    }
+  }
+}
+
+export async function emitToConversationAndMembers(
+  conversationId: string,
+  event: string,
+  payload: unknown,
+): Promise<void> {
+  await emitEventsToConversationAndMembers(conversationId, [{ event, payload }]);
+}

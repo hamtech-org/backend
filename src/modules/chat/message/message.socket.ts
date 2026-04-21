@@ -2,7 +2,7 @@ import { Server, Socket } from 'socket.io';
 import { z } from 'zod';
 import { messageService } from './message.service.js';
 import { conversationRepository } from '../conversation/conversation.repository.js';
-import { broadcastMessageNew } from '../shared/chat.broadcast.js';
+import { broadcastMessageNew, emitEventsToConversationAndMembers } from '../shared/chat.broadcast.js';
 import { logger } from '@/shared/utils/logger.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 
@@ -154,11 +154,19 @@ export const registerChatHandlers = (io: Server, socket: Socket): void => {
   socket.on('message:recall', async (data: { messageId: string; conversationId: string; createdAt: string }) => {
     try {
       await messageService.recallMessage(data.messageId, userId, data.conversationId, data.createdAt);
-      // Phát sự kiện thu hồi đến room
-      io.to(`conv:${data.conversationId}`).emit('message:recall', {
-        messageId: data.messageId,
-        conversationId: data.conversationId,
-      });
+      const recallPayload = { messageId: data.messageId, conversationId: data.conversationId };
+      await emitEventsToConversationAndMembers(data.conversationId, [
+        { event: 'message:recall', payload: recallPayload },
+        { event: 'message:recalled', payload: recallPayload },
+        {
+          event: 'message:pin_updated',
+          payload: {
+            messageId: data.messageId,
+            conversationId: data.conversationId,
+            isPinned: false,
+          },
+        },
+      ]);
     } catch (error) {
       logger.error('Socket message:recall lỗi:', error);
       socket.emit('message:error', { error: 'Thu hồi tin nhắn thất bại' });

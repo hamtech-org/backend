@@ -3,7 +3,7 @@ import { messageService } from './message.service.js';
 import { groupService } from '../group/group.service.js';
 import { sendSuccess, sendCreated } from '@/shared/utils/response.js';
 import { getIO } from '@/socket/index.js';
-import { broadcastMessageNew } from '../shared/chat.broadcast.js';
+import { broadcastMessageNew, emitEventsToConversationAndMembers, emitToConversationAndMembers } from '../shared/chat.broadcast.js';
 
 export const messageController = {
   getMessages: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -105,7 +105,7 @@ export const messageController = {
         createdAt,
       );
       try {
-        getIO().to(`conv:${conversationId}`).emit('message:edited', {
+        await emitToConversationAndMembers(conversationId, 'message:edited', {
           messageId: req.params.messageId,
           conversationId,
           content,
@@ -150,15 +150,22 @@ export const messageController = {
         createdAt,
       );
       try {
-        getIO().to(`conv:${conversationId}`).emit('message:recall', {
+        const recallPayload = {
           messageId: req.params.messageId,
           conversationId,
-        });
-        getIO().to(`conv:${conversationId}`).emit('message:pin_updated', {
-          messageId: req.params.messageId,
-          conversationId,
-          isPinned: false,
-        });
+        };
+        await emitEventsToConversationAndMembers(conversationId, [
+          { event: 'message:recall', payload: recallPayload },
+          { event: 'message:recalled', payload: recallPayload },
+          {
+            event: 'message:pin_updated',
+            payload: {
+              messageId: req.params.messageId,
+              conversationId,
+              isPinned: false,
+            },
+          },
+        ]);
       } catch { /* socket chưa khởi tạo */ }
       sendSuccess(res, null, 'Thu hồi thành công');
     } catch (error) {
@@ -184,7 +191,7 @@ export const messageController = {
       await groupService.assertUserMayPinMessage(req.user!.userId, conversationId);
       await messageService.pinMessage(req.params.messageId, conversationId, createdAt);
       try {
-        getIO().to(`conv:${conversationId}`).emit('message:pin_updated', {
+        await emitToConversationAndMembers(conversationId, 'message:pin_updated', {
           messageId: req.params.messageId,
           conversationId,
           isPinned: true,
@@ -206,7 +213,7 @@ export const messageController = {
       await groupService.assertUserMayPinMessage(req.user!.userId, conversationId);
       await messageService.unpinMessage(req.params.messageId, conversationId, createdAt);
       try {
-        getIO().to(`conv:${conversationId}`).emit('message:pin_updated', {
+        await emitToConversationAndMembers(conversationId, 'message:pin_updated', {
           messageId: req.params.messageId,
           conversationId,
           isPinned: false,
@@ -224,11 +231,15 @@ export const messageController = {
       const { conversationId, createdAt, emoji } = req.body as { conversationId: string; createdAt: string; emoji: string };
       const reactions = await messageService.reactToMessage(req.params.messageId, req.user!.userId, conversationId, createdAt, emoji);
       try {
-        getIO().to(`conv:${conversationId}`).emit('message:reacted', {
+        const reactionPayload = {
           messageId: req.params.messageId,
           conversationId,
           reactions,
-        });
+        };
+        await emitEventsToConversationAndMembers(conversationId, [
+          { event: 'message:reacted', payload: reactionPayload },
+          { event: 'message:reaction', payload: reactionPayload },
+        ]);
       } catch { /* socket chưa khởi tạo */ }
       sendSuccess(res, reactions, 'Đã thả cảm xúc');
     } catch (error) {
