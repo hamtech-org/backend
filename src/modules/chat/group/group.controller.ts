@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { groupService } from './group.service.js';
 import { sendSuccess } from '@/shared/utils/response.js';
 import { getIO } from '@/socket/index.js';
+import { emitToConversationAndMembers } from '../shared/chat.broadcast.js';
 
 export const groupController = {
   getGroupMembers: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -99,11 +100,13 @@ export const groupController = {
     try {
       await groupService.addMembers(req.user!.userId, req.params.groupId, req.body);
       try {
-        getIO().to(`conv:${req.params.groupId}`).emit('group:join_request_new', {
+        await emitToConversationAndMembers(req.params.groupId, 'group:join_request_new', {
           groupId: req.params.groupId,
           memberIds: req.body.memberIds,
         });
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       sendSuccess(res, null, 'Đã gửi lời mời vào nhóm');
     } catch (error) {
       console.error('[addMembers]', error);
@@ -141,12 +144,21 @@ export const groupController = {
     try {
       await groupService.changeMemberRole(req.user!.userId, req.params.groupId, req.params.userId, req.body.role);
       try {
-        getIO().to(`conv:${req.params.groupId}`).emit('group:role_changed', {
+        const rolePayload = {
           groupId: req.params.groupId,
+          conversationId: req.params.groupId,
           userId: req.params.userId,
           role: req.body.role,
-        });
-      } catch { /* ignore */ }
+        };
+        const io = getIO();
+        io.to(`conv:${req.params.groupId}`).emit('group:role_changed', rolePayload);
+        const members = await groupService.getGroupMembers(req.params.groupId);
+        for (const m of members) {
+          io.to(`user:${m.userId}`).emit('group:role_changed', rolePayload);
+        }
+      } catch {
+        /* ignore */
+      }
       sendSuccess(res, null, 'Thay đổi quyền thành công');
     } catch (error) {
       console.error('[changeMemberRole]', error);
