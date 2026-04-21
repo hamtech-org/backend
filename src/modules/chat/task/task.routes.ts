@@ -6,6 +6,8 @@ const router = Router();
 
 router.get('/groups/:groupId/tasks', authenticate, taskController.getTasks);
 router.post('/groups/:groupId/tasks', authenticate, taskController.createTask);
+router.patch('/groups/:groupId/tasks/:taskId', authenticate, taskController.patchTask);
+router.delete('/groups/:groupId/tasks/:taskId', authenticate, taskController.deleteTask);
 router.put('/groups/:groupId/tasks/:taskId', authenticate, taskController.updateTaskStatus);
 router.post('/groups/:groupId/tasks/:taskId/join', authenticate, taskController.joinTask);
 
