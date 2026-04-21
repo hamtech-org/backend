@@ -14,7 +14,7 @@ export const updateConversationPreferencesSchema = z
     /** ISO-8601; `null` = xóa hẹn tắt tạm. */
     notificationsMutedUntil: z.union([z.string().datetime(), z.null()]).optional(),
     /** Tắt push tạm (không bật `isMuted` trừ khi client gửi kèm). */
-    muteFor: z.enum(['1h', '4h', '8h']).optional(),
+    muteFor: z.enum(['1m', '5m', '10m']).optional(),
   })
   .refine(
     (b) =>
