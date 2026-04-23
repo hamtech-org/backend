@@ -1,13 +1,21 @@
 import { Request, Response, NextFunction } from 'express';
 import { taskService } from './task.service.js';
 import { sendSuccess, sendCreated } from '@/shared/utils/response.js';
-import { getIO } from '@/socket/index.js';
+import { emitToConversationAndMembers } from '../shared/chat.broadcast.js';
 
 export const taskController = {
   createTask: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const task = await taskService.createTask(req.user!.userId, req.params.groupId, req.body);
-      getIO().to(`conv:${req.params.groupId}`).emit('group:task_new', { groupId: req.params.groupId, taskId: task.taskId });
+      try {
+        await emitToConversationAndMembers(req.params.groupId, 'group:task_new', {
+          groupId: req.params.groupId,
+          taskId: task.taskId,
+          title: String((task as { title?: string })?.title ?? ''),
+        });
+      } catch {
+        /* ignore socket */
+      }
       sendCreated(res, task, 'Đã tạo công việc');
     } catch (error) {
       console.error('[createTask]', error);
@@ -27,8 +35,20 @@ export const taskController = {
 
   updateTaskStatus: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      await taskService.updateTaskStatus(req.params.groupId, req.params.taskId, req.body.status);
-      getIO().to(`conv:${req.params.groupId}`).emit('group:task_updated', { taskId: req.params.taskId });
+      const { title } = await taskService.updateTaskStatus(
+        req.params.groupId,
+        req.params.taskId,
+        req.body.status,
+      );
+      try {
+        await emitToConversationAndMembers(req.params.groupId, 'group:task_updated', {
+          groupId: req.params.groupId,
+          taskId: req.params.taskId,
+          title,
+        });
+      } catch {
+        /* ignore socket */
+      }
       sendSuccess(res, null, 'Cập nhật trạng thái thành công');
     } catch (error) {
       console.error('[updateTaskStatus]', error);
@@ -39,10 +59,60 @@ export const taskController = {
   joinTask: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const task = await taskService.joinTask(req.user!.userId, req.params.groupId, req.params.taskId);
-      getIO().to(`conv:${req.params.groupId}`).emit('group:task_updated', { taskId: req.params.taskId });
+      try {
+        await emitToConversationAndMembers(req.params.groupId, 'group:task_updated', {
+          groupId: req.params.groupId,
+          taskId: req.params.taskId,
+          title: String((task as { title?: string })?.title ?? ''),
+        });
+      } catch {
+        /* ignore socket */
+      }
       sendSuccess(res, task, 'Đã tham gia công việc');
     } catch (error) {
       console.error('[joinTask]', error);
+      next(error);
+    }
+  },
+
+  patchTask: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const task = await taskService.patchTaskByCreator(req.user!.userId, req.params.groupId, req.params.taskId, req.body);
+      try {
+        await emitToConversationAndMembers(req.params.groupId, 'group:task_updated', {
+          groupId: req.params.groupId,
+          taskId: req.params.taskId,
+          title: String((task as { title?: string })?.title ?? ''),
+        });
+      } catch {
+        /* ignore socket */
+      }
+      sendSuccess(res, task, 'Đã cập nhật công việc');
+    } catch (error) {
+      console.error('[patchTask]', error);
+      next(error);
+    }
+  },
+
+  deleteTask: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { deletedTitle } = await taskService.deleteTaskByCreator(
+        req.user!.userId,
+        req.params.groupId,
+        req.params.taskId,
+      );
+      try {
+        await emitToConversationAndMembers(req.params.groupId, 'group:task_deleted', {
+          groupId: req.params.groupId,
+          taskId: req.params.taskId,
+          title: deletedTitle,
+        });
+      } catch {
+        /* ignore socket */
+      }
+      sendSuccess(res, null, 'Đã hủy công việc');
+    } catch (error) {
+      console.error('[deleteTask]', error);
       next(error);
     }
   },

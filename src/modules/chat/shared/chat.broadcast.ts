@@ -26,9 +26,50 @@ export async function broadcastMessageNew(message: IMessage): Promise<void> {
     return;
   }
   const { conversationId } = message;
-  io.to(`conv:${conversationId}`).emit('message:new', message);
+  const { outboundStatus: _ob, status: _st, readBy: _rb, ...publicMessage } = message as IMessage & {
+    outboundStatus?: unknown;
+    status?: unknown;
+    readBy?: unknown;
+  };
+  io.to(`conv:${conversationId}`).emit('message:new', publicMessage);
   const members = await getConversationMembers(conversationId);
   for (const m of members) {
-    io.to(`user:${m.userId}`).emit('message:new', message);
+    io.to(`user:${m.userId}`).emit('message:new', publicMessage);
   }
+}
+
+/**
+ * Phát một hoặc nhiều sự kiện tới `conv:` và tới `user:` của mọi thành viên
+ * (cùng mô hình `message:new` — vẫn nhận realtime khi client không join room hội thoại).
+ */
+export async function emitEventsToConversationAndMembers(
+  conversationId: string,
+  emissions: readonly { event: string; payload: unknown }[],
+): Promise<void> {
+  if (emissions.length === 0) return;
+  let io: ReturnType<typeof getIO>;
+  try {
+    io = getIO();
+  } catch {
+    return;
+  }
+  const room = `conv:${conversationId}`;
+  for (const { event, payload } of emissions) {
+    io.to(room).emit(event, payload);
+  }
+  const members = await getConversationMembers(conversationId);
+  for (const m of members) {
+    const userRoom = `user:${m.userId}`;
+    for (const { event, payload } of emissions) {
+      io.to(userRoom).emit(event, payload);
+    }
+  }
+}
+
+export async function emitToConversationAndMembers(
+  conversationId: string,
+  event: string,
+  payload: unknown,
+): Promise<void> {
+  await emitEventsToConversationAndMembers(conversationId, [{ event, payload }]);
 }

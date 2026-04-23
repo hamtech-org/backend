@@ -13,8 +13,10 @@ import {
 
 const router = Router();
 
-// Messages trong conversation
+// Messages trong conversation (browse phải khai báo trước path /messages tĩnh)
+router.get('/conversations/:conversationId/messages/browse', authenticate, messageController.browseMessages);
 router.get('/conversations/:conversationId/messages', authenticate, messageController.getMessages);
+router.get('/conversations/:conversationId/gallery', authenticate, messageController.getMessageGallery);
 router.post('/conversations/:conversationId/messages', authenticate, validate(sendMessageSchema), messageController.sendMessage);
 router.post('/conversations/:conversationId/read', authenticate, validate(markAsReadSchema), messageController.markAsRead);
 

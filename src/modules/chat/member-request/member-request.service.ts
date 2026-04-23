@@ -59,7 +59,7 @@ export const memberRequestService = {
     conversationId: string,
     requesterId: string,
     targetUserId: string,
-  ): Promise<void> => {
+  ): Promise<{ memberCount: number }> => {
     const member = await conversationRepository.getMember(conversationId, requesterId);
     if (!member || !['owner', 'admin'].includes(member.role)) {
       throw new ForbiddenError('Chỉ Admin/Owner mới có quyền duyệt');
@@ -68,7 +68,8 @@ export const memberRequestService = {
     const exists = await conversationRepository.getMember(conversationId, targetUserId);
     if (exists) {
       await memberRequestRepository.removeGroupRequest(conversationId, targetUserId);
-      return;
+      const members = await conversationRepository.getConversationMembers(conversationId);
+      return { memberCount: members.length };
     }
 
     const now = new Date().toISOString();
@@ -79,14 +80,14 @@ export const memberRequestService = {
       joinedAt: now,
       unreadCount: 0,
       isMuted: false,
+      isPinnedToTop: false,
     });
 
-    const conv = await conversationRepository.getConversationById(conversationId);
-    if (conv) {
-      await conversationRepository.updateConversation(conversationId, {
-        memberCount: (conv.memberCount || 0) + 1,
-      });
-    }
+    const members = await conversationRepository.getConversationMembers(conversationId);
+    const memberCount = members.length;
+    await conversationRepository.updateConversation(conversationId, {
+      memberCount,
+    });
 
     await memberRequestRepository.removeGroupRequest(conversationId, targetUserId);
 
@@ -103,6 +104,8 @@ export const memberRequestService = {
         sysMsgDeps,
       );
     } catch { /* ignore */ }
+
+    return { memberCount };
   },
 
   rejectRequest: async (

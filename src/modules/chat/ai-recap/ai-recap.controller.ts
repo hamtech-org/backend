@@ -1,15 +1,20 @@
 import { Request, Response, NextFunction } from 'express';
 import { aiRecapService } from './ai-recap.service.js';
 import { sendSuccess } from '@/shared/utils/response.js';
-import { getIO } from '@/socket/index.js';
+import { emitToConversationAndMembers } from '../shared/chat.broadcast.js';
 
 export const aiRecapController = {
   generateAIRecap: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const summary = await aiRecapService.generateRecap(req.params.groupId);
       try {
-        getIO().to(`conv:${req.params.groupId}`).emit('group:recap_new', { groupId: req.params.groupId, summary });
-      } catch { /* ignore */ }
+        await emitToConversationAndMembers(req.params.groupId, 'group:recap_new', {
+          groupId: req.params.groupId,
+          summary,
+        });
+      } catch {
+        /* ignore */
+      }
       sendSuccess(res, summary, 'Tóm tắt thành công');
     } catch (error) {
       console.error('[generateAIRecap]', error);

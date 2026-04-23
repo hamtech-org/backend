@@ -34,7 +34,7 @@ export const pollService = {
     };
     await pollRepository.createPoll(poll);
 
-    // System message: thông báo tạo bình chọn
+    let systemMessage: IMessage | null = null;
     try {
       let creatorName = 'Ai đó';
       try {
@@ -49,17 +49,40 @@ export const pollService = {
         createdAt: now,
       };
 
-      return await createAndBroadcastSystemMessage(
+      systemMessage = await createAndBroadcastSystemMessage(
         { conversationId, senderId: requesterId, content: JSON.stringify(payload) },
         sysMsgDeps,
       );
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
 
-    return null;
+    const explicitSource =
+      typeof data.sourceMessageId === 'string' && data.sourceMessageId.trim().length > 0
+        ? data.sourceMessageId.trim()
+        : null;
+    const sourceMessageId = systemMessage?.messageId ?? explicitSource ?? null;
+    if (sourceMessageId) {
+      try {
+        await pollRepository.updatePoll(conversationId, pollId, { sourceMessageId });
+      } catch {
+        /* ignore */
+      }
+    }
+
+    return systemMessage;
   },
 
   getPolls: async (conversationId: string): Promise<any[]> => {
-    return pollRepository.getPolls(conversationId);
+    const rows = await pollRepository.getPolls(conversationId);
+    const creatorIds = [...new Set(rows.map((p: { creatorId?: string }) => p.creatorId).filter(Boolean))] as string[];
+    if (creatorIds.length === 0) return rows;
+    const users = await userRepository.findByIds(creatorIds);
+    const nameById = new Map(users.map((u) => [u.userId, u.displayName?.trim() || null]));
+    return rows.map((p: { creatorId?: string }) => ({
+      ...p,
+      creatorDisplayName: p.creatorId ? nameById.get(p.creatorId) ?? null : null,
+    }));
   },
 
   votePoll: async (

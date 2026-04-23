@@ -8,9 +8,18 @@ import type {
   ICreateConversationDto,
 } from '../shared/chat.types.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
+import { MAX_PINNED_CHATS_TO_TOP } from '../shared/chat.constants.js';
 import { userRepository } from '@/modules/user/user.repository.js';
-import { resolveLastVisibleLastMessageSnapshot } from '../shared/chat.helpers.js';
+import {
+  resolveLastVisibleLastMessageSnapshot,
+  isConversationNotificationPushMuted,
+} from '../shared/chat.helpers.js';
 import { createAndBroadcastSystemMessage } from '../shared/system-message.factory.js';
+
+/** Nhóm đã giải tán không hiển thị trong danh sách hội thoại (kể cả khi còn sót bản ghi MEMBER#). */
+function filterDisbandedGroupsFromList(conversations: IConversation[]): IConversation[] {
+  return conversations.filter((c) => !(c.type === 'group' && c.isDeleted === true));
+}
 
 export const conversationService = {
   getConversations: async (userId: string): Promise<IConversation[]> => {
@@ -31,12 +40,37 @@ export const conversationService = {
       else delete conv.lastMessage;
     }
 
+    /** Dữ liệu cũ có thể > giới hạn; giữ tối đa MAX theo hoạt động gần nhất, ghi DB và chỉnh bản trả về. */
+    const pinnedRows = conversations.filter((c) => c.isPinnedToTop);
+    if (pinnedRows.length > MAX_PINNED_CHATS_TO_TOP) {
+      const sorted = [...pinnedRows].sort((a, b) => {
+        const ta = a.lastMessageAt ?? a.updatedAt ?? '';
+        const tb = b.lastMessageAt ?? b.updatedAt ?? '';
+        if (tb !== ta) return tb.localeCompare(ta);
+        return b.conversationId.localeCompare(a.conversationId);
+      });
+      const keepIds = new Set(
+        sorted.slice(0, MAX_PINNED_CHATS_TO_TOP).map((c) => c.conversationId),
+      );
+      const toDemote = sorted.filter((c) => !keepIds.has(c.conversationId));
+      await Promise.all(
+        toDemote.map((c) =>
+          conversationRepository.updateMemberPreferences(c.conversationId, userId, {
+            isPinnedToTop: false,
+          }),
+        ),
+      );
+      for (const c of conversations) {
+        if (c.isPinnedToTop && !keepIds.has(c.conversationId)) c.isPinnedToTop = false;
+      }
+    }
+
     const directConversations = conversations.filter(
       (conversation) => conversation.type === 'direct',
     );
 
     if (directConversations.length === 0) {
-      return conversations;
+      return filterDisbandedGroupsFromList(conversations);
     }
 
     const membersPerConversation = await Promise.all(
@@ -68,7 +102,7 @@ export const conversationService = {
       (conversation as IConversation & { otherUserId?: string }).otherUserId = otherMember.userId;
     });
 
-    return conversations;
+    return filterDisbandedGroupsFromList(conversations);
   },
 
   /**
@@ -95,6 +129,7 @@ export const conversationService = {
       conversationId,
       type: data.type,
       ...(data.name != null && data.name !== '' ? { name: data.name } : {}),
+      ...(data.avatar != null && data.avatar.trim() !== '' ? { avatar: data.avatar.trim() } : {}),
       creatorId,
       memberCount: allMemberIds.length,
       isEncrypted: false,
@@ -114,6 +149,7 @@ export const conversationService = {
           joinedAt: now,
           unreadCount: 0,
           isMuted: false,
+          isPinnedToTop: false,
         };
         return conversationRepository.addConversationMember(member);
       }),
@@ -153,9 +189,90 @@ export const conversationService = {
 
     // Kiểm tra user có phải thành viên không
     const members = await conversationRepository.getConversationMembers(conversationId);
-    const isMember = members.some((m) => m.userId === userId);
-    if (!isMember) throw new ForbiddenError('Bạn không phải thành viên của hội thoại này');
+    const me = members.find((m) => m.userId === userId);
+    if (!me) throw new ForbiddenError('Bạn không phải thành viên của hội thoại này');
 
-    return conversation;
+    return {
+      ...conversation,
+      unreadCount: me.unreadCount ?? 0,
+      isMuted: isConversationNotificationPushMuted(me),
+      isPinnedToTop: !!me.isPinnedToTop,
+      notificationsMutedUntil: me.notificationsMutedUntil ?? undefined,
+    };
+  },
+
+  updateMyConversationPreferences: async (
+    userId: string,
+    conversationId: string,
+    prefs: {
+      isMuted?: boolean;
+      isPinnedToTop?: boolean;
+      notificationsMutedUntil?: string | null;
+      muteFor?: '1m' | '5m' | '10m';
+    },
+  ): Promise<void> => {
+    const { isMuted, isPinnedToTop, notificationsMutedUntil, muteFor } = prefs;
+    if (
+      isMuted === undefined &&
+      isPinnedToTop === undefined &&
+      notificationsMutedUntil === undefined &&
+      muteFor == null
+    ) {
+      return;
+    }
+
+    const member = await conversationRepository.getMember(conversationId, userId);
+    if (!member) throw new ForbiddenError('Bạn không phải thành viên của hội thoại này');
+
+    if (isPinnedToTop === true) {
+      const all = await conversationRepository.getConversations(userId);
+      const alreadyTop = !!all.find((x) => x.conversationId === conversationId)?.isPinnedToTop;
+      const totalTop = all.filter((x) => !!x.isPinnedToTop).length;
+      if (!alreadyTop && totalTop >= MAX_PINNED_CHATS_TO_TOP) {
+        throw new ForbiddenError(
+          `Chỉ ghim được tối đa ${MAX_PINNED_CHATS_TO_TOP} hội thoại lên đầu danh sách.`,
+        );
+      }
+    }
+
+    const updates: {
+      isMuted?: boolean;
+      isPinnedToTop?: boolean;
+      notificationsMutedUntil?: string | null;
+    } = {};
+
+    if (isPinnedToTop !== undefined) {
+      updates.isPinnedToTop = isPinnedToTop;
+    }
+
+    if (isMuted === true) {
+      updates.isMuted = true;
+      updates.notificationsMutedUntil = null;
+    } else if (isMuted === false) {
+      updates.isMuted = false;
+      updates.notificationsMutedUntil = null;
+    }
+
+    if (isMuted !== true) {
+      if (muteFor === '1m') {
+        updates.notificationsMutedUntil = new Date(Date.now() + 60_000).toISOString();
+        if (isMuted === undefined) updates.isMuted = false;
+      } else if (muteFor === '5m') {
+        updates.notificationsMutedUntil = new Date(Date.now() + 5 * 60_000).toISOString();
+        if (isMuted === undefined) updates.isMuted = false;
+      } else if (muteFor === '10m') {
+        updates.notificationsMutedUntil = new Date(Date.now() + 10 * 60_000).toISOString();
+        if (isMuted === undefined) updates.isMuted = false;
+      } else if (notificationsMutedUntil !== undefined) {
+        updates.notificationsMutedUntil = notificationsMutedUntil;
+        if (notificationsMutedUntil !== null && isMuted === undefined) {
+          updates.isMuted = false;
+        }
+      }
+    }
+
+    if (Object.keys(updates).length === 0) return;
+
+    await conversationRepository.updateMemberPreferences(conversationId, userId, updates);
   },
 };
