@@ -208,7 +208,7 @@ export const conversationService = {
       isMuted?: boolean;
       isPinnedToTop?: boolean;
       notificationsMutedUntil?: string | null;
-      muteFor?: '1h' | '4h' | '8h';
+      muteFor?: '1m' | '5m' | '10m';
     },
   ): Promise<void> => {
     const { isMuted, isPinnedToTop, notificationsMutedUntil, muteFor } = prefs;
@@ -254,14 +254,14 @@ export const conversationService = {
     }
 
     if (isMuted !== true) {
-      if (muteFor === '1h') {
-        updates.notificationsMutedUntil = new Date(Date.now() + 3600_000).toISOString();
+      if (muteFor === '1m') {
+        updates.notificationsMutedUntil = new Date(Date.now() + 60_000).toISOString();
         if (isMuted === undefined) updates.isMuted = false;
-      } else if (muteFor === '4h') {
-        updates.notificationsMutedUntil = new Date(Date.now() + 4 * 3600_000).toISOString();
+      } else if (muteFor === '5m') {
+        updates.notificationsMutedUntil = new Date(Date.now() + 5 * 60_000).toISOString();
         if (isMuted === undefined) updates.isMuted = false;
-      } else if (muteFor === '8h') {
-        updates.notificationsMutedUntil = new Date(Date.now() + 8 * 3600_000).toISOString();
+      } else if (muteFor === '10m') {
+        updates.notificationsMutedUntil = new Date(Date.now() + 10 * 60_000).toISOString();
         if (isMuted === undefined) updates.isMuted = false;
       } else if (notificationsMutedUntil !== undefined) {
         updates.notificationsMutedUntil = notificationsMutedUntil;

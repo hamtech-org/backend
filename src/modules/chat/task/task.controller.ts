@@ -11,6 +11,7 @@ export const taskController = {
         await emitToConversationAndMembers(req.params.groupId, 'group:task_new', {
           groupId: req.params.groupId,
           taskId: task.taskId,
+          title: String((task as { title?: string })?.title ?? ''),
         });
       } catch {
         /* ignore socket */
@@ -34,11 +35,16 @@ export const taskController = {
 
   updateTaskStatus: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      await taskService.updateTaskStatus(req.params.groupId, req.params.taskId, req.body.status);
+      const { title } = await taskService.updateTaskStatus(
+        req.params.groupId,
+        req.params.taskId,
+        req.body.status,
+      );
       try {
         await emitToConversationAndMembers(req.params.groupId, 'group:task_updated', {
           groupId: req.params.groupId,
           taskId: req.params.taskId,
+          title,
         });
       } catch {
         /* ignore socket */
@@ -57,6 +63,7 @@ export const taskController = {
         await emitToConversationAndMembers(req.params.groupId, 'group:task_updated', {
           groupId: req.params.groupId,
           taskId: req.params.taskId,
+          title: String((task as { title?: string })?.title ?? ''),
         });
       } catch {
         /* ignore socket */
@@ -64,6 +71,48 @@ export const taskController = {
       sendSuccess(res, task, 'Đã tham gia công việc');
     } catch (error) {
       console.error('[joinTask]', error);
+      next(error);
+    }
+  },
+
+  patchTask: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const task = await taskService.patchTaskByCreator(req.user!.userId, req.params.groupId, req.params.taskId, req.body);
+      try {
+        await emitToConversationAndMembers(req.params.groupId, 'group:task_updated', {
+          groupId: req.params.groupId,
+          taskId: req.params.taskId,
+          title: String((task as { title?: string })?.title ?? ''),
+        });
+      } catch {
+        /* ignore socket */
+      }
+      sendSuccess(res, task, 'Đã cập nhật công việc');
+    } catch (error) {
+      console.error('[patchTask]', error);
+      next(error);
+    }
+  },
+
+  deleteTask: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { deletedTitle } = await taskService.deleteTaskByCreator(
+        req.user!.userId,
+        req.params.groupId,
+        req.params.taskId,
+      );
+      try {
+        await emitToConversationAndMembers(req.params.groupId, 'group:task_deleted', {
+          groupId: req.params.groupId,
+          taskId: req.params.taskId,
+          title: deletedTitle,
+        });
+      } catch {
+        /* ignore socket */
+      }
+      sendSuccess(res, null, 'Đã hủy công việc');
+    } catch (error) {
+      console.error('[deleteTask]', error);
       next(error);
     }
   },

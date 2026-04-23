@@ -5,6 +5,8 @@ import type { IMessage } from '../shared/chat.types.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { createAndBroadcastSystemMessage } from '../shared/system-message.factory.js';
+import { messageService } from '../message/message.service.js';
+import { emitEventsToConversationAndMembers } from '../shared/chat.broadcast.js';
 
 const sysMsgDeps = {
   createMessage: conversationRepository.createMessage,
@@ -38,6 +40,7 @@ export const taskService = {
       dueDate: data.dueDate,
       createdAt: now,
       updatedAt: now,
+      ...(Array.isArray(data.subtasks) && data.subtasks.length > 0 ? { subtasks: data.subtasks } : {}),
     };
     await taskRepository.createTask(task);
 
@@ -115,8 +118,12 @@ export const taskService = {
     }));
   },
 
-  updateTaskStatus: async (conversationId: string, taskId: string, status: string): Promise<void> => {
+  updateTaskStatus: async (conversationId: string, taskId: string, status: string): Promise<{ title: string }> => {
+    const tasks = await taskRepository.getTasks(conversationId);
+    const task = tasks.find((t: any) => String(t?.taskId) === String(taskId));
+    const title = String((task as any)?.title ?? '');
     await taskRepository.updateTask(conversationId, taskId, { status });
+    return { title };
   },
 
   joinTask: async (requesterId: string, conversationId: string, taskId: string): Promise<any> => {
@@ -127,6 +134,14 @@ export const taskService = {
     const tasks = await taskRepository.getTasks(conversationId);
     const task = tasks.find((t: any) => String(t?.taskId) === String(taskId));
     if (!task) throw new NotFoundError('Công việc');
+
+    const dueRaw = (task as any).dueDate;
+    if (dueRaw != null && String(dueRaw).trim() !== '') {
+      const dueMs = new Date(String(dueRaw)).getTime();
+      if (Number.isFinite(dueMs) && Date.now() > dueMs) {
+        throw new ForbiddenError('Đã quá hạn xác nhận tham gia công việc');
+      }
+    }
 
     const assignees = Array.isArray((task as any).assignees) ? ((task as any).assignees as string[]) : [];
     if (!assignees.includes(requesterId)) throw new ForbiddenError('Bạn không được giao công việc này');
@@ -160,7 +175,135 @@ export const taskService = {
     return { ...task, participants: next };
   },
 
-  deleteTask: async (requesterId: string, conversationId: string, taskId: string): Promise<void> => {
+  patchTaskByCreator: async (requesterId: string, conversationId: string, taskId: string, data: any): Promise<any> => {
+    const members = await conversationRepository.getConversationMembers(conversationId);
+    if (!members.some((m) => m.userId === requesterId)) {
+      throw new ForbiddenError('Bạn không thuộc nhóm');
+    }
+    const tasks = await taskRepository.getTasks(conversationId);
+    const task = tasks.find((t: any) => String(t?.taskId) === String(taskId));
+    if (!task) throw new NotFoundError('Công việc');
+    if (String((task as any).creatorId ?? '') !== String(requesterId)) {
+      throw new ForbiddenError('Chỉ người tạo công việc mới chỉnh sửa được');
+    }
+
+    let assignees: string[] | undefined;
+    if (data.assignToAll === true) {
+      assignees = members.map((m) => m.userId);
+    } else if (Array.isArray(data.assignees)) {
+      assignees = data.assignees.map((id: unknown) => String(id));
+    }
+
+    const updates: Record<string, unknown> = {};
+    if (data.title !== undefined) updates.title = String(data.title ?? '').trim();
+    if (data.description !== undefined) updates.description = String(data.description ?? '').trim();
+    if (data.dueDate !== undefined) updates.dueDate = data.dueDate == null || data.dueDate === '' ? null : data.dueDate;
+    if (assignees !== undefined) updates.assignees = assignees;
+    if (data.subtasks !== undefined) {
+      updates.subtasks = Array.isArray(data.subtasks) ? data.subtasks : [];
+    }
+
+    if (Object.keys(updates).length === 0) return task;
+
+    await taskRepository.updateTask(conversationId, taskId, updates);
+    const next = await taskRepository.getTasks(conversationId);
+    const updated =
+      next.find((t: any) => String(t?.taskId) === String(taskId)) ?? ({ ...task, ...updates } as any);
+
+    try {
+      let actorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([requesterId]);
+        actorName = users[0]?.displayName || actorName;
+      } catch {
+        /* ignore */
+      }
+      const titleStr = String((updated as any)?.title ?? '');
+      const payload = {
+        kind: 'task_updated',
+        task: { taskId: String(taskId), title: titleStr },
+        actor: { userId: requesterId, name: actorName },
+        createdAt: new Date().toISOString(),
+      };
+      await createAndBroadcastSystemMessage(
+        { conversationId, senderId: requesterId, content: JSON.stringify(payload) },
+        sysMsgDeps,
+      );
+    } catch {
+      /* ignore */
+    }
+
+    return updated;
+  },
+
+  deleteTaskByCreator: async (
+    requesterId: string,
+    conversationId: string,
+    taskId: string,
+  ): Promise<{ deletedTitle: string }> => {
+    const members = await conversationRepository.getConversationMembers(conversationId);
+    if (!members.some((m) => m.userId === requesterId)) {
+      throw new ForbiddenError('Bạn không thuộc nhóm');
+    }
+    const tasks = await taskRepository.getTasks(conversationId);
+    const task = tasks.find((t: any) => String(t?.taskId) === String(taskId));
+    if (!task) throw new NotFoundError('Công việc');
+    if (String((task as any).creatorId ?? '') !== String(requesterId)) {
+      throw new ForbiddenError('Chỉ người tạo công việc mới hủy được');
+    }
+    const rawSrc = (task as any).sourceMessageId;
+    const sourceMessageId =
+      typeof rawSrc === 'string' && rawSrc.trim().length > 0 ? rawSrc.trim() : null;
+    const deletedTitle = String((task as any).title ?? '');
     await taskRepository.deleteTask(conversationId, taskId);
+
+    // Thu hồi tin giao việc (system) để cả nhóm không còn thấy thẻ — broadcast giống API recall.
+    if (sourceMessageId) {
+      try {
+        const src = await conversationRepository.findMessageByMessageId(conversationId, sourceMessageId);
+        if (src && String(src.senderId) === String(requesterId)) {
+          await messageService.recallMessage(
+            sourceMessageId,
+            requesterId,
+            conversationId,
+            src.createdAt,
+          );
+          await emitEventsToConversationAndMembers(conversationId, [
+            { event: 'message:recall', payload: { messageId: sourceMessageId, conversationId } },
+            { event: 'message:recalled', payload: { messageId: sourceMessageId, conversationId } },
+            {
+              event: 'message:pin_updated',
+              payload: { messageId: sourceMessageId, conversationId, isPinned: false },
+            },
+          ]);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    try {
+      let actorName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([requesterId]);
+        actorName = users[0]?.displayName || actorName;
+      } catch {
+        /* ignore */
+      }
+      const payload = {
+        kind: 'task_deleted',
+        task: { taskId: String(taskId), title: deletedTitle },
+        actor: { userId: requesterId, name: actorName },
+        createdAt: new Date().toISOString(),
+      };
+      await createAndBroadcastSystemMessage(
+        { conversationId, senderId: requesterId, content: JSON.stringify(payload) },
+        sysMsgDeps,
+      );
+    } catch {
+      /* ignore */
+    }
+
+    return { deletedTitle };
   },
 };
