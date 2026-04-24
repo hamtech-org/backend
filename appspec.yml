@@ -1,0 +1,33 @@
+version: 0.0
+os: linux
+
+files:
+  - source: /
+    destination: /opt/hamtech/backend-deploy
+
+permissions:
+  - object: /opt/hamtech/backend-deploy
+    pattern: '**'
+    owner: ec2-user
+    group: ec2-user
+
+hooks:
+  BeforeInstall:
+    - location: scripts/codedeploy/before_install.sh
+      timeout: 300
+      runas: ec2-user
+
+  AfterInstall:
+    - location: scripts/codedeploy/after_install.sh
+      timeout: 300
+      runas: ec2-user
+
+  ApplicationStart:
+    - location: scripts/codedeploy/start_server.sh
+      timeout: 600
+      runas: ec2-user
+
+  ValidateService:
+    - location: scripts/codedeploy/validate_service.sh
+      timeout: 180
+      runas: ec2-user
