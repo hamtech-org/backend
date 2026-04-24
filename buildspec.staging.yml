@@ -39,9 +39,15 @@ phases:
   post_build:
     commands:
       - echo "Pushing image to ECR"
-      - docker push ${ECR_URI}:${CODEBUILD_RESOLVED_SOURCE_VERSION}
-      - docker push ${ECR_URI}:${IMAGE_TAG}
-      - printf '{"ImageURI":"%s"}' ${ECR_URI}:${CODEBUILD_RESOLVED_SOURCE_VERSION} > imageDetail.json
+      - |
+        if docker image inspect ${IMAGE_REPO_NAME}:${CODEBUILD_RESOLVED_SOURCE_VERSION} > /dev/null 2>&1; then
+          docker push ${ECR_URI}:${CODEBUILD_RESOLVED_SOURCE_VERSION}
+          docker push ${ECR_URI}:${IMAGE_TAG}
+          printf '{"ImageURI":"%s"}' ${ECR_URI}:${CODEBUILD_RESOLVED_SOURCE_VERSION} > imageDetail.json
+        else
+          echo "Build image not found, skipping push"
+          exit 1
+        fi
 
 artifacts:
   files:
