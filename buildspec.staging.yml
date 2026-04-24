@@ -18,7 +18,11 @@ phases:
       - echo "Running checks for staging"
       - npm run lint || echo "Lint errors found, skip fail on staging"
       - npm run typecheck
-      - npm test || echo "Tests failed, skip fail on staging" # optional, nếu muốn nới luôn test
+      - npm test || echo "Tests failed, skip fail on staging"
+
+      - echo "Logging in to Docker Hub"
+      - echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+
       - echo "Logging in to Amazon ECR"
       - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
       - AWS_REGION=${AWS_DEFAULT_REGION}
