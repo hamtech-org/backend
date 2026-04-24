@@ -24,7 +24,10 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY --from=builder /app/dist ./dist
 
 # Tạo user không phải root để chạy ứng dụng
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+RUN addgroup -S appgroup \
+  && adduser -S appuser -G appgroup \
+  && mkdir -p /app/logs \
+  && chown -R appuser:appgroup /app
 USER appuser
 
 EXPOSE 3000
