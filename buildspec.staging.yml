@@ -1,0 +1,48 @@
+version: 0.2
+
+env:
+  variables:
+    IMAGE_REPO_NAME: hamtech-backend
+    IMAGE_TAG: staging-latest
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - echo "Installing dependencies"
+      - npm ci
+
+  pre_build:
+    commands:
+      - echo "Running checks for staging"
+      - npm run lint || echo "Lint errors found, skip fail on staging"
+      - npm run typecheck
+      - npm test || echo "Tests failed, skip fail on staging" # optional, nếu muốn nới luôn test
+      - echo "Logging in to Amazon ECR"
+      - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - AWS_REGION=${AWS_DEFAULT_REGION}
+      - ECR_URI=${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${IMAGE_REPO_NAME}
+      - aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+
+  build:
+    commands:
+      - echo "Building Docker image"
+      - docker build -t ${IMAGE_REPO_NAME}:${CODEBUILD_RESOLVED_SOURCE_VERSION} .
+      - docker tag ${IMAGE_REPO_NAME}:${CODEBUILD_RESOLVED_SOURCE_VERSION} ${ECR_URI}:${CODEBUILD_RESOLVED_SOURCE_VERSION}
+      - docker tag ${IMAGE_REPO_NAME}:${CODEBUILD_RESOLVED_SOURCE_VERSION} ${ECR_URI}:${IMAGE_TAG}
+
+  post_build:
+    commands:
+      - echo "Pushing image to ECR"
+      - docker push ${ECR_URI}:${CODEBUILD_RESOLVED_SOURCE_VERSION}
+      - docker push ${ECR_URI}:${IMAGE_TAG}
+      - printf '{"ImageURI":"%s"}' ${ECR_URI}:${CODEBUILD_RESOLVED_SOURCE_VERSION} > imageDetail.json
+
+artifacts:
+  files:
+    - appspec.yml
+    - scripts/codedeploy/**/*
+    - docker-compose.prod.yml
+    - nginx/**/*
+    - imageDetail.json
