@@ -4,7 +4,6 @@ import { messageUserHideRepository } from '../message/message-user-hide.reposito
 import type {
   IConversation,
   IConversationMember,
-  IMessage,
   ICreateConversationDto,
 } from '../shared/chat.types.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
@@ -161,7 +160,9 @@ export const conversationService = {
       try {
         const users = await userRepository.findByIds([creatorId]);
         creatorName = users[0]?.displayName || 'Ai đó';
-      } catch {}
+      } catch {
+        // ignore (best-effort)
+      }
 
       try {
         await createAndBroadcastSystemMessage(
@@ -199,6 +200,31 @@ export const conversationService = {
       isPinnedToTop: !!me.isPinnedToTop,
       notificationsMutedUntil: me.notificationsMutedUntil ?? undefined,
     };
+  },
+
+  getConversationMembers: async (
+    conversationId: string,
+    requesterUserId: string,
+  ): Promise<{ userId: string; displayName?: string | null; email?: string | null }[]> => {
+    const conversation = await conversationRepository.getConversationById(conversationId);
+    if (!conversation) throw new NotFoundError('Hội thoại');
+
+    const members = await conversationRepository.getConversationMembers(conversationId);
+    const isMember = members.some((m) => m.userId === requesterUserId);
+    if (!isMember) throw new ForbiddenError('Bạn không phải thành viên của hội thoại này');
+
+    const memberIds = members.map((m) => m.userId);
+    const profiles = await userRepository.findByIds(memberIds);
+    const byId = new Map(profiles.map((u) => [u.userId, u]));
+
+    return memberIds.map((userId) => {
+      const u = byId.get(userId);
+      return {
+        userId,
+        displayName: u?.displayName?.trim() ?? null,
+        email: u?.email ?? null,
+      };
+    });
   },
 
   updateMyConversationPreferences: async (
