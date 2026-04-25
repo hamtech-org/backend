@@ -6,13 +6,14 @@ import {
   DeleteCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { dynamoClient } from '@/config/database.js';
+import { env } from '@/config/env.js';
 import type { IConversation, IConversationMember, IMessage } from '../shared/chat.types.js';
 import { isConversationNotificationPushMuted } from '../shared/chat.helpers.js';
 import type { MessageStatus } from '@/shared/types/chat.types.js';
 
-const CONVERSATIONS_TABLE = 'Zalogram_Conversations';
-const MESSAGES_TABLE = 'Zalogram_Messages';
-const MESSAGE_STATUS_TABLE = 'Zalogram_MessageStatus';
+const CONVERSATIONS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Conversations`;
+const MESSAGES_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Messages`;
+const MESSAGE_STATUS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}MessageStatus`;
 
 export const conversationRepository = {
   // ─── Conversations ───────────────────────────────────────────────────
@@ -68,7 +69,7 @@ export const conversationRepository = {
         notificationsMutedUntil: notificationsMutedUntil ?? undefined,
       });
       prefsByConvId.set(convId, {
-        unreadCount: typeof item['unreadCount'] === 'number' ? (item['unreadCount'] as number) : 0,
+        unreadCount: typeof item['unreadCount'] === 'number' ? item['unreadCount'] : 0,
         isMuted,
         isPinnedToTop: !!(item as { isPinnedToTop?: boolean }).isPinnedToTop,
         notificationsMutedUntil,
@@ -218,11 +219,15 @@ export const conversationRepository = {
     );
   },
 
-  updateConversation: async (conversationId: string, updates: Partial<IConversation>): Promise<void> => {
+  updateConversation: async (
+    conversationId: string,
+    updates: Partial<IConversation>,
+  ): Promise<void> => {
     const entries = Object.entries(updates).filter(([, v]) => v !== undefined);
     if (entries.length === 0) return;
 
-    const updateExpr = 'SET ' + entries.map(([,], i) => `#k${i} = :v${i}`).join(', ') + ', updatedAt = :now';
+    const updateExpr =
+      'SET ' + entries.map(([,], i) => `#k${i} = :v${i}`).join(', ') + ', updatedAt = :now';
     const attrNames = Object.fromEntries(entries.map(([k], i) => [`#k${i}`, k]));
     const attrValues = {
       ...Object.fromEntries(entries.map(([, v], i) => [`:v${i}`, v])),
@@ -240,7 +245,10 @@ export const conversationRepository = {
     );
   },
 
-  getMember: async (conversationId: string, userId: string): Promise<IConversationMember | null> => {
+  getMember: async (
+    conversationId: string,
+    userId: string,
+  ): Promise<IConversationMember | null> => {
     const result = await dynamoClient.send(
       new GetCommand({
         TableName: CONVERSATIONS_TABLE,
@@ -447,7 +455,8 @@ export const conversationRepository = {
       const items = (result.Items as IMessage[]) ?? [];
       for (const m of items) {
         if (m.isRecalled || m.isDeleted) continue;
-        if ((m.type as string) === 'system' || (m as { position?: string }).position === 'center') continue;
+        if ((m.type as string) === 'system' || (m as { position?: string }).position === 'center')
+          continue;
         collected.push(m);
         if (collected.length >= maxItems) break;
       }

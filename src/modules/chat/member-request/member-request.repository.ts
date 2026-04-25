@@ -1,7 +1,16 @@
 import { PutCommand, QueryCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { dynamoClient } from '@/config/database.js';
+import { env } from '@/config/env.js';
 
-const CONVERSATIONS_TABLE = 'Zalogram_Conversations';
+const CONVERSATIONS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Conversations`;
+type IGroupRequestRecord = {
+  PK: string;
+  SK: string;
+  conversationId: string;
+  userId: string;
+  status: 'pending' | 'invited';
+  requestedAt: string;
+};
 
 export const memberRequestRepository = {
   createGroupRequest: async (
@@ -24,7 +33,7 @@ export const memberRequestRepository = {
     );
   },
 
-  getGroupRequests: async (conversationId: string): Promise<any[]> => {
+  getGroupRequests: async (conversationId: string): Promise<IGroupRequestRecord[]> => {
     const result = await dynamoClient.send(
       new QueryCommand({
         TableName: CONVERSATIONS_TABLE,
@@ -35,7 +44,7 @@ export const memberRequestRepository = {
         },
       }),
     );
-    return result.Items ?? [];
+    return (result.Items as IGroupRequestRecord[]) ?? [];
   },
 
   removeGroupRequest: async (conversationId: string, userId: string): Promise<void> => {

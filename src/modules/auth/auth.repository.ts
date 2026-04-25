@@ -7,11 +7,12 @@ import {
   BatchWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { dynamoClient } from '@/config/database.js';
+import { env } from '@/config/env.js';
 import type { ISession } from './auth.types.js';
 import type { IUser } from '@/modules/user/user.types.js';
 
-const USERS_TABLE = 'Zalogram_Users';
-const SESSIONS_TABLE = 'Zalogram_Sessions';
+const USERS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Users`;
+const SESSIONS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Sessions`;
 
 export const authRepository = {
   // ──────────────────────────────────────────────
@@ -81,8 +82,7 @@ export const authRepository = {
       new UpdateCommand({
         TableName: USERS_TABLE,
         Key: { PK: `USER#${userId}`, SK: 'PROFILE' },
-        UpdateExpression:
-          'SET passwordHash = :hash, tokenVersion = :tv, updatedAt = :now',
+        UpdateExpression: 'SET passwordHash = :hash, tokenVersion = :tv, updatedAt = :now',
         ExpressionAttributeValues: {
           ':hash': passwordHash,
           ':tv': tokenVersion,
@@ -100,8 +100,7 @@ export const authRepository = {
       new UpdateCommand({
         TableName: USERS_TABLE,
         Key: { PK: `USER#${userId}`, SK: 'PROFILE' },
-        UpdateExpression:
-          'SET tokenVersion = tokenVersion + :inc, updatedAt = :now',
+        UpdateExpression: 'SET tokenVersion = tokenVersion + :inc, updatedAt = :now',
         ExpressionAttributeValues: {
           ':inc': 1,
           ':now': new Date().toISOString(),
@@ -137,10 +136,7 @@ export const authRepository = {
   /**
    * Tìm session theo sessionId + userId
    */
-  findSession: async (
-    sessionId: string,
-    userId: string,
-  ): Promise<ISession | null> => {
+  findSession: async (sessionId: string, userId: string): Promise<ISession | null> => {
     const result = await dynamoClient.send(
       new GetCommand({
         TableName: SESSIONS_TABLE,

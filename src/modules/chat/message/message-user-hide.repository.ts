@@ -1,7 +1,8 @@
 import { PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { dynamoClient } from '@/config/database.js';
+import { env } from '@/config/env.js';
 
-const MESSAGE_USER_HIDE_TABLE = 'Zalogram_MessageUserHide';
+const MESSAGE_USER_HIDE_TABLE = `${env.DYNAMODB_TABLE_PREFIX}MessageUserHide`;
 
 export const messageUserHideRepository = {
   putHide: async (userId: string, conversationId: string, messageId: string): Promise<void> => {
