@@ -4,6 +4,8 @@ env:
   variables:
     IMAGE_REPO_NAME: hamtech-backend
     IMAGE_TAG: staging-latest
+    RUN_DB_SETUP: 'true'
+    DYNAMODB_TABLE_PREFIX: Hamtech_Staging_
 
 phases:
   install:
@@ -19,6 +21,14 @@ phases:
       - npm run lint || echo "Lint errors found, skip fail on staging"
       - npm run typecheck
       - npm test || echo "Tests failed, skip fail on staging"
+      - |
+        if [ "${RUN_DB_SETUP}" = "true" ]; then
+          echo "Running DynamoDB setup for staging"
+          export DYNAMODB_ENDPOINT=""
+          npm run db:setup
+        else
+          echo "Skipping DynamoDB setup (RUN_DB_SETUP=${RUN_DB_SETUP})"
+        fi
 
       - echo "Logging in to Docker Hub"
       - echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
