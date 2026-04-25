@@ -6,6 +6,7 @@ const CONVERSATIONS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Conversations`;
 type TaskRecord = Record<string, unknown> & {
   conversationId: string;
   taskId: string;
+  creatorId?: string;
 };
 
 export const taskRepository = {
