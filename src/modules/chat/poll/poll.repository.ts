@@ -11,6 +11,7 @@ type PollRecord = Record<string, unknown> & {
   conversationId: string;
   pollId: string;
   options: PollOption[];
+  creatorId?: string;
 };
 
 export const pollRepository = {
