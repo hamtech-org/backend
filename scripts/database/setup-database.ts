@@ -5,23 +5,32 @@ import {
   ListTablesCommand,
   UpdateTimeToLiveCommand,
   type CreateTableCommandInput,
+  type DynamoDBClientConfig,
 } from '@aws-sdk/client-dynamodb';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
 const REGION = process.env.AWS_REGION ?? 'us-east-1';
-const ENDPOINT = process.env.DYNAMODB_ENDPOINT ?? 'http://localhost:8000';
+const ENDPOINT = process.env.DYNAMODB_ENDPOINT?.trim() ?? 'http://localhost:8000';
 const PREFIX = process.env.DYNAMODB_TABLE_PREFIX ?? 'Zalogram_';
 
-const client = new DynamoDBClient({
+const clientConfig: DynamoDBClientConfig = {
   region: REGION,
-  endpoint: ENDPOINT,
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID ?? 'local',
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY ?? 'local',
-  },
-});
+};
+
+if (ENDPOINT) {
+  clientConfig.endpoint = ENDPOINT;
+}
+
+if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+  clientConfig.credentials = {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  };
+}
+
+const client = new DynamoDBClient(clientConfig);
 
 function tableName(name: string): string {
   return `${PREFIX}${name}`;
@@ -303,7 +312,7 @@ const TTL_TABLES: Record<string, string> = {
 
 async function setupDatabase(): Promise<void> {
   console.log(`\n== Zalogram DynamoDB Setup ==`);
-  console.log(`Endpoint : ${ENDPOINT}`);
+  console.log(`Endpoint : ${ENDPOINT || '(AWS managed endpoint)'}`);
   console.log(`Region   : ${REGION}`);
   console.log(`Prefix   : ${PREFIX}\n`);
 
