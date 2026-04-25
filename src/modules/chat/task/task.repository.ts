@@ -1,10 +1,15 @@
 import { PutCommand, QueryCommand, UpdateCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { dynamoClient } from '@/config/database.js';
+import { env } from '@/config/env.js';
 
-const CONVERSATIONS_TABLE = 'Zalogram_Conversations';
+const CONVERSATIONS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Conversations`;
+type TaskRecord = Record<string, unknown> & {
+  conversationId: string;
+  taskId: string;
+};
 
 export const taskRepository = {
-  createTask: async (task: any): Promise<void> => {
+  createTask: async (task: TaskRecord): Promise<void> => {
     await dynamoClient.send(
       new PutCommand({
         TableName: CONVERSATIONS_TABLE,
@@ -17,7 +22,7 @@ export const taskRepository = {
     );
   },
 
-  getTasks: async (conversationId: string): Promise<any[]> => {
+  getTasks: async (conversationId: string): Promise<TaskRecord[]> => {
     const result = await dynamoClient.send(
       new QueryCommand({
         TableName: CONVERSATIONS_TABLE,
@@ -28,12 +33,17 @@ export const taskRepository = {
         },
       }),
     );
-    return result.Items ?? [];
+    return (result.Items as TaskRecord[]) ?? [];
   },
 
-  updateTask: async (conversationId: string, taskId: string, updates: any): Promise<void> => {
+  updateTask: async (
+    conversationId: string,
+    taskId: string,
+    updates: Record<string, unknown>,
+  ): Promise<void> => {
     const entries = Object.entries(updates);
-    const updateExpr = 'SET ' + entries.map((_, i) => `#k${i} = :v${i}`).join(', ') + ', updatedAt = :now';
+    const updateExpr =
+      'SET ' + entries.map((_, i) => `#k${i} = :v${i}`).join(', ') + ', updatedAt = :now';
     const attrNames = Object.fromEntries(entries.map(([k], i) => [`#k${i}`, k]));
     const attrValues = {
       ...Object.fromEntries(entries.map(([, v], i) => [`:v${i}`, v])),
