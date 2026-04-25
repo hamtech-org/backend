@@ -4,6 +4,8 @@ env:
   variables:
     IMAGE_REPO_NAME: hamtech-backend
     IMAGE_TAG: latest
+    RUN_DB_SETUP: 'true'
+    DYNAMODB_TABLE_PREFIX: Hamtech_Prod_
 
 phases:
   install:
@@ -19,6 +21,14 @@ phases:
       - npm run lint
       - npm run typecheck
       - npm test
+      - |
+        if [ "${RUN_DB_SETUP}" = "true" ]; then
+          echo "Running DynamoDB setup"
+          export DYNAMODB_ENDPOINT=""
+          npm run db:setup
+        else
+          echo "Skipping DynamoDB setup (RUN_DB_SETUP=${RUN_DB_SETUP})"
+        fi
       - echo "Logging in to Amazon ECR"
       - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
       - AWS_REGION=${AWS_DEFAULT_REGION}
