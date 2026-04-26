@@ -94,6 +94,10 @@ export const elasticsearchUtils = {
             type: { type: 'keyword' },
           },
         },
+        settings: {
+          number_of_shards: 1,
+          number_of_replicas: 0,
+        },
       });
       logger.info(`Elasticsearch index '${indexName}' created successfully`);
     } catch (error) {
@@ -121,6 +125,10 @@ export const elasticsearchUtils = {
             createdAt: { type: 'date' },
           },
         },
+        settings: {
+          number_of_shards: 1,
+          number_of_replicas: 0,
+        },
       });
       logger.info(`Elasticsearch index '${indexName}' created successfully`);
     } catch (error) {
@@ -147,6 +155,10 @@ export const elasticsearchUtils = {
             content: { type: 'text', analyzer: 'standard' },
             createdAt: { type: 'date' },
           },
+        },
+        settings: {
+          number_of_shards: 1,
+          number_of_replicas: 0,
         },
       });
       logger.info(`Elasticsearch index '${indexName}' created successfully`);
