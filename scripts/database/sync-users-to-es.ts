@@ -12,7 +12,8 @@ import { esClient } from '@/config/elasticsearch.js';
 import { ScanCommand } from '@aws-sdk/lib-dynamodb';
 
 const BATCH_SIZE = 100;
-const TABLE_NAME = 'Zalogram_Users';
+const TABLE_PREFIX = process.env.DYNAMODB_TABLE_PREFIX ?? 'Zalogram_';
+const TABLE_NAME = `${TABLE_PREFIX}Users`;
 
 interface IUser {
   userId: string;
@@ -26,13 +27,57 @@ interface IUser {
   updatedAt?: string;
 }
 
+type DynamoRecord = Record<string, unknown>;
+
+function toOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function toNullableString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function toOptionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function toUser(item: DynamoRecord): IUser | null {
+  if (item['SK'] !== 'PROFILE') {
+    return null;
+  }
+
+  const userId = item['userId'];
+  const displayName = item['displayName'];
+  const email = item['email'];
+
+  if (typeof userId !== 'string' || typeof displayName !== 'string' || typeof email !== 'string') {
+    return null;
+  }
+
+  return {
+    userId,
+    displayName,
+    email,
+    avatar: toNullableString(item['avatar']),
+    bio: toNullableString(item['bio']),
+    status: toOptionalString(item['status']),
+    isVerified: toOptionalBoolean(item['isVerified']) ?? false,
+    createdAt: toOptionalString(item['createdAt']),
+    updatedAt: toOptionalString(item['updatedAt']),
+  };
+}
+
 async function syncUsersToElasticsearch(): Promise<void> {
   try {
+    logger.info(`Sync source DynamoDB table: ${TABLE_NAME}`);
+
     // Check if users index already exists with data
     try {
       const countResult = await esClient.count({ index: 'users' });
       if (countResult.count > 0) {
-        logger.info(`Elasticsearch index 'users' already has ${countResult.count} documents. Skipping sync.`);
+        logger.info(
+          `Elasticsearch index 'users' already has ${countResult.count} documents. Skipping sync.`,
+        );
         return;
       }
     } catch (error) {
@@ -44,38 +89,33 @@ async function syncUsersToElasticsearch(): Promise<void> {
     // Initialize Elasticsearch index
     await elasticsearchUtils.initializeUsersIndex();
 
-    let lastEvaluatedKey: any = undefined;
+    let lastEvaluatedKey: Record<string, unknown> | undefined;
     let totalUsers = 0;
     let batchCount = 0;
+    let hasMore = true;
 
-    while (true) {
+    while (hasMore) {
       // Scan DynamoDB table
       const result = await dynamoClient.send(
         new ScanCommand({
           TableName: TABLE_NAME,
           ExclusiveStartKey: lastEvaluatedKey,
           Limit: BATCH_SIZE,
-        })
+        }),
       );
 
-      if (!result.Items || result.Items.length === 0) {
+      const rawItems: unknown = result.Items;
+      if (!Array.isArray(rawItems) || rawItems.length === 0) {
         break;
       }
+      const items = rawItems.filter((item): item is DynamoRecord => {
+        return typeof item === 'object' && item !== null;
+      });
 
       // Filter and prepare users for indexing
-      const usersToIndex: IUser[] = result.Items.filter((item: any) => item.SK === 'PROFILE').map(
-        (item: any) => ({
-          userId: item.userId,
-          displayName: item.displayName,
-          email: item.email,
-          avatar: item.avatar || null,
-          bio: item.bio || null,
-          status: item.status,
-          isVerified: item.isVerified || false,
-          createdAt: item.createdAt,
-          updatedAt: item.updatedAt,
-        })
-      );
+      const usersToIndex: IUser[] = items
+        .map(toUser)
+        .filter((user): user is IUser => user !== null);
 
       if (usersToIndex.length > 0) {
         // Bulk index users
@@ -83,14 +123,18 @@ async function syncUsersToElasticsearch(): Promise<void> {
         totalUsers += usersToIndex.length;
         batchCount++;
 
-        logger.info(`Processed batch ${batchCount}: ${usersToIndex.length} users (Total: ${totalUsers})`);
+        logger.info(
+          `Processed batch ${batchCount}: ${usersToIndex.length} users (Total: ${totalUsers})`,
+        );
       }
 
       // Check if there are more items
-      lastEvaluatedKey = result.LastEvaluatedKey;
-      if (!lastEvaluatedKey) {
-        break;
-      }
+      const rawLastEvaluatedKey: unknown = result.LastEvaluatedKey;
+      lastEvaluatedKey =
+        typeof rawLastEvaluatedKey === 'object' && rawLastEvaluatedKey !== null
+          ? (rawLastEvaluatedKey as Record<string, unknown>)
+          : undefined;
+      hasMore = Boolean(lastEvaluatedKey);
     }
 
     // Refresh index
@@ -104,4 +148,4 @@ async function syncUsersToElasticsearch(): Promise<void> {
 }
 
 // Run the script
-syncUsersToElasticsearch();
+void syncUsersToElasticsearch();
