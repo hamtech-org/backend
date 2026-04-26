@@ -11,6 +11,13 @@ services:
       - redis
       - kafka
       - elasticsearch
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: us-east-1
+        awslogs-group: /docker/hamtech-backend
+        awslogs-create-group: 'true'
+        awslogs-stream: app
     restart: unless-stopped
     networks:
       - hamtech-network
@@ -26,6 +33,13 @@ services:
       - ./nginx/certs:/etc/nginx/certs:ro
     depends_on:
       - app
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: us-east-1
+        awslogs-group: /docker/hamtech-backend
+        awslogs-create-group: 'true'
+        awslogs-stream: nginx
     restart: unless-stopped
     networks:
       - hamtech-network
