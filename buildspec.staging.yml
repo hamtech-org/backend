@@ -5,7 +5,7 @@ env:
     IMAGE_REPO_NAME: hamtech-backend
     IMAGE_TAG: staging-latest
     RUN_DB_SETUP: 'true'
-    RUN_ES_SYNC: 'false'
+    RUN_ES_SYNC: 'true'
     DYNAMODB_TABLE_PREFIX: Hamtech_Staging_
 
 phases:
