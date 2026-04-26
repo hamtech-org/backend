@@ -5,7 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc && tsc-alias",
+    "build": "tsc && tsc-alias && tsc -p tsconfig.scripts.json",
     "start": "node dist/server.js",
     "test": "jest --forceExit --detectOpenHandles",
     "test:watch": "jest --watch",
