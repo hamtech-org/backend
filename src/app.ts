@@ -40,7 +40,7 @@ app.use(
 app.use(compression());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
-app.use(morgan('dev'));
+app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(apiLimiter);
 
 app.get('/', (_req, res) => {

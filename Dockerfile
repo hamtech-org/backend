@@ -6,8 +6,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 
-COPY tsconfig.json ./
-COPY tsconfig.scripts.json ./
+COPY tsconfig*.json ./
 COPY src ./src
 COPY scripts ./scripts
 
