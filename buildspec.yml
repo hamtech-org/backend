@@ -5,7 +5,6 @@ env:
     IMAGE_REPO_NAME: hamtech-backend
     IMAGE_TAG: latest
     RUN_DB_SETUP: 'true'
-    RUN_ES_SYNC: 'true'
     DYNAMODB_TABLE_PREFIX: Hamtech_Prod_
 
 phases:
@@ -29,18 +28,6 @@ phases:
           npm run db:setup
         else
           echo "Skipping DynamoDB setup (RUN_DB_SETUP=${RUN_DB_SETUP})"
-        fi
-      - |
-        if [ "${RUN_ES_SYNC}" = "true" ]; then
-          if [ -n "${ELASTICSEARCH_NODE:-}" ]; then
-            echo "Waiting for Elasticsearch and syncing users index"
-            npm run es:wait
-            npm run es:sync:users
-          else
-            echo "Skipping Elasticsearch sync because ELASTICSEARCH_NODE is not set"
-          fi
-        else
-          echo "Skipping Elasticsearch sync (RUN_ES_SYNC=${RUN_ES_SYNC})"
         fi
       - echo "Logging in to Amazon ECR"
       - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
