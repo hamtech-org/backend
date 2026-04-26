@@ -5,7 +5,7 @@ env:
     IMAGE_REPO_NAME: hamtech-backend
     IMAGE_TAG: staging-latest
     RUN_DB_SETUP: 'true'
-    RUN_ES_SYNC: 'true'
+    RUN_ES_SYNC: 'false'
     DYNAMODB_TABLE_PREFIX: Hamtech_Staging_
 
 phases:
@@ -34,8 +34,11 @@ phases:
         if [ "${RUN_ES_SYNC}" = "true" ]; then
           if [ -n "${ELASTICSEARCH_NODE:-}" ]; then
             echo "Waiting for Elasticsearch and syncing users index"
-            npm run es:wait
-            npm run es:sync:users
+            if npm run es:wait; then
+              npm run es:sync:users
+            else
+              echo "Elasticsearch is unreachable from CodeBuild, skipping users sync"
+            fi
           else
             echo "Skipping Elasticsearch sync because ELASTICSEARCH_NODE is not set"
           fi
