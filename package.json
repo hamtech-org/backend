@@ -5,7 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc && tsc -p tsconfig.scripts.json && tsc-alias -p tsconfig.json --resolve-full-paths",
+    "build": "tsc && tsc -p tsconfig.scripts.json",
     "start": "node -r module-alias/register dist/server.js",
     "test": "jest --forceExit --detectOpenHandles",
     "test:watch": "jest --watch",
@@ -96,7 +96,10 @@
     "typescript": "^5.5.3"
   },
   "_moduleAliases": {
-    "@": "dist"
+    "@": "dist",
+    "@config": "dist/config",
+    "@modules": "dist/modules",
+    "@shared": "dist/shared"
   },
   "engines": {
     "node": ">=20.0.0"
