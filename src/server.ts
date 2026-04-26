@@ -8,12 +8,15 @@ import { connectKafka } from '@/config/kafka.js';
 import { ensureCollectionExists } from '@/shared/utils/rekognition.js';
 import { startSearchConsumer } from './modules/search/search.consumer.js';
 
+import { elasticsearchUtils } from '@/shared/utils/elasticsearch.js';
+
 const server = http.createServer(app);
 
 const startServer = async (): Promise<void> => {
   try {
     await connectRedis();
     await connectKafka();
+    await elasticsearchUtils.initializeAllIndices();
     await startSearchConsumer();
     await ensureCollectionExists();
     initializeSocket(server);
