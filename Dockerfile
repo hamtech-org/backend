@@ -34,4 +34,4 @@ USER appuser
 
 EXPOSE 3000
 
-CMD ["node", "dist/server.js"]
+CMD ["node", "-r", "module-alias/register", "dist/server.js"]
