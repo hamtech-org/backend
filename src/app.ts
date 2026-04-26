@@ -20,11 +20,14 @@ import searchRoutes from '@/modules/search/search.routes.js';
 import agoraRoutes from '@/modules/agora/agora.routes.js';
 
 const app = express();
+app.set('trust proxy', 1);
 
 // --- Middleware ---
-app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" }
-}));
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  }),
+);
 
 app.use(
   cors({
