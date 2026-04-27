@@ -13,6 +13,37 @@ const sysMsgDeps = {
   updateConversationLastMessage: conversationRepository.updateConversationLastMessage,
 };
 
+async function normalizeSubtasksWithNames(subtasks: unknown): Promise<any[] | undefined> {
+  if (!Array.isArray(subtasks) || subtasks.length === 0) return undefined;
+  const rows = subtasks
+    .map((s) => ({
+      id: (s as any)?.id,
+      assigneeId: String((s as any)?.assigneeId ?? '').trim(),
+      content: String((s as any)?.content ?? '').trim(),
+      done: Boolean((s as any)?.done),
+      completedAt: (s as any)?.completedAt ?? null,
+    }))
+    .filter((s) => Boolean(s.assigneeId && s.content));
+  if (rows.length === 0) return undefined;
+
+  const ids = Array.from(new Set(rows.map((r) => r.assigneeId).filter(Boolean)));
+  const nameById = new Map<string, string>();
+  try {
+    const users = await userRepository.findByIds(ids);
+    for (const u of users) {
+      const name = String((u as any)?.displayName ?? (u as any)?.email ?? (u as any)?.userId ?? '').trim();
+      if (name) nameById.set(String((u as any)?.userId), name);
+    }
+  } catch {
+    /* ignore */
+  }
+
+  return rows.map((r) => ({
+    ...r,
+    assigneeName: nameById.get(r.assigneeId) ?? r.assigneeId,
+  }));
+}
+
 export const taskService = {
   createTask: async (requesterId: string, conversationId: string, data: any): Promise<any> => {
     const taskId = uuidv4();
@@ -28,6 +59,7 @@ export const taskService = {
       }
     }
 
+    const normalizedSubtasks = await normalizeSubtasksWithNames(data.subtasks);
     const task = {
       taskId,
       conversationId,
@@ -40,7 +72,9 @@ export const taskService = {
       dueDate: data.dueDate,
       createdAt: now,
       updatedAt: now,
-      ...(Array.isArray(data.subtasks) && data.subtasks.length > 0 ? { subtasks: data.subtasks } : {}),
+      assignToAll: data.assignToAll === true,
+      broadcast: data.broadcast === true,
+      ...(normalizedSubtasks ? { subtasks: normalizedSubtasks } : {}),
     };
     await taskRepository.createTask(task);
 
@@ -77,6 +111,8 @@ export const taskService = {
           assigneeLabel: assigneeLabel || 'cả nhóm',
           assignToAll: data.assignToAll === true,
           assigneesCount: Array.isArray(assignees) ? assignees.length : 0,
+          assigneeUserIds: Array.isArray(assignees) ? assignees.map((id) => String(id)) : [],
+          ...(normalizedSubtasks ? { subtasks: normalizedSubtasks } : {}),
         },
         actor: { userId: requesterId, name: creatorName },
         createdAt: now,
@@ -144,35 +180,56 @@ export const taskService = {
     }
 
     const assignees = Array.isArray((task as any).assignees) ? ((task as any).assignees as string[]) : [];
-    if (!assignees.includes(requesterId)) throw new ForbiddenError('Bạn không được giao công việc này');
+    const assignToAll = Boolean((task as any).assignToAll);
+    const broadcast = Boolean((task as any).broadcast);
+    const subs = Array.isArray((task as any).subtasks) ? ((task as any).subtasks as any[]) : [];
+    const subAssigneeIds = subs
+      .map((s) => String(s?.assigneeId ?? '').trim())
+      .filter(Boolean);
+
+    // - Task opt-in cả nhóm: assignToAll/broadcast (hoặc legacy: không có assignees + không chia subtask).
+    // - Task chia theo subtask: chỉ những người xuất hiện trong subtasks được join.
+    const isEveryoneTask =
+      assignToAll || broadcast || (assignees.length === 0 && subAssigneeIds.length === 0);
+    const isSubtaskAssignee = subAssigneeIds.includes(requesterId);
+    const isTopLevelAssignee = assignees.includes(requesterId);
+
+    if (!isEveryoneTask && !isTopLevelAssignee && !isSubtaskAssignee) {
+      throw new ForbiddenError('Bạn không được giao công việc này');
+    }
 
     const prev = Array.isArray((task as any).participants) ? (task as any).participants : [];
-    const next = prev.includes(requesterId) ? prev : [...prev, requesterId];
+    const joinedNow = !prev.includes(requesterId);
+    const next = joinedNow ? [...prev, requesterId] : prev;
     await taskRepository.updateTask(conversationId, taskId, { participants: next });
 
-    // System message
-    try {
-      let actorName = 'Ai đó';
+    let joinNotice: IMessage | null = null;
+    if (joinedNow) {
       try {
-        const users = await userRepository.findByIds([requesterId]);
-        actorName = users[0]?.displayName || actorName;
-      } catch {}
+        let actorName = 'Ai đó';
+        try {
+          const users = await userRepository.findByIds([requesterId]);
+          actorName = users[0]?.displayName || actorName;
+        } catch {}
 
-      const payload = {
-        kind: 'task_joined',
-        task: { taskId: String((task as any).taskId ?? taskId), title: String((task as any).title ?? '') },
-        actor: { userId: requesterId, name: actorName },
-        participantsCount: next.length,
-        createdAt: new Date().toISOString(),
-      };
+        const payload = {
+          kind: 'task_joined',
+          task: { taskId: String((task as any).taskId ?? taskId), title: String((task as any).title ?? '') },
+          actor: { userId: requesterId, name: actorName },
+          participantsCount: next.length,
+          createdAt: new Date().toISOString(),
+        };
 
-      await createAndBroadcastSystemMessage(
-        { conversationId, senderId: requesterId, content: JSON.stringify(payload) },
-        sysMsgDeps,
-      );
-    } catch { /* ignore */ }
+        joinNotice = await createAndBroadcastSystemMessage(
+          { conversationId, senderId: requesterId, content: JSON.stringify(payload) },
+          sysMsgDeps,
+        );
+      } catch {
+        /* ignore */
+      }
+    }
 
-    return { ...task, participants: next };
+    return { ...task, participants: next, joinNotice };
   },
 
   patchTaskByCreator: async (requesterId: string, conversationId: string, taskId: string, data: any): Promise<any> => {
@@ -199,8 +256,10 @@ export const taskService = {
     if (data.description !== undefined) updates.description = String(data.description ?? '').trim();
     if (data.dueDate !== undefined) updates.dueDate = data.dueDate == null || data.dueDate === '' ? null : data.dueDate;
     if (assignees !== undefined) updates.assignees = assignees;
+    if (data.assignToAll !== undefined) updates.assignToAll = data.assignToAll === true;
+    if (data.broadcast !== undefined) updates.broadcast = data.broadcast === true;
     if (data.subtasks !== undefined) {
-      updates.subtasks = Array.isArray(data.subtasks) ? data.subtasks : [];
+      updates.subtasks = (await normalizeSubtasksWithNames(data.subtasks)) ?? [];
     }
 
     if (Object.keys(updates).length === 0) return task;
