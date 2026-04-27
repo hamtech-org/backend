@@ -10,5 +10,6 @@ router.patch('/groups/:groupId/tasks/:taskId', authenticate, taskController.patc
 router.delete('/groups/:groupId/tasks/:taskId', authenticate, taskController.deleteTask);
 router.put('/groups/:groupId/tasks/:taskId', authenticate, taskController.updateTaskStatus);
 router.post('/groups/:groupId/tasks/:taskId/join', authenticate, taskController.joinTask);
+router.post('/groups/:groupId/tasks/:taskId/remind-due', authenticate, taskController.broadcastDueReminder);
 
 export default router;

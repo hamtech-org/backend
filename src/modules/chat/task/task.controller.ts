@@ -55,6 +55,7 @@ export const taskController = {
   updateTaskStatus: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { title } = await taskService.updateTaskStatus(
+        req.user!.userId,
         req.params.groupId,
         req.params.taskId,
         req.body.status,
@@ -132,6 +133,20 @@ export const taskController = {
       sendSuccess(res, null, 'Đã hủy công việc');
     } catch (error) {
       console.error('[deleteTask]', error);
+      next(error);
+    }
+  },
+
+  broadcastDueReminder: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await taskService.broadcastDueReminder(
+        req.user!.userId,
+        req.params.groupId,
+        req.params.taskId,
+      );
+      sendSuccess(res, result);
+    } catch (error) {
+      console.error('[broadcastDueReminder]', error);
       next(error);
     }
   },
