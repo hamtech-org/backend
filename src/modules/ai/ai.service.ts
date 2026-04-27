@@ -79,9 +79,85 @@ export async function generateText(
 }
 
 export const aiService = {
-  suggestContent: async (_request: IAiSuggestRequest): Promise<IAiSuggestResponse> => {
-    // TODO: implement using generateText()
-    throw new Error('Chưa triển khai');
+  suggestContent: async (request: IAiSuggestRequest): Promise<IAiSuggestResponse> => {
+    const topics = (request.topics ?? []).map((t) => t.trim()).filter(Boolean);
+    const toneByType: Record<IAiSuggestRequest['type'], string> = {
+      reply:
+        request.language === 'vi'
+          ? 'tự nhiên, thân thiện, đúng kiểu nhắn tin'
+          : 'natural, friendly, chat-like',
+      post: request.language === 'vi' ? 'rõ ràng, mạch lạc' : 'clear, coherent',
+      caption: request.language === 'vi' ? 'ngắn gọn, gọn ý' : 'short, concise',
+    };
+
+    const kindByType: Record<IAiSuggestRequest['type'], string> = {
+      reply: request.language === 'vi' ? 'câu nhắn' : 'message',
+      post: request.language === 'vi' ? 'câu/đoạn' : 'sentence/paragraph',
+      caption: request.language === 'vi' ? 'caption' : 'caption',
+    };
+
+    const prompt =
+      request.language === 'vi'
+        ? [
+            `Câu gốc:`,
+            request.context.trim(),
+            '',
+            `Nhiệm vụ: Viết lại 5 ${kindByType[request.type]} có ý NGANG/ TƯƠNG ĐỒNG với câu gốc (paraphrase).`,
+            `- Giữ nguyên ý chính, không đổi nghĩa.`,
+            `- Có thể mở rộng nhẹ cho tự nhiên (từ đệm như: "á", "nha", "ạ", "một xíu"...), nhưng không được thêm thông tin sự kiện mới (địa điểm, thời gian, người, hành động...) nếu câu gốc không có.`,
+            `- Không lặp ý giữa các gợi ý.`,
+            `- Ngữ điệu/giọng văn phải phù hợp theo topics và type.`,
+            '',
+            `Type: ${request.type}`,
+            `Topics: ${topics.length ? topics.join(', ') : '(không có)'}`,
+            `Style: ${toneByType[request.type]}`,
+            '',
+            `Trả về đúng JSON theo schema: {"suggestions": string[]}`,
+          ].join('\n')
+        : [
+            `Original sentence:`,
+            request.context.trim(),
+            '',
+            `Task: Write 5 ${kindByType[request.type]} paraphrases that keep the SAME meaning as the original sentence.`,
+            `- Preserve the core meaning; do not change intent.`,
+            `- You may add light conversational fillers, but do NOT add new factual details (place, time, people, actions...) that are not in the original.`,
+            `- No duplicates.`,
+            `- Match tone/style by topics and type.`,
+            '',
+            `Type: ${request.type}`,
+            `Topics: ${topics.length ? topics.join(', ') : '(none)'}`,
+            `Style: ${toneByType[request.type]}`,
+            '',
+            `Return strictly JSON with schema: {"suggestions": string[]}`,
+          ].join('\n');
+
+    const { text, model, tokensUsed } = await generateText(prompt, {
+      systemPrompt:
+        request.language === 'vi'
+          ? 'Bạn là trợ lý viết lại câu (paraphrase). Nhiệm vụ là tạo các câu tương đồng ý theo topics/type. Không đổi nghĩa, không bịa thêm chi tiết mới. Chỉ trả JSON hợp lệ.'
+          : 'You rewrite sentences (paraphrase). Keep the same meaning, follow topics/type, do not add new facts. Output only valid JSON.',
+    });
+
+    let suggestions: string[] = [];
+    try {
+      const parsed = JSON.parse(text) as { suggestions?: unknown };
+      if (Array.isArray(parsed.suggestions)) {
+        suggestions = parsed.suggestions.map((s) => String(s).trim()).filter(Boolean);
+      }
+    } catch {
+      suggestions = text
+        .split('\n')
+        .map((s) => s.replace(/^\s*[-*•\d.]+\s*/, '').trim())
+        .filter(Boolean);
+    }
+
+    if (suggestions.length > 5) suggestions = suggestions.slice(0, 5);
+
+    return {
+      suggestions,
+      model,
+      tokensUsed: tokensUsed ?? 0,
+    };
   },
 
   chatbot: async (_request: IAiChatbotRequest): Promise<IAiChatbotResponse> => {
