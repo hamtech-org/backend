@@ -2,6 +2,7 @@ export interface IAiSuggestRequest {
   context: string;
   type: 'reply' | 'post' | 'caption';
   language: 'vi' | 'en';
+  topics: string[];
 }
 
 export interface IAiSuggestResponse {
