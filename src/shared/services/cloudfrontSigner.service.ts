@@ -1,4 +1,6 @@
 import { getSignedUrl } from '@aws-sdk/cloudfront-signer';
+import { existsSync, readFileSync } from 'node:fs';
+import { isAbsolute, resolve } from 'node:path';
 import { env } from '@/config/env.js';
 import { CLOUDFRONT_PRIVATE_URL, CLOUDFRONT_PUBLIC_URL } from '@/config/s3.js';
 
@@ -10,6 +12,32 @@ function normalizePrivateKey(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) return '';
   return trimmed.replace(/\\n/g, '\n');
+}
+
+function resolvePrivateKeyInput(raw: string): string {
+  const normalized = normalizePrivateKey(raw);
+  if (!normalized) return '';
+
+  // Inline PEM (single-line with \n or multiline) is supported directly.
+  if (normalized.includes('BEGIN PRIVATE KEY')) {
+    return normalized;
+  }
+
+  // Also support passing a file path in env.
+  const pathCandidate = normalized;
+  const filePath = isAbsolute(pathCandidate)
+    ? pathCandidate
+    : resolve(process.cwd(), pathCandidate);
+  if (!existsSync(filePath)) {
+    return normalized;
+  }
+
+  try {
+    const fromFile = readFileSync(filePath, 'utf8');
+    return normalizePrivateKey(fromFile);
+  } catch {
+    return normalized;
+  }
 }
 
 export function buildPublicCdnUrl(key: string): string {
@@ -34,7 +62,7 @@ export function signPrivateCdnUrl(
   if (!rawUrl) return '';
 
   const keyPairId = env.CLOUDFRONT_SIGNING_KEY_PAIR_ID.trim();
-  const privateKey = normalizePrivateKey(env.CLOUDFRONT_SIGNING_PRIVATE_KEY);
+  const privateKey = resolvePrivateKeyInput(env.CLOUDFRONT_SIGNING_PRIVATE_KEY);
 
   if (!keyPairId || !privateKey) {
     return rawUrl;
