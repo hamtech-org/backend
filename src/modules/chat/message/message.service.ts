@@ -38,7 +38,12 @@ function attachPublicMessageStatus(
   viewerUserId: string,
   msg: IMessage,
 ): IMessage {
-  const { outboundStatus, status: _st, readBy, ...rest } = msg as IMessage & {
+  const {
+    outboundStatus,
+    status: _st,
+    readBy,
+    ...rest
+  } = msg as IMessage & {
     outboundStatus?: MessageStatus;
     status?: MessageStatus;
     readBy?: { userId: string; displayName?: string | null }[];
@@ -101,6 +106,38 @@ async function attachReadReceipts(
   });
 }
 
+async function refreshMediaDeliveryForMessage(message: IMessage): Promise<IMessage> {
+  if (!message.mediaUrl) return message;
+  const resolved = await mediaService.resolveMediaFromAppDownloadUrl(message.mediaUrl);
+  if (!resolved) return message;
+  return {
+    ...message,
+    mediaUrl: resolved.mediaUrl,
+    mediaType: resolved.mediaType,
+    mediaSize: resolved.mediaSize,
+    mediaOriginalName: resolved.originalName,
+    thumbnailUrl: resolved.thumbnailUrl,
+  };
+}
+
+async function refreshMediaDeliveryForMessages(messages: IMessage[]): Promise<IMessage[]> {
+  return Promise.all(messages.map((m) => refreshMediaDeliveryForMessage(m)));
+}
+
+async function refreshReplyMediaDelivery(
+  details: IMessage['replyToDetails'],
+): Promise<IMessage['replyToDetails']> {
+  if (!details?.mediaUrl) return details;
+  const resolved = await mediaService.resolveMediaFromAppDownloadUrl(details.mediaUrl);
+  if (!resolved) return details;
+  return {
+    ...details,
+    mediaUrl: resolved.mediaUrl,
+    thumbnailUrl: resolved.thumbnailUrl,
+    mediaType: resolved.mediaType,
+  };
+}
+
 export const messageService = {
   getMessages: async (
     conversationId: string,
@@ -129,7 +166,14 @@ export const messageService = {
       hidden,
       conversationRepository.getMessages,
     );
-    const withReadBy = await attachReadReceipts(conversationId, viewerUserId, withReply);
+    const withFreshMedia = await refreshMediaDeliveryForMessages(withReply);
+    const withFreshReplyMedia = await Promise.all(
+      withFreshMedia.map(async (m) => ({
+        ...m,
+        replyToDetails: await refreshReplyMediaDelivery(m.replyToDetails ?? null),
+      })),
+    );
+    const withReadBy = await attachReadReceipts(conversationId, viewerUserId, withFreshReplyMedia);
     return withReadBy.map((m) => attachPublicMessageStatus(conv, viewerUserId, m));
   },
 
@@ -176,7 +220,14 @@ export const messageService = {
       hidden,
       conversationRepository.getMessages,
     );
-    const withReadBy = await attachReadReceipts(conversationId, viewerUserId, withReply);
+    const withFreshMedia = await refreshMediaDeliveryForMessages(withReply);
+    const withFreshReplyMedia = await Promise.all(
+      withFreshMedia.map(async (m) => ({
+        ...m,
+        replyToDetails: await refreshReplyMediaDelivery(m.replyToDetails ?? null),
+      })),
+    );
+    const withReadBy = await attachReadReceipts(conversationId, viewerUserId, withFreshReplyMedia);
     return withReadBy.map((m) => attachPublicMessageStatus(conv, viewerUserId, m));
   },
 
@@ -267,11 +318,10 @@ export const messageService = {
     picked = picked.slice(0, maxOut);
     const withNames = await attachSenderDisplayNames(picked);
 
-    return withNames.map((m) => {
+    const withFreshMedia = await refreshMediaDeliveryForMessages(withNames);
+    return withFreshMedia.map((m) => {
       const content =
-        category === 'link'
-          ? firstUrl(m.content ?? '')
-          : (m.content ?? '').slice(0, 200);
+        category === 'link' ? firstUrl(m.content ?? '') : (m.content ?? '').slice(0, 200);
       return {
         messageId: m.messageId,
         senderId: m.senderId,
@@ -370,6 +420,11 @@ export const messageService = {
       hiddenForSender,
       conversationRepository.getMessages,
     );
+    const [messageWithFreshMedia] = await refreshMediaDeliveryForMessages([messageForClient]);
+    const finalMessageForClient: IMessage = {
+      ...messageWithFreshMedia,
+      replyToDetails: await refreshReplyMediaDelivery(messageWithFreshMedia.replyToDetails ?? null),
+    };
 
     const lastPreviewContent =
       message.content.trim() !== ''
@@ -379,7 +434,7 @@ export const messageService = {
           : message.type === 'video'
             ? '[Video]'
             : message.type === 'file'
-              ? (message.mediaOriginalName?.trim() || '[File]')
+              ? message.mediaOriginalName?.trim() || '[File]'
               : message.content;
 
     // Cập nhật lastMessage trên conversation
@@ -423,7 +478,11 @@ export const messageService = {
       }),
     ]);
 
-    const { outboundStatus: _ob, status: _s, ...restOut } = messageForClient as IMessage & {
+    const {
+      outboundStatus: _ob,
+      status: _s,
+      ...restOut
+    } = finalMessageForClient as IMessage & {
       outboundStatus?: MessageStatus;
       status?: MessageStatus;
     };
