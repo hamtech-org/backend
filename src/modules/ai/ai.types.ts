@@ -68,3 +68,18 @@ export interface IAiSuggestReplyContextResponse {
   model: string;
   tokensUsed: number;
 }
+
+export interface IAiGroupSummaryRequest {
+  conversationId: string;
+  /** số tin nhắn gần nhất để tóm tắt */
+  limit?: number;
+}
+
+export interface IAiGroupSummaryResponse {
+  /** Tóm tắt ngắn 3-6 bullet */
+  summary: string;
+  /** Các điểm cần làm / quyết định / câu hỏi còn bỏ ngỏ */
+  highlights: string[];
+  model: string;
+  tokensUsed: number;
+}

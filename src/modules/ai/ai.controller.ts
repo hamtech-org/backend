@@ -6,6 +6,7 @@ import type {
   IAiChatbotRequest,
   IAiGeneratePostRequest,
   IAiSuggestReplyContextRequest,
+  IAiGroupSummaryRequest,
 } from './ai.types.js';
 
 export const aiController = {
@@ -27,6 +28,19 @@ export const aiController = {
       const result = await aiService.suggestReplyFromContext(
         req.body as IAiSuggestReplyContextRequest,
       );
+      sendSuccess(res, result);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  summarizeGroupMessages: async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
+    try {
+      const result = await aiService.summarizeGroupMessages(req.body as IAiGroupSummaryRequest);
       sendSuccess(res, result);
     } catch (error) {
       next(error);

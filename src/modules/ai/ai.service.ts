@@ -8,6 +8,8 @@ import type {
   IAiGeneratePostResponse,
   IAiSuggestReplyContextRequest,
   IAiSuggestReplyContextResponse,
+  IAiGroupSummaryRequest,
+  IAiGroupSummaryResponse,
 } from './ai.types.js';
 import { ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { aiConfig, bedrockRuntimeClient, type BedrockAiConfig } from '@/config/ai.js';
@@ -239,6 +241,92 @@ export const aiService = {
 
     return {
       suggestions,
+      model,
+      tokensUsed: tokensUsed ?? 0,
+    };
+  },
+
+  /**
+   * Tóm tắt tin nhắn nhóm theo hội thoại.
+   * Backend tự lấy N tin nhắn gần nhất (lọc system/recalled/deleted) rồi tóm tắt.
+   */
+  summarizeGroupMessages: async (
+    request: IAiGroupSummaryRequest,
+  ): Promise<IAiGroupSummaryResponse> => {
+    const limit = Math.min(Math.max(5, request.limit ?? 30), 80);
+
+    const conv = await conversationRepository.getConversationById(request.conversationId);
+    if (!conv) {
+      throw new Error('Conversation not found');
+    }
+    if (conv.type !== 'group') {
+      throw new Error('Conversation is not a group');
+    }
+
+    const recent = await conversationRepository.getMessages(request.conversationId, limit);
+    const kept = recent
+      .filter((m) => {
+        if (m.isRecalled || m.isDeleted) return false;
+        if ((m.type as string) === 'system' || (m as { position?: string }).position === 'center')
+          return false;
+        const content = String((m as any).content ?? '').trim();
+        return content.length > 0;
+      })
+      .slice(0, limit)
+      .reverse(); // oldest -> newest
+
+    if (kept.length === 0) {
+      return {
+        summary: 'Chưa có đủ tin nhắn để tóm tắt.',
+        highlights: [],
+        model: aiConfig.modelId,
+        tokensUsed: 0,
+      };
+    }
+
+    const transcript = kept
+      .map((m: IMessage) => {
+        const name = (m.senderDisplayName ?? '').trim();
+        const speaker = name.length ? name : m.senderId;
+        const text = String((m as any).content ?? '').trim();
+        return `${speaker}: ${text}`;
+      })
+      .join('\n');
+
+    const prompt = [
+      `Bạn là trợ lý tóm tắt tin nhắn nhóm.`,
+      `Hãy đọc transcript theo thứ tự thời gian và tạo:`,
+      `1) summary: 3-6 bullet ngắn, nêu đúng ý chính.`,
+      `2) highlights: 0-6 bullet về quyết định / việc cần làm / câu hỏi còn bỏ ngỏ.`,
+      `Yêu cầu: không bịa thêm thông tin; chỉ dựa trên transcript.`,
+      ``,
+      `Transcript:`,
+      transcript,
+      ``,
+      `Trả về đúng JSON theo schema: {"summary": string, "highlights": string[]}`,
+    ].join('\n');
+
+    const { text, model, tokensUsed } = await generateText(prompt, {
+      systemPrompt:
+        'Bạn là trợ lý tóm tắt hội thoại nhóm. Không bịa thêm thông tin. Chỉ trả JSON hợp lệ theo schema {"summary": string, "highlights": string[]}.',
+    });
+
+    let summary = '';
+    let highlights: string[] = [];
+    try {
+      const parsed = JSON.parse(text) as { summary?: unknown; highlights?: unknown };
+      summary = typeof parsed.summary === 'string' ? parsed.summary.trim() : '';
+      if (Array.isArray(parsed.highlights)) {
+        highlights = parsed.highlights.map((s) => String(s).trim()).filter(Boolean);
+      }
+    } catch {
+      summary = text.trim();
+      highlights = [];
+    }
+
+    return {
+      summary: summary || 'Chưa tạo được tóm tắt.',
+      highlights: highlights.slice(0, 6),
       model,
       tokensUsed: tokensUsed ?? 0,
     };

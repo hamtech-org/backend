@@ -6,6 +6,7 @@ const router = Router();
 
 router.post('/suggest-content', authenticate, aiController.suggestContent);
 router.post('/suggest-reply-context', authenticate, aiController.suggestReplyFromContext);
+router.post('/group-summary', authenticate, aiController.summarizeGroupMessages);
 router.post('/chatbot', authenticate, aiController.chatbot);
 router.post('/sentiment', authenticate, aiController.analyzeSentiment);
 router.post('/generate-post', authenticate, aiController.generatePost);
