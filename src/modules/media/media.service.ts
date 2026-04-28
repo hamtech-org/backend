@@ -1,16 +1,45 @@
 import { v4 as uuidv4 } from 'uuid';
 import sharp from 'sharp';
 import { mediaRepository } from './media.repository.js';
-import type { AllowedMimeType, IMedia, IUploadResult, MediaType } from './media.types.js';
+import type {
+  AllowedMimeType,
+  IMedia,
+  IUploadResult,
+  MediaDeliveryScope,
+  MediaType,
+  MediaVisibility,
+} from './media.types.js';
 
 /** Trích mediaId từ URL download app: `.../api/v{n}/media/{uuid}/download` (origin tùy). */
 function parseMediaIdFromAppDownloadUrl(urlStr: string): string | null {
   const trimmed = (urlStr ?? '').trim();
   if (!trimmed) return null;
   try {
-    const u = /^https?:\/\//i.test(trimmed) ? new URL(trimmed) : new URL(trimmed, 'http://local.invalid');
+    const u = /^https?:\/\//i.test(trimmed)
+      ? new URL(trimmed)
+      : new URL(trimmed, 'http://local.invalid');
     const path = u.pathname.replace(/\/+$/, '');
-    const m = path.match(/\/media\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/download$/i);
+    const m = path.match(
+      /\/media\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/download$/i,
+    );
+    return m?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Trích mediaId từ URL object CloudFront/S3 theo key pattern `<scope>/<uploaderId>/<mediaId>/original.ext`. */
+function parseMediaIdFromObjectUrl(urlStr: string): string | null {
+  const trimmed = (urlStr ?? '').trim();
+  if (!trimmed) return null;
+  try {
+    const u = /^https?:\/\//i.test(trimmed)
+      ? new URL(trimmed)
+      : new URL(trimmed, 'http://local.invalid');
+    const path = u.pathname.replace(/\/+$/, '');
+    const m = path.match(
+      /\/(?:chat|public)\/[^/]+\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(?:original|thumb)\b/i,
+    );
     return m?.[1] ?? null;
   } catch {
     return null;
@@ -20,6 +49,11 @@ import { assertValidUploadBuffer, assertValidUploadBufferAuto } from './media.va
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
 import { env } from '@/config/env.js';
 import { deleteObjectKey, getSignedGetUrl, putObject } from '@/shared/services/s3Media.service.js';
+import {
+  buildPrivateCdnUrl,
+  buildPublicCdnUrl,
+  signPrivateCdnUrl,
+} from '@/shared/services/cloudfrontSigner.service.js';
 
 const API_BASE_PATH = `/api/${env.API_VERSION}/media`;
 
@@ -31,12 +65,21 @@ export function buildMediaThumbnailUrl(mediaId: string): string {
   return `${env.API_PUBLIC_ORIGIN}${API_BASE_PATH}/${mediaId}/thumbnail`;
 }
 
-function s3OriginalKey(uploaderId: string, mediaId: string, ext: string): string {
-  return `uploads/${uploaderId}/${mediaId}/original${ext}`;
+function scopePrefix(scope: MediaDeliveryScope): string {
+  return scope === 'chat' ? 'chat' : 'public';
 }
 
-function s3ThumbKey(uploaderId: string, mediaId: string): string {
-  return `uploads/${uploaderId}/${mediaId}/thumb.jpg`;
+function s3OriginalKey(
+  uploaderId: string,
+  mediaId: string,
+  ext: string,
+  scope: MediaDeliveryScope,
+): string {
+  return `${scopePrefix(scope)}/${uploaderId}/${mediaId}/original${ext}`;
+}
+
+function s3ThumbKey(uploaderId: string, mediaId: string, scope: MediaDeliveryScope): string {
+  return `${scopePrefix(scope)}/${uploaderId}/${mediaId}/thumb.jpg`;
 }
 
 function extFromMime(mime: string): string {
@@ -87,10 +130,50 @@ async function maybeThumbnailBuffer(
 
 type ProcessMediaMode = MediaType | 'auto';
 
+function inferVisibility(scope: MediaDeliveryScope): MediaVisibility {
+  return scope === 'chat' ? 'private' : 'public';
+}
+
+function resolveDeliveryUrls(
+  media: Pick<
+    IMedia,
+    'mediaId' | 's3Key' | 's3ThumbnailKey' | 'visibility' | 'url' | 'thumbnailUrl'
+  >,
+): {
+  mediaUrl: string;
+  thumbnailUrl: string | null;
+} {
+  // Legacy records (without visibility) keep existing URL strategy.
+  if (!media.visibility) {
+    return {
+      mediaUrl: media.url || buildMediaDownloadUrl(media.mediaId),
+      thumbnailUrl:
+        media.thumbnailUrl ?? (media.s3ThumbnailKey ? buildMediaThumbnailUrl(media.mediaId) : null),
+    };
+  }
+
+  if (media.visibility === 'private') {
+    return {
+      mediaUrl: signPrivateCdnUrl(media.s3Key),
+      thumbnailUrl: media.s3ThumbnailKey ? signPrivateCdnUrl(media.s3ThumbnailKey) : null,
+    };
+  }
+
+  const fallbackMedia = buildMediaDownloadUrl(media.mediaId);
+  const fallbackThumb = buildMediaThumbnailUrl(media.mediaId);
+  return {
+    mediaUrl: buildPublicCdnUrl(media.s3Key) || fallbackMedia,
+    thumbnailUrl: media.s3ThumbnailKey
+      ? buildPublicCdnUrl(media.s3ThumbnailKey) || fallbackThumb
+      : null,
+  };
+}
+
 async function processOneFile(
   uploaderId: string,
   file: Express.Multer.File,
   mediaTypeOrAuto: ProcessMediaMode,
+  scope: MediaDeliveryScope,
 ): Promise<IUploadResult> {
   const buffer = file.buffer;
   let mimeType: AllowedMimeType;
@@ -111,8 +194,9 @@ async function processOneFile(
 
   const mediaId = uuidv4();
   const ext = extFromMime(mimeType);
-  const origKey = s3OriginalKey(uploaderId, mediaId, ext);
-  const thumbKey = s3ThumbKey(uploaderId, mediaId);
+  const origKey = s3OriginalKey(uploaderId, mediaId, ext, scope);
+  const thumbKey = s3ThumbKey(uploaderId, mediaId, scope);
+  const visibility = inferVisibility(scope);
 
   await putObject({
     key: origKey,
@@ -134,13 +218,27 @@ async function processOneFile(
   }
 
   const now = new Date().toISOString();
-  const downloadUrl = buildMediaDownloadUrl(mediaId);
+  const privateRawUrl = buildPrivateCdnUrl(origKey);
+  const publicRawUrl = buildPublicCdnUrl(origKey);
+  const downloadUrl =
+    visibility === 'private'
+      ? privateRawUrl || buildMediaDownloadUrl(mediaId)
+      : publicRawUrl || buildMediaDownloadUrl(mediaId);
 
   const record: IMedia = {
     mediaId,
     uploaderId,
     url: downloadUrl,
-    thumbnailUrl,
+    thumbnailUrl:
+      visibility === 'private'
+        ? s3ThumbnailKey
+          ? buildPrivateCdnUrl(thumbKey)
+          : null
+        : s3ThumbnailKey
+          ? buildPublicCdnUrl(thumbKey)
+          : null,
+    visibility,
+    scope,
     s3Key: origKey,
     s3ThumbnailKey,
     type: mediaType,
@@ -152,11 +250,14 @@ async function processOneFile(
   };
 
   await mediaRepository.create(record);
+  const delivery = resolveDeliveryUrls(record);
 
   return {
     mediaId,
-    url: downloadUrl,
-    thumbnailUrl,
+    url: delivery.mediaUrl,
+    thumbnailUrl: delivery.thumbnailUrl,
+    visibility,
+    scope,
     type: mediaType,
     size,
     mimeType,
@@ -168,21 +269,23 @@ export const mediaService = {
     uploaderId: string,
     file: Express.Multer.File,
     mediaType: MediaType,
+    scope: MediaDeliveryScope = 'chat',
   ): Promise<IUploadResult> => {
-    return processOneFile(uploaderId, file, mediaType);
+    return processOneFile(uploaderId, file, mediaType, scope);
   },
 
   uploadMulti: async (
     uploaderId: string,
     files: Express.Multer.File[],
     mediaType?: MediaType,
+    scope: MediaDeliveryScope = 'chat',
   ): Promise<IUploadResult[]> => {
     const mode: ProcessMediaMode = mediaType ?? 'auto';
     const concurrency = 4;
     const results: IUploadResult[] = [];
     for (let i = 0; i < files.length; i += concurrency) {
       const chunk = files.slice(i, i + concurrency);
-      const part = await Promise.all(chunk.map((f) => processOneFile(uploaderId, f, mode)));
+      const part = await Promise.all(chunk.map((f) => processOneFile(uploaderId, f, mode, scope)));
       results.push(...part);
     }
     return results;
@@ -209,11 +312,12 @@ export const mediaService = {
     if (media.uploaderId !== senderId) {
       throw new ForbiddenError('Không được dùng media của người khác');
     }
+    const delivery = resolveDeliveryUrls(media);
     return {
-      mediaUrl: media.url,
+      mediaUrl: delivery.mediaUrl,
       mediaType: media.mimeType,
       mediaSize: media.size,
-      thumbnailUrl: media.thumbnailUrl,
+      thumbnailUrl: delivery.thumbnailUrl,
       originalName: media.originalName,
     };
   },
@@ -231,15 +335,16 @@ export const mediaService = {
     thumbnailUrl: string | null;
     originalName: string;
   } | null> => {
-    const id = parseMediaIdFromAppDownloadUrl(mediaUrl);
+    const id = parseMediaIdFromAppDownloadUrl(mediaUrl) ?? parseMediaIdFromObjectUrl(mediaUrl);
     if (!id) return null;
     const media = await mediaRepository.findById(id);
     if (!media) return null;
+    const delivery = resolveDeliveryUrls(media);
     return {
-      mediaUrl: media.url,
+      mediaUrl: delivery.mediaUrl,
       mediaType: media.mimeType,
       mediaSize: media.size,
-      thumbnailUrl: media.thumbnailUrl,
+      thumbnailUrl: delivery.thumbnailUrl,
       originalName: media.originalName,
     };
   },
@@ -260,6 +365,14 @@ export const mediaService = {
   getDownloadUrl: async (mediaId: string): Promise<string> => {
     const media = await mediaRepository.findById(mediaId);
     if (!media) throw new NotFoundError('Media');
+    if (!media.visibility) {
+      return getSignedGetUrl(media.s3Key);
+    }
+    if (media.visibility === 'private') {
+      return signPrivateCdnUrl(media.s3Key);
+    }
+    const publicUrl = buildPublicCdnUrl(media.s3Key);
+    if (publicUrl) return publicUrl;
     return getSignedGetUrl(media.s3Key);
   },
 
@@ -267,8 +380,16 @@ export const mediaService = {
     const media = await mediaRepository.findById(mediaId);
     if (!media) throw new NotFoundError('Media');
     if (!media.s3ThumbnailKey) {
-      return getSignedGetUrl(media.s3Key);
+      return mediaService.getDownloadUrl(mediaId);
     }
+    if (!media.visibility) {
+      return getSignedGetUrl(media.s3ThumbnailKey);
+    }
+    if (media.visibility === 'private') {
+      return signPrivateCdnUrl(media.s3ThumbnailKey);
+    }
+    const publicThumbUrl = buildPublicCdnUrl(media.s3ThumbnailKey);
+    if (publicThumbUrl) return publicThumbUrl;
     return getSignedGetUrl(media.s3ThumbnailKey);
   },
 };

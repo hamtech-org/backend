@@ -1,6 +1,8 @@
 import type { TimestampFields } from '@/shared/types/common.types.js';
 
 export type MediaType = 'image' | 'video' | 'audio' | 'file';
+export type MediaVisibility = 'public' | 'private';
+export type MediaDeliveryScope = 'chat' | 'general';
 
 export const ALLOWED_MIME_TYPES = [
   'image/jpeg',
@@ -39,6 +41,8 @@ export interface IMedia extends TimestampFields {
   uploaderId: string;
   url: string;
   thumbnailUrl: string | null;
+  visibility: MediaVisibility;
+  scope: MediaDeliveryScope;
   s3Key: string;
   s3ThumbnailKey: string | null;
   type: MediaType;
@@ -51,6 +55,8 @@ export interface IUploadResult {
   mediaId: string;
   url: string;
   thumbnailUrl: string | null;
+  visibility: MediaVisibility;
+  scope: MediaDeliveryScope;
   type: MediaType;
   size: number;
   mimeType: AllowedMimeType;

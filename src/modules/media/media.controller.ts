@@ -11,6 +11,8 @@ function stripInternalKeys(media: {
   uploaderId: string;
   url: string;
   thumbnailUrl: string | null;
+  visibility: 'public' | 'private';
+  scope: 'chat' | 'general';
   type: string;
   mimeType: string;
   size: number;
@@ -28,8 +30,11 @@ export const mediaController = {
   upload: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       console.log('DEBUG: media/upload body:', req.body);
-      console.log('DEBUG: media/upload file:', req.file ? { name: req.file.originalname, size: req.file.size } : 'NONE');
-      
+      console.log(
+        'DEBUG: media/upload file:',
+        req.file ? { name: req.file.originalname, size: req.file.size } : 'NONE',
+      );
+
       const parsed = uploadBodySchema.safeParse(req.body ?? {});
       if (!parsed.success) {
         const msg = parsed.error.errors.map((e) => e.message).join(', ');
@@ -37,12 +42,17 @@ export const mediaController = {
         next(new ValidationError(msg));
         return;
       }
-      const { mediaType } = parsed.data;
+      const { mediaType, deliveryScope } = parsed.data;
       if (!req.file) {
         next(new ValidationError('Thiếu file upload'));
         return;
       }
-      const result = await mediaService.upload(req.user!.userId, req.file, mediaType);
+      const result = await mediaService.upload(
+        req.user!.userId,
+        req.file,
+        mediaType,
+        deliveryScope,
+      );
       sendCreated(res, result, 'Upload thành công');
     } catch (error) {
       console.error('DEBUG: Upload catch error:', error);
@@ -57,13 +67,18 @@ export const mediaController = {
         next(new ValidationError(parsed.error.errors.map((e) => e.message).join(', ')));
         return;
       }
-      const { mediaType } = parsed.data;
+      const { mediaType, deliveryScope } = parsed.data;
       const files = req.files as Express.Multer.File[] | undefined;
       if (!files?.length) {
         next(new ValidationError('Thiếu file (field: files)'));
         return;
       }
-      const results = await mediaService.uploadMulti(req.user!.userId, files, mediaType);
+      const results = await mediaService.uploadMulti(
+        req.user!.userId,
+        files,
+        mediaType,
+        deliveryScope,
+      );
       sendCreated(res, results, 'Upload thành công');
     } catch (error) {
       next(error);
