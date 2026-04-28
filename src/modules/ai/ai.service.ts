@@ -6,9 +6,13 @@ import type {
   IAiSentimentResult,
   IAiGeneratePostRequest,
   IAiGeneratePostResponse,
+  IAiSuggestReplyContextRequest,
+  IAiSuggestReplyContextResponse,
 } from './ai.types.js';
 import { ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { aiConfig, bedrockRuntimeClient, type BedrockAiConfig } from '@/config/ai.js';
+import { conversationRepository } from '@/modules/chat/conversation/conversation.repository.js';
+import type { IMessage } from '@/modules/chat/shared/chat.types.js';
 
 export type AiGenerateTextOptions = Partial<
   Pick<BedrockAiConfig, 'modelId' | 'maxTokens' | 'temperature' | 'topP'>
@@ -152,6 +156,86 @@ export const aiService = {
     }
 
     if (suggestions.length > 5) suggestions = suggestions.slice(0, 5);
+
+    return {
+      suggestions,
+      model,
+      tokensUsed: tokensUsed ?? 0,
+    };
+  },
+
+  /**
+   * Gợi ý câu trả lời (phong cách bạn bè) dựa trên ngữ cảnh hội thoại quanh một tin nhắn anchor.
+   * Client gửi: meUserId, theirUserId, conversationId, anchorMessageId.
+   * Backend sẽ tự lấy window tin nhắn quanh anchor từ DynamoDB.
+   */
+  suggestReplyFromContext: async (
+    request: IAiSuggestReplyContextRequest,
+  ): Promise<IAiSuggestReplyContextResponse> => {
+    const count = Math.min(Math.max(1, request.count ?? 5), 5);
+    const windowBefore = Math.min(Math.max(0, request.windowBefore ?? 20), 60);
+    const windowAfter = Math.min(Math.max(0, request.windowAfter ?? 5), 30);
+
+    const ctx = await conversationRepository.getMessageContext(
+      request.conversationId,
+      request.anchorMessageId,
+      {
+        before: windowBefore,
+        after: windowAfter,
+        onlyBetweenUsers: { meUserId: request.meUserId, theirUserId: request.theirUserId },
+      },
+    );
+
+    if (ctx.anchor.senderId !== request.theirUserId) {
+      throw new Error('Anchor message is not from theirUserId');
+    }
+
+    const renderLine = (m: IMessage, isAnchor: boolean) => {
+      const speaker = m.senderId === request.meUserId ? 'Mình' : 'Bạn';
+      const content = String((m as any).content ?? '').trim();
+      const safe = content.length ? content : '(không có nội dung)';
+      return isAnchor ? `[ANCHOR] ${speaker}: ${safe}` : `${speaker}: ${safe}`;
+    };
+
+    const transcript = [...ctx.before, ctx.anchor, ...ctx.after]
+      .map((m) => renderLine(m, m.messageId === ctx.anchor.messageId))
+      .join('\n');
+
+    const anchorLine = renderLine(ctx.anchor, true);
+
+    const prompt = [
+      `Bạn đang soạn tin nhắn trả lời theo phong cách bạn bè.`,
+      `Câu cần trả lời nhất (ANCHOR):`,
+      anchorLine,
+      ``,
+      `Dựa trên transcript dưới đây, hãy đề xuất ${count} câu trả lời NGẮN để "Mình" trả lời "Bạn".`,
+      `Yêu cầu: ưu tiên trả lời đúng trọng tâm ANCHOR; đúng ngữ cảnh, tự nhiên, thân thiện; không bịa thông tin mới; nếu thiếu thông tin thì hỏi 1 câu ngắn để làm rõ.`,
+      ``,
+      `Transcript:`,
+      transcript,
+      ``,
+      `Trả về đúng JSON theo schema: {"suggestions": string[]}`,
+    ].join('\n');
+
+    const { text, model, tokensUsed } = await generateText(prompt, {
+      systemPrompt:
+        'Bạn là trợ lý soạn tin nhắn kiểu bạn bè. Luôn ưu tiên trả lời đúng trọng tâm ANCHOR. Không bịa chi tiết mới. Chỉ trả JSON hợp lệ theo schema {"suggestions": string[]}.',
+    });
+
+    let suggestions: string[] = [];
+    try {
+      const parsed = JSON.parse(text) as { suggestions?: unknown };
+      if (Array.isArray(parsed.suggestions)) {
+        suggestions = parsed.suggestions.map((s) => String(s).trim()).filter(Boolean);
+      }
+    } catch {
+      suggestions = text
+        .split('\n')
+        .map((s) => s.replace(/^\s*[-*•\d.]+\s*/, '').trim())
+        .filter(Boolean);
+    }
+
+    if (suggestions.length > count) suggestions = suggestions.slice(0, count);
 
     return {
       suggestions,
