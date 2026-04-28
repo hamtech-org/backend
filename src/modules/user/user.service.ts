@@ -1,18 +1,27 @@
 import { userRepository } from './user.repository.js';
-import type { IUser, IUserPublic, IUpdateProfileDto, IFriendshipResponse, IFriendsList, IPendingRequests, IFriendRequestResponse } from './user.types.js';
+import type {
+  IUser,
+  IUserPublic,
+  IUpdateProfileDto,
+  IFriendshipResponse,
+  IFriendsList,
+  IPendingRequests,
+  IFriendRequestResponse,
+} from './user.types.js';
 import { NotFoundError, ConflictError, ValidationError } from '@/shared/utils/errors.js';
 import { getKafkaProducer } from '@/config/kafka.js';
 import { getIO } from '@/socket/index.js';
 import { logger } from '@/shared/utils/logger.js';
 import { putObject, deleteObjectKey, getSignedGetUrl } from '@/shared/services/s3Media.service.js';
 import { v4 as uuidv4 } from 'uuid';
+import { buildPublicCdnUrl } from '@/shared/services/cloudfrontSigner.service.js';
 
 /**
  * Emit search index event to Kafka for Elasticsearch synchronization
  */
 const emitSearchIndexEvent = async (
   action: 'index' | 'update' | 'delete',
-  user: IUser | null
+  user: IUser | null,
 ): Promise<void> => {
   try {
     if (!user) return;
@@ -92,7 +101,7 @@ export const userService = {
         // Upload to S3
         const avatarId = uuidv4();
         const ext = data.avatarFile.mimetype === 'image/jpeg' ? '.jpg' : '.png';
-        const s3Key = `avatars/${userId}/${avatarId}${ext}`;
+        const s3Key = `public/avatars/${userId}/${avatarId}${ext}`;
 
         await putObject({
           key: s3Key,
@@ -100,9 +109,7 @@ export const userService = {
           contentType: data.avatarFile.mimetype,
         });
 
-        // Get signed URL for avatar (max 7 days for S3 presigned URLs)
-        const avatarUrl = await getSignedGetUrl(s3Key, 604800); // 7 days expiry
-        updateData.avatar = avatarUrl;
+        updateData.avatar = buildPublicCdnUrl(s3Key) || (await getSignedGetUrl(s3Key, 604800));
 
         logger.info(`Avatar uploaded for user ${userId}: ${s3Key}`);
       } catch (error) {
@@ -122,7 +129,11 @@ export const userService = {
     return updated;
   },
 
-  searchUsers: async (query: string, limit: number = 10, offset: number = 0): Promise<IUserPublic[]> => {
+  searchUsers: async (
+    query: string,
+    limit: number = 10,
+    offset: number = 0,
+  ): Promise<IUserPublic[]> => {
     const users = await userRepository.search(query, limit, offset);
     return users.map(toPublicProfile);
   },
@@ -151,11 +162,11 @@ export const userService = {
 
     // Check current status
     const status = await userRepository.getFriendRequestStatus(senderId, receiverId);
-    
+
     if (status === 'friend') {
       throw new ConflictError('Bạn đã kết bạn với người này');
     }
-    
+
     if (status === 'pending_sent') {
       throw new ConflictError('Bạn đã gửi lời mời cho người này');
     }
@@ -165,7 +176,7 @@ export const userService = {
       // Auto-accept if they sent you a request
       await userRepository.acceptFriendRequest(senderId, receiverId);
       logger.info(`Auto-accepted friend request: ${senderId} <-> ${receiverId}`);
-      
+
       // Emit socket events for auto-accept
       try {
         const io = getIO();
@@ -184,13 +195,13 @@ export const userService = {
       } catch (error) {
         logger.error('Failed to emit socket events for auto-accept:', error);
       }
-      
+
       return 'Lời mời đã được chấp nhận tự động';
     }
 
     await userRepository.sendFriendRequest(senderId, receiverId);
     logger.info(`Friend request sent: ${senderId} -> ${receiverId}`);
-    
+
     // Emit socket event to notify receiver in real-time
     try {
       const io = getIO();
@@ -207,7 +218,7 @@ export const userService = {
       logger.error('Failed to emit socket event for friend request:', error);
       console.error('❌ Socket emit error:', error);
     }
-    
+
     return 'Lời mời kết bạn đã được gửi';
   },
 
@@ -220,7 +231,7 @@ export const userService = {
 
     await userRepository.acceptFriendRequest(userId, senderId);
     logger.info(`Friend request accepted: ${senderId} <-> ${userId}`);
-    
+
     // Emit socket events
     try {
       const io = getIO();
@@ -228,7 +239,7 @@ export const userService = {
         userId,
         timestamp: new Date(),
       });
-      
+
       // Notify both users about new friendship
       io.to(`user:${senderId}`).emit('friend:added', {
         friendId: userId,
@@ -241,7 +252,7 @@ export const userService = {
     } catch (error) {
       logger.error('Failed to emit socket events for accept friend request:', error);
     }
-    
+
     return 'Lời mời đã được chấp nhận';
   },
 
@@ -254,7 +265,7 @@ export const userService = {
 
     await userRepository.rejectFriendRequest(userId, senderId);
     logger.info(`Friend request rejected: ${userId} rejected ${senderId}`);
-    
+
     // Emit socket event
     try {
       const io = getIO();
@@ -265,7 +276,7 @@ export const userService = {
     } catch (error) {
       logger.error('Failed to emit socket events for reject friend request:', error);
     }
-    
+
     return 'Lời mời đã bị từ chối';
   },
 
@@ -281,20 +292,23 @@ export const userService = {
     return 'Lời mời đã bị hủy';
   },
 
-  getFriendRequestStatus: async (userId: string, otherUserId: string): Promise<'friend' | 'pending_sent' | 'pending_received' | 'none'> => {
+  getFriendRequestStatus: async (
+    userId: string,
+    otherUserId: string,
+  ): Promise<'friend' | 'pending_sent' | 'pending_received' | 'none'> => {
     return userRepository.getFriendRequestStatus(userId, otherUserId);
   },
 
   getPendingRequests: async (userId: string): Promise<IPendingRequests> => {
     const { received, sent } = await userRepository.getPendingRequests(userId);
-    
+
     // Fetch user details for all pending requests
     const [receivedUsers, sentUsers] = await Promise.all([
       userRepository.findMultipleById(received),
       userRepository.findMultipleById(sent),
     ]);
 
-    const receivedResponses: IFriendRequestResponse[] = receivedUsers.map(user => ({
+    const receivedResponses: IFriendRequestResponse[] = receivedUsers.map((user) => ({
       userId: user.userId,
       displayName: user.displayName,
       avatar: user.avatar,
@@ -304,7 +318,7 @@ export const userService = {
       createdAt: user.createdAt,
     }));
 
-    const sentResponses: IFriendRequestResponse[] = sentUsers.map(user => ({
+    const sentResponses: IFriendRequestResponse[] = sentUsers.map((user) => ({
       userId: user.userId,
       displayName: user.displayName,
       avatar: user.avatar,
@@ -329,7 +343,7 @@ export const userService = {
 
     await userRepository.removeFriend(userId, friendId);
     logger.info(`User ${userId} removed friend ${friendId}`);
-    
+
     // Emit socket event to notify both users
     try {
       const io = getIO();
@@ -344,11 +358,15 @@ export const userService = {
     } catch (error) {
       logger.error('Failed to emit socket events for remove friend:', error);
     }
-    
+
     return 'Hủy kết bạn thành công';
   },
 
-  getFriends: async (userId: string, limit: number = 50, offset: number = 0): Promise<IFriendsList> => {
+  getFriends: async (
+    userId: string,
+    limit: number = 50,
+    offset: number = 0,
+  ): Promise<IFriendsList> => {
     // Check if user exists
     const user = await userRepository.findById(userId);
     if (!user) {
@@ -389,7 +407,7 @@ export const userService = {
 
     // Get all users (pagination would be ideal for production)
     const allUsers = await userRepository.findMultipleById([]);
-    
+
     // Filter to get suggested users:
     // - Not the current user
     // - Not already a friend
@@ -415,7 +433,10 @@ export const userService = {
     return suggested;
   },
 
-  updateUserStatus: async (userId: string, status: 'online' | 'offline' | 'away'): Promise<void> => {
+  updateUserStatus: async (
+    userId: string,
+    status: 'online' | 'offline' | 'away',
+  ): Promise<void> => {
     await userRepository.update(userId, {
       status,
       ...{ lastSeen: new Date().toISOString() },
