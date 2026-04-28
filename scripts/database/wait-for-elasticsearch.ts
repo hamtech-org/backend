@@ -40,4 +40,4 @@ async function waitForElasticsearch(): Promise<void> {
   process.exit(1);
 }
 
-waitForElasticsearch();
+void waitForElasticsearch();

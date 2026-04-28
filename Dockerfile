@@ -6,8 +6,9 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 
-COPY tsconfig.json ./
+COPY tsconfig*.json ./
 COPY src ./src
+COPY scripts ./scripts
 
 RUN npm run build
 
@@ -19,14 +20,17 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
 
 # Tạo user không phải root để chạy ứng dụng
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+RUN addgroup -S appgroup \
+  && adduser -S appuser -G appgroup \
+  && mkdir -p /app/logs \
+  && chown -R appuser:appgroup /app
 USER appuser
 
 EXPOSE 3000
 
-CMD ["node", "dist/server.js"]
+CMD ["node", "-r", "module-alias/register", "dist/server.js"]

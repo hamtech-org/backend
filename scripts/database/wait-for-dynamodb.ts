@@ -42,4 +42,4 @@ async function waitForDynamoDB(): Promise<void> {
   process.exit(1);
 }
 
-waitForDynamoDB();
+void waitForDynamoDB();

@@ -51,8 +51,6 @@ const envSchema = z.object({
   SES_REGION: z.string().default('us-east-1'),
   SNS_REGION: z.string().default('us-east-1'),
 
-  GOOGLE_GEMINI_API_KEY: z.string().default(''),
-
   REKOGNITION_COLLECTION_ID: z.string().default('zalogram-faces'),
   REKOGNITION_FACE_MATCH_THRESHOLD: z.coerce.number().default(95),
 

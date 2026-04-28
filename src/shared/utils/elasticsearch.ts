@@ -10,11 +10,11 @@ export const elasticsearchUtils = {
    */
   initializeUsersIndex: async (): Promise<void> => {
     const indexName = 'users';
-    
+
     try {
       // Check if index exists
       const existsResponse = await esClient.indices.exists({ index: indexName });
-      
+
       if (existsResponse) {
         logger.info(`Elasticsearch index '${indexName}' already exists`);
         return;
@@ -71,6 +71,116 @@ export const elasticsearchUtils = {
   },
 
   /**
+   * Initialize groups index
+   */
+  initializeGroupsIndex: async (): Promise<void> => {
+    const indexName = 'groups';
+    try {
+      const exists = await esClient.indices.exists({ index: indexName });
+      if (exists) return;
+
+      await esClient.indices.create({
+        index: indexName,
+        mappings: {
+          properties: {
+            groupId: { type: 'keyword' },
+            name: {
+              type: 'text',
+              analyzer: 'standard',
+              fields: { keyword: { type: 'keyword' } },
+            },
+            description: { type: 'text', analyzer: 'standard' },
+            memberCount: { type: 'integer' },
+            type: { type: 'keyword' },
+          },
+        },
+        settings: {
+          number_of_shards: 1,
+          number_of_replicas: 0,
+        },
+      });
+      logger.info(`Elasticsearch index '${indexName}' created successfully`);
+    } catch (error) {
+      logger.error(`Failed to initialize '${indexName}' index:`, error);
+    }
+  },
+
+  /**
+   * Initialize posts index
+   */
+  initializePostsIndex: async (): Promise<void> => {
+    const indexName = 'posts';
+    try {
+      const exists = await esClient.indices.exists({ index: indexName });
+      if (exists) return;
+
+      await esClient.indices.create({
+        index: indexName,
+        mappings: {
+          properties: {
+            postId: { type: 'keyword' },
+            authorId: { type: 'keyword' },
+            content: { type: 'text', analyzer: 'standard' },
+            type: { type: 'keyword' },
+            createdAt: { type: 'date' },
+          },
+        },
+        settings: {
+          number_of_shards: 1,
+          number_of_replicas: 0,
+        },
+      });
+      logger.info(`Elasticsearch index '${indexName}' created successfully`);
+    } catch (error) {
+      logger.error(`Failed to initialize '${indexName}' index:`, error);
+    }
+  },
+
+  /**
+   * Initialize messages index
+   */
+  initializeMessagesIndex: async (): Promise<void> => {
+    const indexName = 'messages';
+    try {
+      const exists = await esClient.indices.exists({ index: indexName });
+      if (exists) return;
+
+      await esClient.indices.create({
+        index: indexName,
+        mappings: {
+          properties: {
+            messageId: { type: 'keyword' },
+            conversationId: { type: 'keyword' },
+            senderId: { type: 'keyword' },
+            content: { type: 'text', analyzer: 'standard' },
+            createdAt: { type: 'date' },
+          },
+        },
+        settings: {
+          number_of_shards: 1,
+          number_of_replicas: 0,
+        },
+      });
+      logger.info(`Elasticsearch index '${indexName}' created successfully`);
+    } catch (error) {
+      logger.error(`Failed to initialize '${indexName}' index:`, error);
+    }
+  },
+
+  /**
+   * Initialize all required indices
+   */
+  initializeAllIndices: async (): Promise<void> => {
+    logger.info('Initializing Elasticsearch indices...');
+    await Promise.all([
+      elasticsearchUtils.initializeUsersIndex(),
+      elasticsearchUtils.initializeGroupsIndex(),
+      elasticsearchUtils.initializePostsIndex(),
+      elasticsearchUtils.initializeMessagesIndex(),
+    ]);
+  },
+
+  /**
    * Index a user document
    */
   indexUser: async (userId: string, userData: Record<string, unknown>): Promise<void> => {
@@ -123,15 +233,17 @@ export const elasticsearchUtils = {
   /**
    * Bulk index users
    */
-  bulkIndexUsers: async (users: Array<{ userId: string; [key: string]: unknown }>): Promise<void> => {
+  bulkIndexUsers: async (
+    users: Array<{ userId: string; [key: string]: unknown }>,
+  ): Promise<void> => {
     try {
-      const body = users.flatMap(user => [
+      const body = users.flatMap((user) => [
         { index: { _index: 'users', _id: user.userId } },
         user,
       ]);
 
       const result = await esClient.bulk({ body });
-      
+
       if (result.errors) {
         logger.warn(`Some documents failed to index: ${JSON.stringify(result.items)}`);
       } else {

@@ -1,11 +1,7 @@
-version: '3.8'
-
 services:
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: zalogram-backend-prod
+    image: ${ECR_REPO_WITH_TAG:-hamtech-backend:latest}
+    container_name: hamtech-backend-prod
     ports:
       - '3000:3000'
     env_file:
@@ -15,13 +11,20 @@ services:
       - redis
       - kafka
       - elasticsearch
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: us-east-1
+        awslogs-group: /docker/hamtech-backend
+        awslogs-create-group: 'true'
+        awslogs-stream: app
     restart: unless-stopped
     networks:
-      - zalogram-network
+      - hamtech-network
 
   nginx:
     image: nginx:1.25-alpine
-    container_name: zalogram-nginx
+    container_name: hamtech-nginx
     ports:
       - '80:80'
       - '443:443'
@@ -30,32 +33,39 @@ services:
       - ./nginx/certs:/etc/nginx/certs:ro
     depends_on:
       - app
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: us-east-1
+        awslogs-group: /docker/hamtech-backend
+        awslogs-create-group: 'true'
+        awslogs-stream: nginx
     restart: unless-stopped
     networks:
-      - zalogram-network
+      - hamtech-network
 
   redis:
     image: redis:7-alpine
-    container_name: zalogram-redis-prod
+    container_name: hamtech-redis-prod
     volumes:
       - redis-data:/data
     restart: unless-stopped
     networks:
-      - zalogram-network
+      - hamtech-network
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
-    container_name: zalogram-zookeeper-prod
+    container_name: hamtech-zookeeper-prod
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
     restart: unless-stopped
     networks:
-      - zalogram-network
+      - hamtech-network
 
   kafka:
     image: confluentinc/cp-kafka:7.5.0
-    container_name: zalogram-kafka-prod
+    container_name: hamtech-kafka-prod
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
@@ -67,25 +77,25 @@ services:
       - zookeeper
     restart: unless-stopped
     networks:
-      - zalogram-network
+      - hamtech-network
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
-    container_name: zalogram-elasticsearch-prod
+    container_name: hamtech-elasticsearch-prod
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=true
-      - 'ES_JAVA_OPTS=-Xms1g -Xmx1g'
+      - 'ES_JAVA_OPTS=-Xms256m -Xmx256m'
     volumes:
       - es-data:/usr/share/elasticsearch/data
     restart: unless-stopped
     networks:
-      - zalogram-network
+      - hamtech-network
 
 volumes:
   redis-data:
   es-data:
 
 networks:
-  zalogram-network:
+  hamtech-network:
     driver: bridge

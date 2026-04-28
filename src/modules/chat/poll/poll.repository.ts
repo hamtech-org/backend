@@ -1,10 +1,21 @@
 import { PutCommand, QueryCommand, UpdateCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { dynamoClient } from '@/config/database.js';
+import { env } from '@/config/env.js';
 
-const CONVERSATIONS_TABLE = 'Zalogram_Conversations';
+const CONVERSATIONS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Conversations`;
+type PollOption = Record<string, unknown> & {
+  text: string;
+  voters: string[];
+};
+type PollRecord = Record<string, unknown> & {
+  conversationId: string;
+  pollId: string;
+  options: PollOption[];
+  creatorId?: string;
+};
 
 export const pollRepository = {
-  createPoll: async (poll: any): Promise<void> => {
+  createPoll: async (poll: PollRecord): Promise<void> => {
     await dynamoClient.send(
       new PutCommand({
         TableName: CONVERSATIONS_TABLE,
@@ -17,7 +28,7 @@ export const pollRepository = {
     );
   },
 
-  getPolls: async (conversationId: string): Promise<any[]> => {
+  getPolls: async (conversationId: string): Promise<PollRecord[]> => {
     const result = await dynamoClient.send(
       new QueryCommand({
         TableName: CONVERSATIONS_TABLE,
@@ -28,10 +39,14 @@ export const pollRepository = {
         },
       }),
     );
-    return result.Items ?? [];
+    return (result.Items as PollRecord[]) ?? [];
   },
 
-  updatePollVotes: async (conversationId: string, pollId: string, options: any[]): Promise<void> => {
+  updatePollVotes: async (
+    conversationId: string,
+    pollId: string,
+    options: PollOption[],
+  ): Promise<void> => {
     await dynamoClient.send(
       new UpdateCommand({
         TableName: CONVERSATIONS_TABLE,
@@ -46,9 +61,14 @@ export const pollRepository = {
     );
   },
 
-  updatePoll: async (conversationId: string, pollId: string, updates: any): Promise<void> => {
+  updatePoll: async (
+    conversationId: string,
+    pollId: string,
+    updates: Record<string, unknown>,
+  ): Promise<void> => {
     const entries = Object.entries(updates);
-    const updateExpr = 'SET ' + entries.map((_, i) => `#k${i} = :v${i}`).join(', ') + ', updatedAt = :now';
+    const updateExpr =
+      'SET ' + entries.map((_, i) => `#k${i} = :v${i}`).join(', ') + ', updatedAt = :now';
     const attrNames = Object.fromEntries(entries.map(([k], i) => [`#k${i}`, k]));
     const attrValues = {
       ...Object.fromEntries(entries.map(([, v], i) => [`:v${i}`, v])),
