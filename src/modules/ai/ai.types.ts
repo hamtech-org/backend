@@ -2,6 +2,7 @@ export interface IAiSuggestRequest {
   context: string;
   type: 'reply' | 'post' | 'caption';
   language: 'vi' | 'en';
+  topics: string[];
 }
 
 export interface IAiSuggestResponse {
@@ -42,6 +43,43 @@ export interface IAiGeneratePostRequest {
 export interface IAiGeneratePostResponse {
   content: string;
   hashtags: string[];
+  model: string;
+  tokensUsed: number;
+}
+
+export interface IAiSuggestReplyContextRequest {
+  conversationId: string;
+  /** id của mình (server nên validate khớp token) */
+  meUserId: string;
+  /** id của người mình sẽ trả lời */
+  theirUserId: string;
+  /** id tin nhắn của đối phương mà mình muốn trả lời */
+  anchorMessageId: string;
+  /** số gợi ý trả lời */
+  count?: number;
+  /** số tin nhắn trước anchor để lấy ngữ cảnh */
+  windowBefore?: number;
+  /** số tin nhắn sau anchor để lấy ngữ cảnh */
+  windowAfter?: number;
+}
+
+export interface IAiSuggestReplyContextResponse {
+  suggestions: string[];
+  model: string;
+  tokensUsed: number;
+}
+
+export interface IAiGroupSummaryRequest {
+  conversationId: string;
+  /** số tin nhắn gần nhất để tóm tắt */
+  limit?: number;
+}
+
+export interface IAiGroupSummaryResponse {
+  /** Tóm tắt ngắn 3-6 bullet */
+  summary: string;
+  /** Các điểm cần làm / quyết định / câu hỏi còn bỏ ngỏ */
+  highlights: string[];
   model: string;
   tokensUsed: number;
 }

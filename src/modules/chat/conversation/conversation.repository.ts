@@ -388,6 +388,89 @@ export const conversationRepository = {
 
   // ─── Messages (shared foundation) ────────────────────────────────────
 
+  /**
+   * Lấy ngữ cảnh tin nhắn quanh một anchor message.
+   * - before: số tin nhắn trước anchor (theo thời gian)
+   * - after: số tin nhắn sau anchor (theo thời gian)
+   * - onlyBetweenUsers: nếu set thì chỉ giữ tin của 2 user (me/their) để dùng cho gợi ý trả lời
+   */
+  getMessageContext: async (
+    conversationId: string,
+    anchorMessageId: string,
+    opts?: {
+      before?: number;
+      after?: number;
+      onlyBetweenUsers?: { meUserId: string; theirUserId: string };
+    },
+  ): Promise<{ anchor: IMessage; before: IMessage[]; after: IMessage[] }> => {
+    const beforeN = Math.min(Math.max(0, opts?.before ?? 20), 100);
+    const afterN = Math.min(Math.max(0, opts?.after ?? 5), 100);
+
+    const anchor = await conversationRepository.findMessageByMessageId(
+      conversationId,
+      anchorMessageId,
+    );
+    if (!anchor) {
+      throw new Error('Anchor message not found');
+    }
+
+    const anchorSk = `MSG#${anchor.createdAt}#${anchor.messageId}`;
+    const pk = `CONV#${conversationId}`;
+
+    const isAllowedSender = opts?.onlyBetweenUsers
+      ? (senderId: string) =>
+          senderId === opts.onlyBetweenUsers!.meUserId ||
+          senderId === opts.onlyBetweenUsers!.theirUserId
+      : undefined;
+
+    const shouldKeep = (m: IMessage) => {
+      if (m.isRecalled || m.isDeleted) return false;
+      if ((m.type as string) === 'system' || (m as { position?: string }).position === 'center')
+        return false;
+      if (isAllowedSender && !isAllowedSender(m.senderId)) return false;
+      return true;
+    };
+
+    const [beforeRes, afterRes] = await Promise.all([
+      beforeN > 0
+        ? dynamoClient.send(
+            new QueryCommand({
+              TableName: MESSAGES_TABLE,
+              KeyConditionExpression: 'PK = :pk AND SK < :sk',
+              ExpressionAttributeValues: {
+                ':pk': pk,
+                ':sk': anchorSk,
+              },
+              Limit: beforeN,
+              ScanIndexForward: false,
+            }),
+          )
+        : Promise.resolve({ Items: [] as unknown[] }),
+      afterN > 0
+        ? dynamoClient.send(
+            new QueryCommand({
+              TableName: MESSAGES_TABLE,
+              KeyConditionExpression: 'PK = :pk AND SK > :sk',
+              ExpressionAttributeValues: {
+                ':pk': pk,
+                ':sk': anchorSk,
+              },
+              Limit: afterN,
+              ScanIndexForward: true,
+            }),
+          )
+        : Promise.resolve({ Items: [] as unknown[] }),
+    ]);
+
+    const before = ((beforeRes as { Items?: unknown[] }).Items as IMessage[] | undefined) ?? [];
+    const after = ((afterRes as { Items?: unknown[] }).Items as IMessage[] | undefined) ?? [];
+
+    const filteredBefore = before.filter(shouldKeep).reverse();
+    const filteredAfter = after.filter(shouldKeep);
+
+    return { anchor, before: filteredBefore, after: filteredAfter };
+  },
+
   getMessages: async (conversationId: string, limit: number = 20): Promise<IMessage[]> => {
     const result = await dynamoClient.send(
       new QueryCommand({
