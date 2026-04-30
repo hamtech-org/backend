@@ -5,7 +5,15 @@ import { getKafkaProducer } from '@/config/kafka.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { logger } from '@/shared/utils/logger.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
-import type { IPost, IComment, IReel, ICreatePostDto, ICreateReelDto } from './newsfeed.types.js';
+import type {
+  IPost,
+  IComment,
+  IReel,
+  ICreatePostDto,
+  ICreateReelDto,
+  IFeedCursorPayload,
+  IFeedPage,
+} from './newsfeed.types.js';
 
 type ISearchIndexEvent = {
   action: 'index' | 'update' | 'delete';
@@ -36,6 +44,27 @@ const emitPostIndexEvent = async (event: ISearchIndexEvent): Promise<void> => {
   }
 };
 
+const comparePostsDesc = (a: IPost, b: IPost): number => {
+  const createdDiff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  if (createdDiff !== 0) return createdDiff;
+  return b.postId.localeCompare(a.postId);
+};
+
+const encodeFeedCursor = (payload: IFeedCursorPayload): string =>
+  Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+
+const decodeFeedCursor = (cursor?: string): IFeedCursorPayload | null => {
+  if (!cursor) return null;
+  try {
+    const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+    const parsed = JSON.parse(raw) as Partial<IFeedCursorPayload>;
+    if (!parsed.createdAt || !parsed.postId) return null;
+    return { createdAt: parsed.createdAt, postId: parsed.postId };
+  } catch {
+    return null;
+  }
+};
+
 export const newsfeedService = {
   // Enrich author metadata for UI rendering.
   // Note: this data is not stored in DynamoDB Posts table (it's computed at response time).
@@ -61,14 +90,15 @@ export const newsfeedService = {
     });
   },
 
-  getFeed: async (viewerUserId: string, limit?: number): Promise<IPost[]> => {
-    const pageSize = limit ?? 20;
+  getFeed: async (viewerUserId: string, limit?: number, cursor?: string): Promise<IFeedPage> => {
+    const pageSize = Math.max(1, Math.min(limit ?? 20, 50));
     const friendIds = await userRepository.getFriendIds(viewerUserId, 100);
     const friendSet = new Set(friendIds);
     const authorIds = Array.from(new Set([...friendIds, viewerUserId]));
+    const decodedCursor = decodeFeedCursor(cursor);
 
     // MVP: query theo author, merge & sort
-    const perAuthorLimit = Math.max(5, Math.floor(pageSize * 2));
+    const perAuthorLimit = Math.max(10, pageSize * 3);
     const fetched: IPost[] = [];
     await Promise.all(
       authorIds.map(async (authorId) => {
@@ -77,7 +107,14 @@ export const newsfeedService = {
       }),
     );
 
-    const visible = fetched
+    const uniqueByPostId = new Map<string, IPost>();
+    for (const post of fetched) {
+      if (!uniqueByPostId.has(post.postId)) {
+        uniqueByPostId.set(post.postId, post);
+      }
+    }
+
+    const visible = Array.from(uniqueByPostId.values())
       .filter((post) => {
         const publicationStatus = post.publicationStatus ?? 'published';
         // Draft: chỉ author thấy
@@ -93,9 +130,31 @@ export const newsfeedService = {
         }
         return false;
       })
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    const pagePosts = visible.slice(0, pageSize);
-    return newsfeedService.attachAuthorInfo(pagePosts);
+      .sort(comparePostsDesc)
+      .filter((post) => {
+        if (!decodedCursor) return true;
+        const postCreatedAt = new Date(post.createdAt).getTime();
+        const cursorCreatedAt = new Date(decodedCursor.createdAt).getTime();
+        if (postCreatedAt < cursorCreatedAt) return true;
+        if (postCreatedAt > cursorCreatedAt) return false;
+        return post.postId.localeCompare(decodedCursor.postId) < 0;
+      });
+
+    const pageSlice = visible.slice(0, pageSize + 1);
+    const hasMore = pageSlice.length > pageSize;
+    const currentItems = hasMore ? pageSlice.slice(0, pageSize) : pageSlice;
+    const enriched = await newsfeedService.attachAuthorInfo(currentItems);
+    const lastItem = enriched[enriched.length - 1];
+    const nextCursor =
+      hasMore && lastItem
+        ? encodeFeedCursor({ createdAt: lastItem.createdAt, postId: lastItem.postId })
+        : null;
+
+    return {
+      items: enriched,
+      nextCursor,
+      hasMore,
+    };
   },
 
   createPost: async (authorId: string, data: ICreatePostDto): Promise<IPost> => {

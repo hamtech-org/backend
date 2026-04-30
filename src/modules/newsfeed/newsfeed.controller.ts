@@ -7,8 +7,9 @@ export const newsfeedController = {
   getFeed: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const limit = req.query.limit ? Number(req.query.limit) : undefined;
-      const feed = await newsfeedService.getFeed(req.user!.userId, limit);
-      sendSuccess(res, feed);
+      const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+      const feedPage = await newsfeedService.getFeed(req.user!.userId, limit, cursor);
+      sendSuccess(res, feedPage);
     } catch (error) {
       next(error);
     }

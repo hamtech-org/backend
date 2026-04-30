@@ -67,3 +67,14 @@ export interface ICreateReelDto {
   caption: string;
   thumbnailUrl?: string;
 }
+
+export interface IFeedCursorPayload {
+  createdAt: string;
+  postId: string;
+}
+
+export interface IFeedPage {
+  items: IPost[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
