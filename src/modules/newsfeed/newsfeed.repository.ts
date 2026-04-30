@@ -179,6 +179,15 @@ export const newsfeedRepository = {
     );
   },
 
+  deleteReaction: async (postId: string, userId: string): Promise<void> => {
+    await dynamoClient.send(
+      new DeleteCommand({
+        TableName: REACTIONS_TABLE,
+        Key: { PK: `POST#${postId}`, SK: `REACT#${userId}` },
+      }),
+    );
+  },
+
   deleteReactionsByPostId: async (postId: string): Promise<void> => {
     const reactionsRes = await dynamoClient.send(
       new QueryCommand({

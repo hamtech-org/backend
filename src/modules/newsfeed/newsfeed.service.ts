@@ -107,6 +107,20 @@ export const newsfeedService = {
     });
   },
 
+  attachCurrentUserReaction: async (posts: IPost[], viewerUserId: string): Promise<IPost[]> => {
+    if (posts.length === 0) return posts;
+    const enriched = await Promise.all(
+      posts.map(async (post) => {
+        const reaction = await newsfeedRepository.getReaction(post.postId, viewerUserId);
+        return {
+          ...post,
+          currentUserReaction: reaction?.type ?? null,
+        };
+      }),
+    );
+    return enriched;
+  },
+
   attachCommentAuthorInfo: async (comments: IComment[]): Promise<IComment[]> => {
     const authorIds = Array.from(new Set(comments.map((c) => c.authorId)));
     if (authorIds.length === 0) return comments;
@@ -182,7 +196,8 @@ export const newsfeedService = {
     const pageSlice = visible.slice(0, pageSize + 1);
     const hasMore = pageSlice.length > pageSize;
     const currentItems = hasMore ? pageSlice.slice(0, pageSize) : pageSlice;
-    const enriched = await newsfeedService.attachAuthorInfo(currentItems);
+    const enrichedAuthors = await newsfeedService.attachAuthorInfo(currentItems);
+    const enriched = await newsfeedService.attachCurrentUserReaction(enrichedAuthors, viewerUserId);
     const lastItem = enriched[enriched.length - 1];
     const nextCursor =
       hasMore && lastItem
@@ -256,22 +271,49 @@ export const newsfeedService = {
 
     if (publicationStatus === 'draft') {
       if (post.authorId !== viewerUserId) return null;
-      const enriched = await newsfeedService.attachAuthorInfo([post]);
-      return enriched[0];
+      const enrichedAuth = await newsfeedService.attachAuthorInfo([post]);
+      const enrichedReact = await newsfeedService.attachCurrentUserReaction(
+        enrichedAuth,
+        viewerUserId,
+      );
+      return enrichedReact[0];
     }
 
-    if (post.visibility === 'public')
-      return newsfeedService.attachAuthorInfo([post]).then((x) => x[0]);
+    if (post.visibility === 'public') {
+      const enrichedAuth = await newsfeedService.attachAuthorInfo([post]);
+      const enrichedReact = await newsfeedService.attachCurrentUserReaction(
+        enrichedAuth,
+        viewerUserId,
+      );
+      return enrichedReact[0];
+    }
     if (post.visibility === 'private') {
       if (post.authorId !== viewerUserId) return null;
-      return newsfeedService.attachAuthorInfo([post]).then((x) => x[0]);
+      const enrichedAuth = await newsfeedService.attachAuthorInfo([post]);
+      const enrichedReact = await newsfeedService.attachCurrentUserReaction(
+        enrichedAuth,
+        viewerUserId,
+      );
+      return enrichedReact[0];
     }
     if (post.visibility === 'friends') {
-      if (post.authorId === viewerUserId)
-        return newsfeedService.attachAuthorInfo([post]).then((x) => x[0]);
+      if (post.authorId === viewerUserId) {
+        const enrichedAuth = await newsfeedService.attachAuthorInfo([post]);
+        const enrichedReact = await newsfeedService.attachCurrentUserReaction(
+          enrichedAuth,
+          viewerUserId,
+        );
+        return enrichedReact[0];
+      }
       const friendIds = await userRepository.getFriendIds(viewerUserId, 100);
-      if (friendIds.includes(post.authorId))
-        return newsfeedService.attachAuthorInfo([post]).then((x) => x[0]);
+      if (friendIds.includes(post.authorId)) {
+        const enrichedAuth = await newsfeedService.attachAuthorInfo([post]);
+        const enrichedReact = await newsfeedService.attachCurrentUserReaction(
+          enrichedAuth,
+          viewerUserId,
+        );
+        return enrichedReact[0];
+      }
       return null;
     }
 
@@ -392,8 +434,14 @@ export const newsfeedService = {
     const existingReaction = await newsfeedRepository.getReaction(postId, userId);
     const oldType = existingReaction?.type ?? null;
 
-    // If same reaction, MVP: không cập nhật
-    if (oldType === type) return;
+    // If same reaction, user is un-reacting
+    if (oldType === type) {
+      const reactionsCount = { ...(post.reactionsCount ?? {}) };
+      reactionsCount[type] = Math.max(0, (reactionsCount[type] ?? 0) - 1);
+      await newsfeedRepository.deleteReaction(postId, userId);
+      await newsfeedRepository.updatePost(postId, { reactionsCount });
+      return;
+    }
 
     const reactionsCount = { ...(post.reactionsCount ?? {}) };
     if (oldType) {

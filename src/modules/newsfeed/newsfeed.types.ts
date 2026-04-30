@@ -28,6 +28,7 @@ export interface IPost extends TimestampFields {
   isModerated: boolean;
   moderationStatus: ModerationStatus;
   author?: IAuthorInfo; // Enrich ở service (không lưu DB)
+  currentUserReaction?: string | null; // Enrich ở service
 }
 
 export interface IComment extends TimestampFields {
