@@ -79,7 +79,11 @@ export const newsfeedRepository = {
     );
   },
 
-  getCommentsByPostId: async (postId: string, limit: number = 20): Promise<IComment[]> => {
+  getCommentsByPostId: async (
+    postId: string,
+    limit: number = 20,
+    cursor?: { createdAt: string; commentId: string } | null,
+  ): Promise<{ items: IComment[]; lastEvaluatedKey?: Record<string, unknown> }> => {
     const result = await dynamoClient.send(
       new QueryCommand({
         TableName: COMMENTS_TABLE,
@@ -87,9 +91,18 @@ export const newsfeedRepository = {
         ExpressionAttributeValues: { ':pk': `POST#${postId}` },
         Limit: limit,
         ScanIndexForward: false,
+        ExclusiveStartKey: cursor
+          ? {
+              PK: `POST#${postId}`,
+              SK: `CMT#${cursor.createdAt}#${cursor.commentId}`,
+            }
+          : undefined,
       }),
     );
-    return (result.Items as IComment[]) ?? [];
+    return {
+      items: (result.Items as IComment[]) ?? [],
+      lastEvaluatedKey: result.LastEvaluatedKey as Record<string, unknown> | undefined,
+    };
   },
 
   createComment: async (postId: string, comment: IComment): Promise<void> => {

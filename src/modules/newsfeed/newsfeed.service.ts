@@ -13,6 +13,8 @@ import type {
   ICreateReelDto,
   IFeedCursorPayload,
   IFeedPage,
+  ICommentsCursorPayload,
+  ICommentsPage,
 } from './newsfeed.types.js';
 
 type ISearchIndexEvent = {
@@ -65,6 +67,21 @@ const decodeFeedCursor = (cursor?: string): IFeedCursorPayload | null => {
   }
 };
 
+const encodeCommentsCursor = (payload: ICommentsCursorPayload): string =>
+  Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+
+const decodeCommentsCursor = (cursor?: string): ICommentsCursorPayload | null => {
+  if (!cursor) return null;
+  try {
+    const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+    const parsed = JSON.parse(raw) as Partial<ICommentsCursorPayload>;
+    if (!parsed.createdAt || !parsed.commentId) return null;
+    return { createdAt: parsed.createdAt, commentId: parsed.commentId };
+  } catch {
+    return null;
+  }
+};
+
 export const newsfeedService = {
   // Enrich author metadata for UI rendering.
   // Note: this data is not stored in DynamoDB Posts table (it's computed at response time).
@@ -84,6 +101,28 @@ export const newsfeedService = {
         author: {
           userId: p.authorId,
           displayName: u.displayName ?? p.authorId,
+          avatar: u.avatar ?? null,
+        },
+      };
+    });
+  },
+
+  attachCommentAuthorInfo: async (comments: IComment[]): Promise<IComment[]> => {
+    const authorIds = Array.from(new Set(comments.map((c) => c.authorId)));
+    if (authorIds.length === 0) return comments;
+
+    const users = await userRepository.findMultipleById(authorIds);
+    const userMap = new Map(users.map((u) => [u.userId, u]));
+
+    return comments.map((c) => {
+      const u = userMap.get(c.authorId);
+      if (!u)
+        return { ...c, author: { userId: c.authorId, displayName: c.authorId, avatar: null } };
+      return {
+        ...c,
+        author: {
+          userId: c.authorId,
+          displayName: u.displayName ?? c.authorId,
           avatar: u.avatar ?? null,
         },
       };
@@ -370,11 +409,37 @@ export const newsfeedService = {
     postId: string,
     viewerUserId: string,
     limit?: number,
-  ): Promise<IComment[]> => {
+    cursor?: string,
+  ): Promise<ICommentsPage> => {
     const visiblePost = await newsfeedService.getPostById(postId, viewerUserId);
     if (!visiblePost) throw new NotFoundError('Bài viết');
 
-    return newsfeedRepository.getCommentsByPostId(postId, limit);
+    const pageSize = Math.max(1, Math.min(limit ?? 5, 20));
+    const decodedCursor = decodeCommentsCursor(cursor);
+    const pageResult = await newsfeedRepository.getCommentsByPostId(
+      postId,
+      pageSize,
+      decodedCursor,
+    );
+    const enriched = await newsfeedService.attachCommentAuthorInfo(pageResult.items);
+    const lastKey = pageResult.lastEvaluatedKey;
+    const hasMore = Boolean(lastKey?.SK);
+    const nextCursor =
+      hasMore && typeof lastKey?.SK === 'string'
+        ? (() => {
+            const parts = lastKey.SK.replace('CMT#', '').split('#');
+            if (parts.length < 2) return null;
+            const commentId = parts[parts.length - 1];
+            const createdAt = parts.slice(0, -1).join('#');
+            return encodeCommentsCursor({ createdAt, commentId });
+          })()
+        : null;
+
+    return {
+      items: enriched,
+      hasMore,
+      nextCursor,
+    };
   },
 
   addComment: async (
@@ -408,7 +473,8 @@ export const newsfeedService = {
     const nextCommentsCount = (post.commentsCount ?? 0) + 1;
     await newsfeedRepository.updatePost(postId, { commentsCount: nextCommentsCount });
 
-    return comment;
+    const enriched = await newsfeedService.attachCommentAuthorInfo([comment]);
+    return enriched[0];
   },
 
   createReel: async (_authorId: string, _data: ICreateReelDto): Promise<IReel> => {

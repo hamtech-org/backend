@@ -64,8 +64,15 @@ export const newsfeedController = {
 
   getComments: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const comments = await newsfeedService.getComments(req.params.postId, req.user!.userId);
-      sendSuccess(res, comments);
+      const limit = req.query.limit ? Number(req.query.limit) : undefined;
+      const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+      const commentsPage = await newsfeedService.getComments(
+        req.params.postId,
+        req.user!.userId,
+        limit,
+        cursor,
+      );
+      sendSuccess(res, commentsPage);
     } catch (error) {
       next(error);
     }

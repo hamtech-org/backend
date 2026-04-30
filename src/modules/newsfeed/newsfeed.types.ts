@@ -37,6 +37,7 @@ export interface IComment extends TimestampFields {
   content: string;
   parentId: string | null;
   reactionsCount: Record<string, number>;
+  author?: IAuthorInfo; // Enrich ở service (không lưu DB)
 }
 
 export interface IReel {
@@ -75,6 +76,17 @@ export interface IFeedCursorPayload {
 
 export interface IFeedPage {
   items: IPost[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+export interface ICommentsCursorPayload {
+  createdAt: string;
+  commentId: string;
+}
+
+export interface ICommentsPage {
+  items: IComment[];
   nextCursor: string | null;
   hasMore: boolean;
 }
