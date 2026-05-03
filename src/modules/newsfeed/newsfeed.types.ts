@@ -1,6 +1,22 @@
 import type { TimestampFields } from '@/shared/types/common.types.js';
 
-export type PostType = 'text' | 'image' | 'video' | 'link';
+// ─── Reaction ─────────────────────────────────────────────────────────────────
+
+export type ReactionType = 'like' | 'love' | 'haha' | 'wow' | 'sad' | 'angry';
+
+export interface IReactionSummary {
+  /** Số lượng từng loại reaction */
+  counts: Partial<Record<ReactionType, number>>;
+  /** Tổng số reactions */
+  total: number;
+  /** Reaction hiện tại của viewer (null = chưa react) */
+  userReaction: ReactionType | null;
+  /** Top 3 reaction nhiều nhất (để hiển thị emoji mini) */
+  topReactions: ReactionType[];
+}
+
+// ─── Post ─────────────────────────────────────────────────────────────────────
+
 export type PostVisibility = 'public' | 'friends' | 'private';
 export type ModerationStatus = 'pending' | 'approved' | 'rejected';
 export type PostPublicationStatus = 'draft' | 'published';
@@ -21,14 +37,14 @@ export interface IPost extends TimestampFields {
   publicationStatus: PostPublicationStatus;
   categories: string[];
   tags: string[];
-  reactionsCount: Record<string, number>;
+  reactionsCount: Partial<Record<ReactionType, number>>;
   commentsCount: number;
   sharesCount: number;
   viewsCount: number;
   isModerated: boolean;
   moderationStatus: ModerationStatus;
   author?: IAuthorInfo; // Enrich ở service (không lưu DB)
-  currentUserReaction?: string | null; // Enrich ở service
+  currentUserReaction?: ReactionType | null; // Enrich ở service
 }
 
 export interface IComment extends TimestampFields {
@@ -37,8 +53,9 @@ export interface IComment extends TimestampFields {
   authorId: string;
   content: string;
   parentId: string | null;
-  reactionsCount: Record<string, number>;
+  reactionsCount: Partial<Record<ReactionType, number>>;
   author?: IAuthorInfo; // Enrich ở service (không lưu DB)
+  currentUserReaction?: ReactionType | null; // Enrich ở service
 }
 
 export interface IReel {
@@ -49,9 +66,10 @@ export interface IReel {
   caption: string;
   duration: number;
   viewsCount: number;
-  reactionsCount: Record<string, number>;
+  reactionsCount: Partial<Record<ReactionType, number>>;
   commentsCount: number;
   createdAt: string;
+  currentUserReaction?: ReactionType | null; // Enrich ở service
 }
 
 export interface ICreatePostDto {

@@ -34,3 +34,12 @@ export const addCommentSchema = z.object({
 export const reactSchema = z.object({
   type: z.enum(['like', 'love', 'haha', 'wow', 'sad', 'angry']),
 });
+
+export const reactCommentSchema = z.object({
+  postId: z.string().uuid(),
+  type: z.enum(['like', 'love', 'haha', 'wow', 'sad', 'angry']),
+});
+
+export const reactReelSchema = z.object({
+  type: z.enum(['like', 'love', 'haha', 'wow', 'sad', 'angry']),
+});
