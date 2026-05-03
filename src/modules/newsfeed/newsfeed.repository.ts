@@ -96,15 +96,28 @@ export const newsfeedRepository = {
 
   getCommentsByPostId: async (
     postId: string,
-    limit: number = 20,
+    limit: number = 5,
     cursor?: { createdAt: string; commentId: string } | null,
+    parentId?: string | null, // null = top-level only, string = replies of that parent
   ): Promise<{ items: IComment[]; lastEvaluatedKey?: Record<string, unknown> }> => {
+    const attrValues: Record<string, unknown> = { ':pk': `POST#${postId}` };
+    let filterExpr: string | undefined;
+
+    if (parentId === null) {
+      filterExpr = 'attribute_not_exists(parentId)';
+    } else if (typeof parentId === 'string') {
+      filterExpr = 'parentId = :parentId';
+      attrValues[':parentId'] = parentId;
+    }
+
     const result = await dynamoClient.send(
       new QueryCommand({
         TableName: COMMENTS_TABLE,
         KeyConditionExpression: 'PK = :pk',
-        ExpressionAttributeValues: { ':pk': `POST#${postId}` },
-        Limit: limit,
+        ExpressionAttributeValues: attrValues,
+        FilterExpression: filterExpr,
+        // Overscan to compensate for FilterExpression reducing results
+        Limit: limit * 4,
         ScanIndexForward: false,
         ExclusiveStartKey: cursor
           ? {
@@ -114,23 +127,51 @@ export const newsfeedRepository = {
           : undefined,
       }),
     );
-    return {
-      items: (result.Items as IComment[]) ?? [],
-      lastEvaluatedKey: result.LastEvaluatedKey as Record<string, unknown> | undefined,
-    };
+
+    let all = (result.Items as IComment[]) ?? [];
+
+    // App-level fallback filter (handles data stored before the attribute_not_exists fix)
+    if (parentId === null) {
+      all = all.filter((c) => c.parentId == null);
+    } else if (typeof parentId === 'string') {
+      all = all.filter((c) => c.parentId === parentId);
+    }
+
+    const page = all.slice(0, limit);
+    const hasMoreFromOverscan = all.length > limit;
+
+    // Build lastEvaluatedKey: prefer synthetic key from last item so cursor is exact
+    let lastEvaluatedKey: Record<string, unknown> | undefined;
+    if (hasMoreFromOverscan && page.length > 0) {
+      const last = page[page.length - 1];
+      lastEvaluatedKey = {
+        PK: `POST#${postId}`,
+        SK: `CMT#${last.createdAt}#${last.commentId}`,
+      };
+    } else if (result.LastEvaluatedKey) {
+      lastEvaluatedKey = result.LastEvaluatedKey as Record<string, unknown>;
+    }
+
+    return { items: page, lastEvaluatedKey };
   },
 
   createComment: async (postId: string, comment: IComment): Promise<void> => {
-    await dynamoClient.send(
-      new PutCommand({
-        TableName: COMMENTS_TABLE,
-        Item: {
-          PK: `POST#${postId}`,
-          SK: `CMT#${comment.createdAt}#${comment.commentId}`,
-          ...comment,
-        },
-      }),
-    );
+    // Do NOT persist parentId when null — enables attribute_not_exists filter for top-level queries
+    const item: Record<string, unknown> = {
+      PK: `POST#${postId}`,
+      SK: `CMT#${comment.createdAt}#${comment.commentId}`,
+      commentId: comment.commentId,
+      postId: comment.postId,
+      authorId: comment.authorId,
+      content: comment.content,
+      reactionsCount: comment.reactionsCount,
+      createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
+    };
+    if (comment.parentId) item.parentId = comment.parentId;
+    if (comment.repliesCount !== undefined) item.repliesCount = comment.repliesCount;
+
+    await dynamoClient.send(new PutCommand({ TableName: COMMENTS_TABLE, Item: item }));
   },
 
   deleteCommentsByPostId: async (postId: string): Promise<void> => {
@@ -336,20 +377,16 @@ export const newsfeedRepository = {
   },
 
   getCommentById: async (postId: string, commentId: string): Promise<IComment | null> => {
-    // Query by PK + begins_with SK to find the comment
     const result = await dynamoClient.send(
       new QueryCommand({
         TableName: COMMENTS_TABLE,
         KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
         ExpressionAttributeValues: {
           ':pk': `POST#${postId}`,
-          ':prefix': `CMT#`,
+          ':prefix': 'CMT#',
         },
-        FilterExpression: 'commentId = :cid',
-        ExpressionAttributeNames: undefined,
       }),
     );
-    // Filter locally since FilterExpression on sort key needs scan
     const items = result.Items as IComment[] | undefined;
     return items?.find((c) => c.commentId === commentId) ?? null;
   },

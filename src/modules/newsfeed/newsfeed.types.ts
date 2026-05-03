@@ -17,6 +17,7 @@ export interface IReactionSummary {
 
 // ─── Post ─────────────────────────────────────────────────────────────────────
 
+export type PostType = 'text' | 'image' | 'video' | 'link';
 export type PostVisibility = 'public' | 'friends' | 'private';
 export type ModerationStatus = 'pending' | 'approved' | 'rejected';
 export type PostPublicationStatus = 'draft' | 'published';
@@ -54,8 +55,9 @@ export interface IComment extends TimestampFields {
   content: string;
   parentId: string | null;
   reactionsCount: Partial<Record<ReactionType, number>>;
-  author?: IAuthorInfo; // Enrich ở service (không lưu DB)
-  currentUserReaction?: ReactionType | null; // Enrich ở service
+  repliesCount?: number;
+  author?: IAuthorInfo;
+  currentUserReaction?: ReactionType | null;
 }
 
 export interface IReel {

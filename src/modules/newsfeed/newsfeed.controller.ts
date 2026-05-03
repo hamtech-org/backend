@@ -67,11 +67,13 @@ export const newsfeedController = {
     try {
       const limit = req.query.limit ? Number(req.query.limit) : undefined;
       const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+      const parentId = typeof req.query.parentId === 'string' ? req.query.parentId : null;
       const commentsPage = await newsfeedService.getComments(
         req.params.postId,
         req.user!.userId,
         limit,
         cursor,
+        parentId,
       );
       sendSuccess(res, commentsPage);
     } catch (error) {

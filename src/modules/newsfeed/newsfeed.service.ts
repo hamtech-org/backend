@@ -117,7 +117,7 @@ export const newsfeedService = {
         const reaction = await newsfeedRepository.getReaction(post.postId, viewerUserId);
         return {
           ...post,
-          currentUserReaction: reaction?.type ?? null,
+          currentUserReaction: (reaction?.type as ReactionType) ?? null,
         };
       }),
     );
@@ -485,6 +485,7 @@ export const newsfeedService = {
     viewerUserId: string,
     limit?: number,
     cursor?: string,
+    parentId?: string | null, // null = top-level only, string = replies of that parent
   ): Promise<ICommentsPage> => {
     const visiblePost = await newsfeedService.getPostById(postId, viewerUserId);
     if (!visiblePost) throw new NotFoundError('Bài viết');
@@ -495,6 +496,7 @@ export const newsfeedService = {
       postId,
       pageSize,
       decodedCursor,
+      parentId ?? null, // default to top-level when not specified
     );
     const enriched = await newsfeedService.attachCommentAuthorInfo(pageResult.items);
     const lastKey = pageResult.lastEvaluatedKey;
@@ -547,6 +549,16 @@ export const newsfeedService = {
     await newsfeedRepository.createComment(postId, comment);
     const nextCommentsCount = (post.commentsCount ?? 0) + 1;
     await newsfeedRepository.updatePost(postId, { commentsCount: nextCommentsCount });
+
+    // Increment parent's repliesCount when this is a reply
+    if (parentId) {
+      const parentComment = await newsfeedRepository.getCommentById(postId, parentId);
+      if (parentComment) {
+        await newsfeedRepository.updateComment(postId, parentId, parentComment.createdAt, {
+          repliesCount: (parentComment.repliesCount ?? 0) + 1,
+        });
+      }
+    }
 
     const enriched = await newsfeedService.attachCommentAuthorInfo([comment]);
     return enriched[0];
