@@ -8,12 +8,27 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { dynamoClient } from '@/config/database.js';
 import { env } from '@/config/env.js';
-import type { IPost, IComment, IReel } from './newsfeed.types.js';
+import type { IPost, IComment, IReel, ReactionType, IReactionSummary } from './newsfeed.types.js';
 
 const POSTS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Posts`;
 const COMMENTS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Comments`;
 const REACTIONS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Reactions`;
 const REELS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Reels`;
+
+/** Helper: xây dựng IReactionSummary từ reactionsCount map và reaction của viewer */
+export const buildReactionSummary = (
+  reactionsCount: Partial<Record<ReactionType, number>>,
+  userReaction: ReactionType | null,
+): IReactionSummary => {
+  const counts = reactionsCount as Partial<Record<ReactionType, number>>;
+  const total = Object.values(counts).reduce((sum, v) => sum + (v ?? 0), 0);
+  const topReactions = (Object.entries(counts) as [ReactionType, number][])
+    .filter(([, v]) => v > 0)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 3)
+    .map(([k]) => k);
+  return { counts, total, userReaction, topReactions };
+};
 
 export const newsfeedRepository = {
   getPostsByAuthorId: async (authorId: string, limit: number = 20): Promise<IPost[]> => {
@@ -232,6 +247,151 @@ export const newsfeedRepository = {
       new PutCommand({
         TableName: REELS_TABLE,
         Item: { PK: `REEL#${reel.reelId}`, SK: 'META', ...reel },
+      }),
+    );
+  },
+
+  updateReel: async (reelId: string, updates: Partial<IReel>): Promise<void> => {
+    const entries = Object.entries(updates).filter(([, v]) => v !== undefined);
+    if (entries.length === 0) return;
+    const updateExpr = entries.map(([,], i) => `#k${i} = :v${i}`).join(', ');
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: REELS_TABLE,
+        Key: { PK: `REEL#${reelId}`, SK: 'META' },
+        UpdateExpression: `SET ${updateExpr}`,
+        ExpressionAttributeNames: Object.fromEntries(entries.map(([k], i) => [`#k${i}`, k])),
+        ExpressionAttributeValues: Object.fromEntries(entries.map(([, v], i) => [`:v${i}`, v])),
+      }),
+    );
+  },
+
+  // ─── Comment Reactions ────────────────────────────────────────────────────────────────
+
+  getCommentReaction: async (
+    commentId: string,
+    userId: string,
+  ): Promise<{ type: ReactionType } | null> => {
+    const result = await dynamoClient.send(
+      new GetCommand({
+        TableName: REACTIONS_TABLE,
+        Key: { PK: `CMT#${commentId}`, SK: `REACT#${userId}` },
+      }),
+    );
+    const item = result.Item as { type?: string } | undefined;
+    if (!item?.type) return null;
+    return { type: item.type as ReactionType };
+  },
+
+  upsertCommentReaction: async (
+    commentId: string,
+    userId: string,
+    type: ReactionType,
+  ): Promise<void> => {
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: REACTIONS_TABLE,
+        Item: {
+          PK: `CMT#${commentId}`,
+          SK: `REACT#${userId}`,
+          commentId,
+          userId,
+          type,
+          createdAt: new Date().toISOString(),
+        },
+      }),
+    );
+  },
+
+  deleteCommentReaction: async (commentId: string, userId: string): Promise<void> => {
+    await dynamoClient.send(
+      new DeleteCommand({
+        TableName: REACTIONS_TABLE,
+        Key: { PK: `CMT#${commentId}`, SK: `REACT#${userId}` },
+      }),
+    );
+  },
+
+  updateComment: async (
+    postId: string,
+    commentId: string,
+    createdAt: string,
+    updates: Partial<IComment>,
+  ): Promise<void> => {
+    const entries = Object.entries(updates).filter(([, v]) => v !== undefined);
+    if (entries.length === 0) return;
+    const updateExpr = entries.map(([,], i) => `#k${i} = :v${i}`).join(', ');
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: COMMENTS_TABLE,
+        Key: { PK: `POST#${postId}`, SK: `CMT#${createdAt}#${commentId}` },
+        UpdateExpression: `SET ${updateExpr}, updatedAt = :now`,
+        ExpressionAttributeNames: Object.fromEntries(entries.map(([k], i) => [`#k${i}`, k])),
+        ExpressionAttributeValues: {
+          ...Object.fromEntries(entries.map(([, v], i) => [`:v${i}`, v])),
+          ':now': new Date().toISOString(),
+        },
+      }),
+    );
+  },
+
+  getCommentById: async (postId: string, commentId: string): Promise<IComment | null> => {
+    // Query by PK + begins_with SK to find the comment
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: COMMENTS_TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        ExpressionAttributeValues: {
+          ':pk': `POST#${postId}`,
+          ':prefix': `CMT#`,
+        },
+        FilterExpression: 'commentId = :cid',
+        ExpressionAttributeNames: undefined,
+      }),
+    );
+    // Filter locally since FilterExpression on sort key needs scan
+    const items = result.Items as IComment[] | undefined;
+    return items?.find((c) => c.commentId === commentId) ?? null;
+  },
+
+  // ─── Reel Reactions ───────────────────────────────────────────────────────────────────
+
+  getReelReaction: async (
+    reelId: string,
+    userId: string,
+  ): Promise<{ type: ReactionType } | null> => {
+    const result = await dynamoClient.send(
+      new GetCommand({
+        TableName: REACTIONS_TABLE,
+        Key: { PK: `REEL#${reelId}`, SK: `REACT#${userId}` },
+      }),
+    );
+    const item = result.Item as { type?: string } | undefined;
+    if (!item?.type) return null;
+    return { type: item.type as ReactionType };
+  },
+
+  upsertReelReaction: async (reelId: string, userId: string, type: ReactionType): Promise<void> => {
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: REACTIONS_TABLE,
+        Item: {
+          PK: `REEL#${reelId}`,
+          SK: `REACT#${userId}`,
+          reelId,
+          userId,
+          type,
+          createdAt: new Date().toISOString(),
+        },
+      }),
+    );
+  },
+
+  deleteReelReaction: async (reelId: string, userId: string): Promise<void> => {
+    await dynamoClient.send(
+      new DeleteCommand({
+        TableName: REACTIONS_TABLE,
+        Key: { PK: `REEL#${reelId}`, SK: `REACT#${userId}` },
       }),
     );
   },
