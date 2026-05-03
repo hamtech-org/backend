@@ -1,14 +1,17 @@
 import { v4 as uuidv4 } from 'uuid';
-import { newsfeedRepository } from './newsfeed.repository.js';
+import { newsfeedRepository, buildReactionSummary } from './newsfeed.repository.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { getKafkaProducer } from '@/config/kafka.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { logger } from '@/shared/utils/logger.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
+import { getIO } from '@/socket/index.js';
 import type {
   IPost,
   IComment,
   IReel,
+  ReactionType,
+  IReactionSummary,
   ICreatePostDto,
   ICreateReelDto,
   IFeedCursorPayload,
@@ -423,7 +426,11 @@ export const newsfeedService = {
     }
   },
 
-  reactToPost: async (postId: string, userId: string, type: string): Promise<void> => {
+  reactToPost: async (
+    postId: string,
+    userId: string,
+    type: ReactionType,
+  ): Promise<IReactionSummary> => {
     const post = await newsfeedRepository.getPostById(postId);
     if (!post) throw new NotFoundError('Bài viết');
 
@@ -434,23 +441,43 @@ export const newsfeedService = {
     const existingReaction = await newsfeedRepository.getReaction(postId, userId);
     const oldType = existingReaction?.type ?? null;
 
-    // If same reaction, user is un-reacting
+    const nextReactionsCount = { ...(post.reactionsCount ?? {}) };
+    let nextUserReaction: ReactionType | null = type;
+
     if (oldType === type) {
-      const reactionsCount = { ...(post.reactionsCount ?? {}) };
-      reactionsCount[type] = Math.max(0, (reactionsCount[type] ?? 0) - 1);
+      nextReactionsCount[type as ReactionType] = Math.max(
+        0,
+        (nextReactionsCount[type as ReactionType] ?? 0) - 1,
+      );
       await newsfeedRepository.deleteReaction(postId, userId);
-      await newsfeedRepository.updatePost(postId, { reactionsCount });
-      return;
+      await newsfeedRepository.updatePost(postId, { reactionsCount: nextReactionsCount });
+      nextUserReaction = null;
+    } else {
+      if (oldType) {
+        nextReactionsCount[oldType as ReactionType] = Math.max(
+          0,
+          (nextReactionsCount[oldType as ReactionType] ?? 0) - 1,
+        );
+      }
+      nextReactionsCount[type as ReactionType] =
+        (nextReactionsCount[type as ReactionType] ?? 0) + 1;
+      await newsfeedRepository.upsertReaction(postId, userId, type);
+      await newsfeedRepository.updatePost(postId, { reactionsCount: nextReactionsCount });
     }
 
-    const reactionsCount = { ...(post.reactionsCount ?? {}) };
-    if (oldType) {
-      reactionsCount[oldType] = Math.max(0, (reactionsCount[oldType] ?? 0) - 1);
+    const summary = buildReactionSummary(nextReactionsCount, nextUserReaction);
+    try {
+      getIO().to(`post:${postId}`).emit('newsfeed:post_reacted', {
+        targetId: postId,
+        targetType: 'post',
+        userId,
+        reactionType: nextUserReaction,
+        summary,
+      });
+    } catch (err) {
+      logger.error('Failed to emit newsfeed:post_reacted', err);
     }
-    reactionsCount[type] = (reactionsCount[type] ?? 0) + 1;
-
-    await newsfeedRepository.upsertReaction(postId, userId, type);
-    await newsfeedRepository.updatePost(postId, { reactionsCount });
+    return summary;
   },
 
   getComments: async (
@@ -533,5 +560,102 @@ export const newsfeedService = {
   getReels: async (_limit?: number): Promise<IReel[]> => {
     // TODO: Lấy danh sách reels theo thuật toán đề xuất
     return [];
+  },
+
+  reactToComment: async (
+    postId: string,
+    commentId: string,
+    userId: string,
+    type: ReactionType,
+  ): Promise<IReactionSummary> => {
+    const post = await newsfeedRepository.getPostById(postId);
+    if (!post) throw new NotFoundError('Bài viết');
+    const canView = await newsfeedService.getPostById(postId, userId);
+    if (!canView) throw new ForbiddenError('Không có quyền thao tác trên bài viết');
+
+    const comment = await newsfeedRepository.getCommentById(postId, commentId);
+    if (!comment) throw new NotFoundError('Bình luận');
+
+    const existingReaction = await newsfeedRepository.getCommentReaction(commentId, userId);
+    const oldType = existingReaction?.type ?? null;
+
+    const nextReactionsCount = { ...(comment.reactionsCount ?? {}) };
+    let nextUserReaction: ReactionType | null = type;
+
+    if (oldType === type) {
+      nextReactionsCount[type] = Math.max(0, (nextReactionsCount[type] ?? 0) - 1);
+      await newsfeedRepository.deleteCommentReaction(commentId, userId);
+      await newsfeedRepository.updateComment(postId, commentId, comment.createdAt, {
+        reactionsCount: nextReactionsCount,
+      });
+      nextUserReaction = null;
+    } else {
+      if (oldType) {
+        nextReactionsCount[oldType] = Math.max(0, (nextReactionsCount[oldType] ?? 0) - 1);
+      }
+      nextReactionsCount[type] = (nextReactionsCount[type] ?? 0) + 1;
+      await newsfeedRepository.upsertCommentReaction(commentId, userId, type);
+      await newsfeedRepository.updateComment(postId, commentId, comment.createdAt, {
+        reactionsCount: nextReactionsCount,
+      });
+    }
+
+    const summary = buildReactionSummary(nextReactionsCount, nextUserReaction);
+    try {
+      getIO().to(`post:${postId}`).emit('newsfeed:comment_reacted', {
+        targetId: commentId,
+        targetType: 'comment',
+        postId,
+        userId,
+        reactionType: nextUserReaction,
+        summary,
+      });
+    } catch (err) {
+      logger.error('Failed to emit newsfeed:comment_reacted', err);
+    }
+    return summary;
+  },
+
+  reactToReel: async (
+    reelId: string,
+    userId: string,
+    type: ReactionType,
+  ): Promise<IReactionSummary> => {
+    const reel = await newsfeedRepository.getReelById(reelId);
+    if (!reel) throw new NotFoundError('Reel');
+
+    const existingReaction = await newsfeedRepository.getReelReaction(reelId, userId);
+    const oldType = existingReaction?.type ?? null;
+
+    const nextReactionsCount = { ...(reel.reactionsCount ?? {}) };
+    let nextUserReaction: ReactionType | null = type;
+
+    if (oldType === type) {
+      nextReactionsCount[type] = Math.max(0, (nextReactionsCount[type] ?? 0) - 1);
+      await newsfeedRepository.deleteReelReaction(reelId, userId);
+      await newsfeedRepository.updateReel(reelId, { reactionsCount: nextReactionsCount });
+      nextUserReaction = null;
+    } else {
+      if (oldType) {
+        nextReactionsCount[oldType] = Math.max(0, (nextReactionsCount[oldType] ?? 0) - 1);
+      }
+      nextReactionsCount[type] = (nextReactionsCount[type] ?? 0) + 1;
+      await newsfeedRepository.upsertReelReaction(reelId, userId, type);
+      await newsfeedRepository.updateReel(reelId, { reactionsCount: nextReactionsCount });
+    }
+
+    const summary = buildReactionSummary(nextReactionsCount, nextUserReaction);
+    try {
+      getIO().to(`reel:${reelId}`).emit('newsfeed:reel_reacted', {
+        targetId: reelId,
+        targetType: 'reel',
+        userId,
+        reactionType: nextUserReaction,
+        summary,
+      });
+    } catch (err) {
+      logger.error('Failed to emit newsfeed:reel_reacted', err);
+    }
+    return summary;
   },
 };

@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { newsfeedService } from './newsfeed.service.js';
 import { sendSuccess, sendCreated } from '@/shared/utils/response.js';
 import { NotFoundError } from '@/shared/utils/errors.js';
+import type { ReactionType } from './newsfeed.types.js';
 
 export const newsfeedController = {
   getFeed: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -54,9 +55,9 @@ export const newsfeedController = {
 
   reactToPost: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { type } = req.body as { type: string };
-      await newsfeedService.reactToPost(req.params.postId, req.user!.userId, type);
-      sendSuccess(res, null, 'Đã thả cảm xúc');
+      const { type } = req.body as { type: ReactionType };
+      const summary = await newsfeedService.reactToPost(req.params.postId, req.user!.userId, type);
+      sendSuccess(res, summary, 'Đã thả cảm xúc');
     } catch (error) {
       next(error);
     }
@@ -107,6 +108,31 @@ export const newsfeedController = {
       const limit = req.query.limit ? Number(req.query.limit) : undefined;
       const reels = await newsfeedService.getReels(limit);
       sendSuccess(res, reels);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  reactToComment: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { type, postId } = req.body as { type: ReactionType; postId: string };
+      const summary = await newsfeedService.reactToComment(
+        postId,
+        req.params.commentId,
+        req.user!.userId,
+        type,
+      );
+      sendSuccess(res, summary, 'Đã thả cảm xúc');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  reactToReel: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { type } = req.body as { type: ReactionType };
+      const summary = await newsfeedService.reactToReel(req.params.reelId, req.user!.userId, type);
+      sendSuccess(res, summary, 'Đã thả cảm xúc');
     } catch (error) {
       next(error);
     }
