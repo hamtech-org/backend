@@ -10,6 +10,7 @@ import {
   reactSchema,
   reactCommentSchema,
   reactReelSchema,
+  sharePostSchema,
 } from './newsfeed.validator.js';
 
 const router = Router();
@@ -51,5 +52,14 @@ router.post(
   validate(reactReelSchema),
   newsfeedController.reactToReel,
 );
+
+router.post(
+  '/posts/:postId/share',
+  authenticate,
+  validate(sharePostSchema),
+  newsfeedController.sharePost,
+);
+router.post('/posts/:postId/save', authenticate, newsfeedController.toggleSavePost);
+router.get('/feed/saved', authenticate, newsfeedController.getSavedPosts);
 
 export default router;

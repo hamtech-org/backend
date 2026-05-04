@@ -46,6 +46,8 @@ export interface IPost extends TimestampFields {
   moderationStatus: ModerationStatus;
   author?: IAuthorInfo; // Enrich ở service (không lưu DB)
   currentUserReaction?: ReactionType | null; // Enrich ở service
+  isSaved?: boolean; // Enrich ở service
+  sharedFrom?: ISharedPostInfo; // Bài gốc nếu đây là shared post
 }
 
 export interface IComment extends TimestampFields {
@@ -109,6 +111,38 @@ export interface ICommentsCursorPayload {
 
 export interface ICommentsPage {
   items: IComment[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+// ─── Share ────────────────────────────────────────────────────────────────────
+
+export interface ISharedPostInfo {
+  postId: string;
+  authorId: string;
+  content?: string;
+  mediaUrls?: string[];
+  type?: PostType;
+  author?: IAuthorInfo;
+  createdAt: string;
+}
+
+export interface ISharePostDto {
+  content?: string;
+  visibility?: PostVisibility;
+}
+
+// ─── Save ─────────────────────────────────────────────────────────────────────
+
+export interface ISavedPost {
+  userId: string;
+  postId: string;
+  savedAt: string;
+  post?: IPost;
+}
+
+export interface ISavedPostsPage {
+  items: ISavedPost[];
   nextCursor: string | null;
   hasMore: boolean;
 }

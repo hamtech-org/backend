@@ -48,3 +48,8 @@ export const reactCommentSchema = z.object({
 export const reactReelSchema = z.object({
   type: z.enum(['like', 'love', 'haha', 'wow', 'sad', 'angry']),
 });
+
+export const sharePostSchema = z.object({
+  content: z.string().max(20000).optional(),
+  visibility: z.enum(['public', 'friends', 'private']).optional(),
+});

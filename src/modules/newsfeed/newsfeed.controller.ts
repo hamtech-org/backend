@@ -144,4 +144,33 @@ export const newsfeedController = {
       next(error);
     }
   },
+
+  sharePost: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const post = await newsfeedService.sharePost(req.params.postId, req.user!.userId, req.body);
+      sendCreated(res, post, 'Chia sẻ bài viết thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  toggleSavePost: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await newsfeedService.toggleSavePost(req.params.postId, req.user!.userId);
+      sendSuccess(res, result, result.isSaved ? 'Đã lưu bài viết' : 'Đã bỏ lưu bài viết');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  getSavedPosts: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const limit = req.query.limit ? Number(req.query.limit) : undefined;
+      const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+      const page = await newsfeedService.getSavedPosts(req.user!.userId, limit, cursor);
+      sendSuccess(res, page);
+    } catch (error) {
+      next(error);
+    }
+  },
 };

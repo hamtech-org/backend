@@ -303,6 +303,23 @@ const tableDefinitions: CreateTableCommandInput[] = [
     ],
     BillingMode: 'PAY_PER_REQUEST',
   },
+
+  // 16. SavedPosts — PK=USER#{userId}, SK=SAVED#{savedAt}#{postId}
+  //     GSI-PostLookup: PK=USER#{userId}, SK=GSI1SK (SAVED#{postId}) — dùng để check/unsave theo postId
+  {
+    TableName: tableName('SavedPosts'),
+    KeySchema: [
+      { AttributeName: 'PK', KeyType: HASH },
+      { AttributeName: 'SK', KeyType: RANGE },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: 'PK', AttributeType: S },
+      { AttributeName: 'SK', AttributeType: S },
+      { AttributeName: 'GSI1SK', AttributeType: S },
+    ],
+    GlobalSecondaryIndexes: [gsi('GSI-PostLookup', 'PK', 'GSI1SK')],
+    BillingMode: 'PAY_PER_REQUEST',
+  },
 ];
 
 const TTL_TABLES: Record<string, string> = {
