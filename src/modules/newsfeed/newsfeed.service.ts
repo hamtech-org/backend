@@ -18,6 +18,9 @@ import type {
   IFeedPage,
   ICommentsCursorPayload,
   ICommentsPage,
+  ISharePostDto,
+  ISavedPostsPage,
+  ISharedPostInfo,
 } from './newsfeed.types.js';
 
 type ISearchIndexEvent = {
@@ -200,7 +203,12 @@ export const newsfeedService = {
     const hasMore = pageSlice.length > pageSize;
     const currentItems = hasMore ? pageSlice.slice(0, pageSize) : pageSlice;
     const enrichedAuthors = await newsfeedService.attachAuthorInfo(currentItems);
-    const enriched = await newsfeedService.attachCurrentUserReaction(enrichedAuthors, viewerUserId);
+    const enrichedReactions = await newsfeedService.attachCurrentUserReaction(
+      enrichedAuthors,
+      viewerUserId,
+    );
+    const enrichedSaved = await newsfeedService.attachSavedStatus(enrichedReactions, viewerUserId);
+    const enriched = await newsfeedService.attachSharedFromAuthorInfo(enrichedSaved);
     const lastItem = enriched[enriched.length - 1];
     const nextCursor =
       hasMore && lastItem
@@ -270,53 +278,34 @@ export const newsfeedService = {
     const post = await newsfeedRepository.getPostById(postId);
     if (!post) return null;
 
+    const enrich = async (p: IPost): Promise<IPost> => {
+      const [withAuthor] = await newsfeedService.attachAuthorInfo([p]);
+      const [withReaction] = await newsfeedService.attachCurrentUserReaction(
+        [withAuthor],
+        viewerUserId,
+      );
+      const [withShared] = await newsfeedService.attachSharedFromAuthorInfo([withReaction]);
+      return withShared;
+    };
+
     const publicationStatus = post.publicationStatus ?? 'published';
 
     if (publicationStatus === 'draft') {
       if (post.authorId !== viewerUserId) return null;
-      const enrichedAuth = await newsfeedService.attachAuthorInfo([post]);
-      const enrichedReact = await newsfeedService.attachCurrentUserReaction(
-        enrichedAuth,
-        viewerUserId,
-      );
-      return enrichedReact[0];
+      return enrich(post);
     }
 
-    if (post.visibility === 'public') {
-      const enrichedAuth = await newsfeedService.attachAuthorInfo([post]);
-      const enrichedReact = await newsfeedService.attachCurrentUserReaction(
-        enrichedAuth,
-        viewerUserId,
-      );
-      return enrichedReact[0];
-    }
+    if (post.visibility === 'public') return enrich(post);
+
     if (post.visibility === 'private') {
       if (post.authorId !== viewerUserId) return null;
-      const enrichedAuth = await newsfeedService.attachAuthorInfo([post]);
-      const enrichedReact = await newsfeedService.attachCurrentUserReaction(
-        enrichedAuth,
-        viewerUserId,
-      );
-      return enrichedReact[0];
+      return enrich(post);
     }
+
     if (post.visibility === 'friends') {
-      if (post.authorId === viewerUserId) {
-        const enrichedAuth = await newsfeedService.attachAuthorInfo([post]);
-        const enrichedReact = await newsfeedService.attachCurrentUserReaction(
-          enrichedAuth,
-          viewerUserId,
-        );
-        return enrichedReact[0];
-      }
+      if (post.authorId === viewerUserId) return enrich(post);
       const friendIds = await userRepository.getFriendIds(viewerUserId, 100);
-      if (friendIds.includes(post.authorId)) {
-        const enrichedAuth = await newsfeedService.attachAuthorInfo([post]);
-        const enrichedReact = await newsfeedService.attachCurrentUserReaction(
-          enrichedAuth,
-          viewerUserId,
-        );
-        return enrichedReact[0];
-      }
+      if (friendIds.includes(post.authorId)) return enrich(post);
       return null;
     }
 
@@ -628,6 +617,172 @@ export const newsfeedService = {
       logger.error('Failed to emit newsfeed:comment_reacted', err);
     }
     return summary;
+  },
+
+  attachSavedStatus: async (posts: IPost[], viewerUserId: string): Promise<IPost[]> => {
+    if (posts.length === 0) return posts;
+    const postIds = posts.map((p) => p.postId);
+    const savedIds = await newsfeedRepository.getSavedPostIds(viewerUserId, postIds);
+    return posts.map((p) => ({ ...p, isSaved: savedIds.has(p.postId) }));
+  },
+
+  attachSharedFromAuthorInfo: async (posts: IPost[]): Promise<IPost[]> => {
+    const needEnrich = posts.filter((p) => p.sharedFrom && !p.sharedFrom.author);
+    if (needEnrich.length === 0) return posts;
+    const authorIds = Array.from(new Set(needEnrich.map((p) => p.sharedFrom!.authorId)));
+    const users = await userRepository.findMultipleById(authorIds);
+    const userMap = new Map(users.map((u) => [u.userId, u]));
+    return posts.map((p) => {
+      if (!p.sharedFrom || p.sharedFrom.author) return p;
+      const u = userMap.get(p.sharedFrom.authorId);
+      return {
+        ...p,
+        sharedFrom: {
+          ...p.sharedFrom,
+          author: u
+            ? { userId: u.userId, displayName: u.displayName ?? u.userId, avatar: u.avatar ?? null }
+            : { userId: p.sharedFrom.authorId, displayName: p.sharedFrom.authorId, avatar: null },
+        },
+      };
+    });
+  },
+
+  sharePost: async (originalPostId: string, userId: string, dto: ISharePostDto): Promise<IPost> => {
+    const original = await newsfeedRepository.getPostById(originalPostId);
+    if (!original) throw new NotFoundError('Bài viết');
+
+    // Chỉ chia sẻ bài public hoặc friends (không chia sẻ private)
+    if (original.visibility === 'private' && original.authorId !== userId) {
+      throw new ForbiddenError('Không thể chia sẻ bài viết riêng tư');
+    }
+    if (original.publicationStatus === 'draft') {
+      throw new ForbiddenError('Không thể chia sẻ bài viết nháp');
+    }
+
+    // Fetch author của bài gốc trước để lưu snapshot vào DB
+    const originalAuthorUsers = await userRepository.findMultipleById([original.authorId]);
+    const originalUser = originalAuthorUsers[0];
+
+    const sharedFrom: ISharedPostInfo = {
+      postId: original.postId,
+      authorId: original.authorId,
+      content: original.content,
+      mediaUrls: original.mediaUrls,
+      type: original.type,
+      createdAt: original.createdAt,
+      // Lưu author snapshot vào DB ngay khi tạo
+      author: originalUser
+        ? {
+            userId: originalUser.userId,
+            displayName: originalUser.displayName ?? originalUser.userId,
+            avatar: originalUser.avatar ?? null,
+          }
+        : undefined,
+    };
+
+    const now = new Date().toISOString();
+    const postId = uuidv4();
+    const newPost: IPost = {
+      postId,
+      authorId: userId,
+      content: dto.content ?? '',
+      mediaUrls: [],
+      type: 'text',
+      visibility: dto.visibility ?? original.visibility,
+      publicationStatus: 'published',
+      categories: [],
+      tags: [],
+      reactionsCount: {},
+      commentsCount: 0,
+      sharesCount: 0,
+      viewsCount: 0,
+      isModerated: true,
+      moderationStatus: 'approved',
+      sharedFrom,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await newsfeedRepository.createPost(newPost);
+    await newsfeedRepository.incrementSharesCount(originalPostId);
+
+    await emitPostIndexEvent({
+      action: 'index',
+      indexName: 'posts',
+      documentId: postId,
+      document: {
+        postId,
+        authorId: userId,
+        content: newPost.content,
+        type: newPost.type,
+        createdAt: now,
+        visibility: newPost.visibility,
+        publicationStatus: 'published',
+        tags: [],
+        categories: [],
+      },
+    });
+
+    const enriched = await newsfeedService.attachAuthorInfo([newPost]);
+    return enriched[0];
+  },
+
+  toggleSavePost: async (postId: string, userId: string): Promise<{ isSaved: boolean }> => {
+    const post = await newsfeedRepository.getPostById(postId);
+    if (!post) throw new NotFoundError('Bài viết');
+
+    const alreadySaved = await newsfeedRepository.getSavedPost(userId, postId);
+    if (alreadySaved) {
+      await newsfeedRepository.unsavePost(userId, postId);
+      return { isSaved: false };
+    }
+    await newsfeedRepository.savePost(userId, postId);
+    return { isSaved: true };
+  },
+
+  getSavedPosts: async (
+    userId: string,
+    limit?: number,
+    cursor?: string,
+  ): Promise<ISavedPostsPage> => {
+    const pageSize = Math.max(1, Math.min(limit ?? 10, 50));
+    const { items: savedItems, lastEvaluatedKey } = await newsfeedRepository.getSavedPosts(
+      userId,
+      pageSize,
+      cursor,
+    );
+
+    const postIds = savedItems.map((s) => s.postId);
+    const posts = await Promise.all(postIds.map((id) => newsfeedRepository.getPostById(id)));
+
+    const postMap = new Map<string, IPost>();
+    for (const p of posts) {
+      if (p) postMap.set(p.postId, p);
+    }
+
+    const validItems = savedItems.filter((s) => postMap.has(s.postId));
+    const rawPosts = validItems.map((s) => postMap.get(s.postId)!);
+    const enrichedAuthors = await newsfeedService.attachAuthorInfo(rawPosts);
+    const enrichedReactions = await newsfeedService.attachCurrentUserReaction(
+      enrichedAuthors,
+      userId,
+    );
+    const enrichedWithShared = await newsfeedService.attachSharedFromAuthorInfo(enrichedReactions);
+
+    const enrichedSaved = validItems.map((s, i) => ({
+      userId: s.userId,
+      postId: s.postId,
+      savedAt: s.savedAt,
+      post: { ...enrichedWithShared[i], isSaved: true },
+    }));
+
+    const hasMore = Boolean(lastEvaluatedKey);
+    const nextCursor =
+      hasMore && lastEvaluatedKey
+        ? Buffer.from(JSON.stringify(lastEvaluatedKey), 'utf8').toString('base64url')
+        : null;
+
+    return { items: enrichedSaved, nextCursor, hasMore };
   },
 
   reactToReel: async (

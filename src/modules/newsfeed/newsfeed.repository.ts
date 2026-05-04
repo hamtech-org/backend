@@ -14,6 +14,7 @@ const POSTS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Posts`;
 const COMMENTS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Comments`;
 const REACTIONS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Reactions`;
 const REELS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Reels`;
+const SAVED_POSTS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}SavedPosts`;
 
 /** Helper: xây dựng IReactionSummary từ reactionsCount map và reaction của viewer */
 export const buildReactionSummary = (
@@ -432,5 +433,142 @@ export const newsfeedRepository = {
         Key: { PK: `REEL#${reelId}`, SK: `REACT#${userId}` },
       }),
     );
+  },
+
+  // ─── Share ────────────────────────────────────────────────────────────────────
+
+  incrementSharesCount: async (postId: string): Promise<void> => {
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: POSTS_TABLE,
+        Key: { PK: `POST#${postId}`, SK: 'META' },
+        UpdateExpression: 'SET sharesCount = if_not_exists(sharesCount, :zero) + :inc',
+        ExpressionAttributeValues: { ':inc': 1, ':zero': 0 },
+      }),
+    );
+  },
+
+  // ─── Save ─────────────────────────────────────────────────────────────────────
+
+  savePost: async (userId: string, postId: string): Promise<void> => {
+    const savedAt = new Date().toISOString();
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: SAVED_POSTS_TABLE,
+        Item: {
+          PK: `USER#${userId}`,
+          SK: `SAVED#${savedAt}#${postId}`,
+          // GSI-PostLookup key — cho phép query/check/unsave theo postId
+          GSI1SK: `SAVED#${postId}`,
+          userId,
+          postId,
+          savedAt,
+        },
+      }),
+    );
+  },
+
+  unsavePost: async (userId: string, postId: string): Promise<void> => {
+    // Query to find the SK (which contains savedAt timestamp)
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: SAVED_POSTS_TABLE,
+        IndexName: 'GSI-PostLookup',
+        KeyConditionExpression: 'PK = :pk AND begins_with(GSI1SK, :prefix)',
+        ExpressionAttributeValues: {
+          ':pk': `USER#${userId}`,
+          ':prefix': `SAVED#${postId}`,
+        },
+        ProjectionExpression: 'PK, SK',
+        Limit: 1,
+      }),
+    );
+    const item = result.Items?.[0] as { PK: string; SK: string } | undefined;
+    if (!item) return;
+    await dynamoClient.send(
+      new DeleteCommand({
+        TableName: SAVED_POSTS_TABLE,
+        Key: { PK: item.PK, SK: item.SK },
+      }),
+    );
+  },
+
+  getSavedPost: async (userId: string, postId: string): Promise<boolean> => {
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: SAVED_POSTS_TABLE,
+        IndexName: 'GSI-PostLookup',
+        KeyConditionExpression: 'PK = :pk AND begins_with(GSI1SK, :prefix)',
+        ExpressionAttributeValues: {
+          ':pk': `USER#${userId}`,
+          ':prefix': `SAVED#${postId}`,
+        },
+        ProjectionExpression: 'PK',
+        Limit: 1,
+      }),
+    );
+    return (result.Count ?? 0) > 0;
+  },
+
+  getSavedPostIds: async (userId: string, postIds: string[]): Promise<Set<string>> => {
+    if (postIds.length === 0) return new Set();
+    // Run parallel point lookups via GSI-PostLookup
+    const checks = await Promise.all(
+      postIds.map((postId) =>
+        dynamoClient
+          .send(
+            new QueryCommand({
+              TableName: SAVED_POSTS_TABLE,
+              IndexName: 'GSI-PostLookup',
+              KeyConditionExpression: 'PK = :pk AND begins_with(GSI1SK, :prefix)',
+              ExpressionAttributeValues: {
+                ':pk': `USER#${userId}`,
+                ':prefix': `SAVED#${postId}`,
+              },
+              ProjectionExpression: 'postId',
+              Limit: 1,
+            }),
+          )
+          .then((r) => ((r.Count ?? 0) > 0 ? postId : null)),
+      ),
+    );
+    return new Set(checks.filter(Boolean) as string[]);
+  },
+
+  getSavedPosts: async (
+    userId: string,
+    limit: number = 10,
+    cursor?: string | null,
+  ): Promise<{
+    items: Array<{ userId: string; postId: string; savedAt: string }>;
+    lastEvaluatedKey?: Record<string, unknown>;
+  }> => {
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: SAVED_POSTS_TABLE,
+        KeyConditionExpression: 'PK = :pk',
+        ExpressionAttributeValues: { ':pk': `USER#${userId}` },
+        ScanIndexForward: false,
+        Limit: limit + 1,
+        ExclusiveStartKey: cursor
+          ? JSON.parse(Buffer.from(cursor, 'base64url').toString())
+          : undefined,
+      }),
+    );
+    const items = (result.Items ?? []) as Array<{
+      userId: string;
+      postId: string;
+      savedAt: string;
+    }>;
+    const hasMore = items.length > limit;
+    const page = hasMore ? items.slice(0, limit) : items;
+    const lastEvaluatedKey =
+      hasMore && page.length > 0
+        ? {
+            PK: `USER#${userId}`,
+            SK: `SAVED#${page[page.length - 1].savedAt}#${page[page.length - 1].postId}`,
+          }
+        : (result.LastEvaluatedKey as Record<string, unknown> | undefined);
+    return { items: page, lastEvaluatedKey };
   },
 };
