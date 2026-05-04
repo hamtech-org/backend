@@ -122,6 +122,10 @@ export const elasticsearchUtils = {
             authorId: { type: 'keyword' },
             content: { type: 'text', analyzer: 'standard' },
             type: { type: 'keyword' },
+            visibility: { type: 'keyword' },
+            publicationStatus: { type: 'keyword' },
+            tags: { type: 'keyword' },
+            categories: { type: 'keyword' },
             createdAt: { type: 'date' },
           },
         },
@@ -264,6 +268,50 @@ export const elasticsearchUtils = {
       logger.debug(`Index '${indexName}' refreshed`);
     } catch (error) {
       logger.error(`Failed to refresh index '${indexName}':`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Index / update / delete a post document
+   */
+  indexPost: async (postId: string, postData: Record<string, unknown>): Promise<void> => {
+    try {
+      await esClient.index({
+        index: 'posts',
+        id: postId,
+        document: postData,
+      });
+      logger.debug(`Post ${postId} indexed successfully`);
+    } catch (error) {
+      logger.error(`Failed to index post ${postId}:`, error);
+      throw error;
+    }
+  },
+
+  updatePost: async (postId: string, postData: Record<string, unknown>): Promise<void> => {
+    try {
+      await esClient.update({
+        index: 'posts',
+        id: postId,
+        doc: postData,
+      });
+      logger.debug(`Post ${postId} updated successfully`);
+    } catch (error) {
+      logger.error(`Failed to update post ${postId}:`, error);
+      throw error;
+    }
+  },
+
+  deletePost: async (postId: string): Promise<void> => {
+    try {
+      await esClient.delete({
+        index: 'posts',
+        id: postId,
+      });
+      logger.debug(`Post ${postId} deleted successfully`);
+    } catch (error) {
+      logger.error(`Failed to delete post ${postId}:`, error);
       throw error;
     }
   },

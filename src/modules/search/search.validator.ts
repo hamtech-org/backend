@@ -12,4 +12,6 @@ export const searchQuerySchema = z.object({
   pageSize: positiveInt.max(100).optional(),
   sortBy: z.string().max(64).optional(),
   sortOrder: z.enum(['asc', 'desc']).optional(),
+  tags: z.string().optional(),
+  categories: z.string().optional(),
 });
