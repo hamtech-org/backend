@@ -53,6 +53,7 @@ export interface IComment extends TimestampFields {
   postId: string;
   authorId: string;
   content: string;
+  mediaUrls?: string[];
   parentId: string | null;
   reactionsCount: Partial<Record<ReactionType, number>>;
   repliesCount?: number;

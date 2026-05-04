@@ -26,10 +26,15 @@ export const createReelSchema = z.object({
   thumbnailUrl: z.string().url().optional(),
 });
 
-export const addCommentSchema = z.object({
-  content: z.string().min(1).max(2000),
-  parentId: z.string().uuid().optional(),
-});
+export const addCommentSchema = z
+  .object({
+    content: z.string().max(2000).optional(),
+    parentId: z.string().uuid().optional(),
+    mediaUrls: z.array(z.string().url()).max(1).optional(),
+  })
+  .refine((d) => (d.content && d.content.trim().length > 0) || d.mediaUrls?.length, {
+    message: 'Bình luận phải có nội dung hoặc ảnh',
+  });
 
 export const reactSchema = z.object({
   type: z.enum(['like', 'love', 'haha', 'wow', 'sad', 'angry']),

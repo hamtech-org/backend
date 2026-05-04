@@ -83,12 +83,17 @@ export const newsfeedController = {
 
   addComment: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { content, parentId } = req.body as { content: string; parentId?: string };
+      const { content, parentId, mediaUrls } = req.body as {
+        content?: string;
+        parentId?: string;
+        mediaUrls?: string[];
+      };
       const comment = await newsfeedService.addComment(
         req.params.postId,
         req.user!.userId,
         content,
         parentId,
+        mediaUrls,
       );
       sendCreated(res, comment, 'Thêm bình luận thành công');
     } catch (error) {

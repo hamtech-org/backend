@@ -522,8 +522,9 @@ export const newsfeedService = {
   addComment: async (
     postId: string,
     authorId: string,
-    content: string,
+    content: string | undefined,
     parentId?: string,
+    mediaUrls?: string[],
   ): Promise<IComment> => {
     const post = await newsfeedRepository.getPostById(postId);
     if (!post) throw new NotFoundError('Bài viết');
@@ -539,7 +540,8 @@ export const newsfeedService = {
       commentId,
       postId,
       authorId,
-      content,
+      content: content ?? '',
+      ...(mediaUrls?.length ? { mediaUrls } : {}),
       parentId: parentId ?? null,
       reactionsCount: {},
       createdAt: now,

@@ -170,6 +170,7 @@ export const newsfeedRepository = {
     };
     if (comment.parentId) item.parentId = comment.parentId;
     if (comment.repliesCount !== undefined) item.repliesCount = comment.repliesCount;
+    if (comment.mediaUrls?.length) item.mediaUrls = comment.mediaUrls;
 
     await dynamoClient.send(new PutCommand({ TableName: COMMENTS_TABLE, Item: item }));
   },
