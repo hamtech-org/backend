@@ -63,18 +63,38 @@ export interface IComment extends TimestampFields {
   currentUserReaction?: ReactionType | null;
 }
 
+export type ReelAspectRatio = '9:16' | '1:1' | '4:5';
+export type ReelProcessingStatus = 'pending' | 'ready' | 'failed';
+export type ReelFeedKind = 'foryou' | 'following';
+
 export interface IReel {
   reelId: string;
   authorId: string;
   videoUrl: string;
   thumbnailUrl: string;
   caption: string;
-  duration: number;
+  /** @deprecated Use durationMs instead. Kept for backward compatibility. */
+  duration?: number;
+  durationMs: number;
+  width: number;
+  height: number;
+  aspectRatio: ReelAspectRatio;
+  visibility: PostVisibility;
+  processingStatus: ReelProcessingStatus;
+  hashtags: string[];
+  mentions: string[];
   viewsCount: number;
   reactionsCount: Partial<Record<ReactionType, number>>;
   commentsCount: number;
+  sharesCount: number;
+  savesCount: number;
+  engagementScore?: number;
   createdAt: string;
-  currentUserReaction?: ReactionType | null; // Enrich ở service
+  updatedAt: string;
+  // Enrich ở service (không lưu DB)
+  author?: IAuthorInfo;
+  currentUserReaction?: ReactionType | null;
+  isSaved?: boolean;
 }
 
 export interface ICreatePostDto {
@@ -89,8 +109,30 @@ export interface ICreatePostDto {
 
 export interface ICreateReelDto {
   videoUrl: string;
+  thumbnailUrl: string;
   caption: string;
-  thumbnailUrl?: string;
+  durationMs: number;
+  width: number;
+  height: number;
+  aspectRatio?: ReelAspectRatio;
+  visibility?: PostVisibility;
+}
+
+export interface IReelFeedCursorPayload {
+  /** ISO date for following feed; numeric score (string) for foryou. */
+  sortKey: string;
+  reelId: string;
+}
+
+export interface IReelFeedPage {
+  items: IReel[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+export interface IReportReelDto {
+  reason: 'spam' | 'nudity' | 'hate' | 'violence' | 'other';
+  details?: string;
 }
 
 export interface IFeedCursorPayload {

@@ -1,10 +1,13 @@
 import { v4 as uuidv4 } from 'uuid';
 import { newsfeedRepository, buildReactionSummary } from './newsfeed.repository.js';
 import { userRepository } from '@/modules/user/user.repository.js';
+import { mediaService } from '@/modules/media/media.service.js';
 import { getKafkaProducer } from '@/config/kafka.js';
+import { getRedis } from '@/config/redis.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { logger } from '@/shared/utils/logger.js';
-import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
+import { NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
+import { extractHashtagsFromText, extractMentionsFromText } from '@/shared/utils/hashtags.js';
 import { getIO } from '@/socket/index.js';
 import type {
   IPost,
@@ -21,13 +24,46 @@ import type {
   ISharePostDto,
   ISavedPostsPage,
   ISharedPostInfo,
+  IReelFeedPage,
+  IReelFeedCursorPayload,
+  ReelFeedKind,
+  IReportReelDto,
 } from './newsfeed.types.js';
 
 type ISearchIndexEvent = {
   action: 'index' | 'update' | 'delete';
-  indexName: 'posts';
+  indexName: 'posts' | 'reels';
   documentId: string;
   document: Record<string, unknown> | null;
+};
+
+const REEL_FORYOU_FETCH_SIZE = 200;
+const REEL_VIEW_DEDUP_TTL_SEC = 24 * 60 * 60;
+
+const encodeReelCursor = (payload: IReelFeedCursorPayload): string =>
+  Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+
+const decodeReelCursor = (cursor?: string): IReelFeedCursorPayload | null => {
+  if (!cursor) return null;
+  try {
+    const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+    const parsed = JSON.parse(raw) as Partial<IReelFeedCursorPayload>;
+    if (!parsed.sortKey || !parsed.reelId) return null;
+    return { sortKey: parsed.sortKey, reelId: parsed.reelId };
+  } catch {
+    return null;
+  }
+};
+
+const computeReelEngagementScore = (reel: IReel, now: number): number => {
+  const totalReactions = Object.values(reel.reactionsCount ?? {}).reduce((a, b) => a + (b ?? 0), 0);
+  const ageHours = Math.max(0, (now - new Date(reel.createdAt).getTime()) / 3_600_000);
+  const recency = Math.pow(0.5, ageHours / 24);
+  return (
+    0.5 * Math.log1p(totalReactions) +
+    0.3 * Math.log1p(reel.commentsCount ?? 0) +
+    0.2 * 10 * recency
+  );
 };
 
 const emitPostIndexEvent = async (event: ISearchIndexEvent): Promise<void> => {
@@ -555,14 +591,404 @@ export const newsfeedService = {
     return enriched[0];
   },
 
-  createReel: async (_authorId: string, _data: ICreateReelDto): Promise<IReel> => {
-    // TODO: Tạo reel mới
-    throw new Error('Chưa triển khai');
+  attachReelAuthorInfo: async (reels: IReel[]): Promise<IReel[]> => {
+    const authorIds = Array.from(new Set(reels.map((r) => r.authorId)));
+    if (authorIds.length === 0) return reels;
+    const users = await userRepository.findMultipleById(authorIds);
+    const userMap = new Map(users.map((u) => [u.userId, u]));
+    return reels.map((r) => {
+      const u = userMap.get(r.authorId);
+      return {
+        ...r,
+        author: u
+          ? {
+              userId: r.authorId,
+              displayName: u.displayName ?? r.authorId,
+              avatar: u.avatar ?? null,
+            }
+          : { userId: r.authorId, displayName: r.authorId, avatar: null },
+      };
+    });
   },
 
-  getReels: async (_limit?: number): Promise<IReel[]> => {
-    // TODO: Lấy danh sách reels theo thuật toán đề xuất
-    return [];
+  attachReelCurrentUserReaction: async (reels: IReel[], viewerUserId: string): Promise<IReel[]> => {
+    if (reels.length === 0) return reels;
+    return Promise.all(
+      reels.map(async (reel) => {
+        const reaction = await newsfeedRepository.getReelReaction(reel.reelId, viewerUserId);
+        return { ...reel, currentUserReaction: (reaction?.type as ReactionType) ?? null };
+      }),
+    );
+  },
+
+  attachReelSavedStatus: async (reels: IReel[], viewerUserId: string): Promise<IReel[]> => {
+    if (reels.length === 0) return reels;
+    const ids = reels.map((r) => r.reelId);
+    const savedSet = await newsfeedRepository.getSavedReelIds(viewerUserId, ids);
+    return reels.map((r) => ({ ...r, isSaved: savedSet.has(r.reelId) }));
+  },
+
+  enrichReels: async (reels: IReel[], viewerUserId: string): Promise<IReel[]> => {
+    const withAuthor = await newsfeedService.attachReelAuthorInfo(reels);
+    const withReaction = await newsfeedService.attachReelCurrentUserReaction(
+      withAuthor,
+      viewerUserId,
+    );
+    return newsfeedService.attachReelSavedStatus(withReaction, viewerUserId);
+  },
+
+  createReel: async (authorId: string, data: ICreateReelDto): Promise<IReel> => {
+    // Verify the videoUrl points to a media record owned by caller (security)
+    const media = await mediaService.resolveMediaFromAppDownloadUrl(data.videoUrl);
+    if (!media || !media.mediaType.startsWith('video/')) {
+      throw new ValidationError('videoUrl không hợp lệ hoặc không phải video');
+    }
+
+    const hashtags = extractHashtagsFromText(data.caption);
+    const mentions = extractMentionsFromText(data.caption);
+
+    const now = new Date().toISOString();
+    const reelId = uuidv4();
+    const reel: IReel = {
+      reelId,
+      authorId,
+      videoUrl: data.videoUrl,
+      thumbnailUrl: data.thumbnailUrl,
+      caption: data.caption,
+      durationMs: data.durationMs,
+      width: data.width,
+      height: data.height,
+      aspectRatio: data.aspectRatio ?? '9:16',
+      visibility: data.visibility ?? 'public',
+      processingStatus: 'ready',
+      hashtags,
+      mentions,
+      viewsCount: 0,
+      reactionsCount: {},
+      commentsCount: 0,
+      sharesCount: 0,
+      savesCount: 0,
+      engagementScore: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await newsfeedRepository.createReel(reel);
+
+    if (reel.visibility === 'public') {
+      await emitPostIndexEvent({
+        action: 'index',
+        indexName: 'reels',
+        documentId: reelId,
+        document: {
+          reelId,
+          authorId,
+          caption: reel.caption,
+          hashtags: reel.hashtags,
+          createdAt: now,
+          visibility: reel.visibility,
+        },
+      });
+    }
+
+    // Broadcast reel:new to followers
+    try {
+      const followerIds = await userRepository.getFriendIds(authorId, 200);
+      const io = getIO();
+      for (const followerId of followerIds) {
+        io.to(`user:${followerId}`).emit('newsfeed:reel_new', {
+          reelId,
+          authorId,
+        });
+      }
+    } catch (err) {
+      logger.error('Failed to emit newsfeed:reel_new', err);
+    }
+
+    const [enriched] = await newsfeedService.attachReelAuthorInfo([reel]);
+    return enriched;
+  },
+
+  getReelById: async (reelId: string, viewerUserId: string): Promise<IReel | null> => {
+    const reel = await newsfeedRepository.getReelById(reelId);
+    if (!reel) return null;
+
+    const visibility = reel.visibility ?? 'public';
+    if (visibility === 'private' && reel.authorId !== viewerUserId) return null;
+    if (visibility === 'friends' && reel.authorId !== viewerUserId) {
+      const friendIds = await userRepository.getFriendIds(viewerUserId, 200);
+      if (!friendIds.includes(reel.authorId)) return null;
+    }
+
+    const [enriched] = await newsfeedService.enrichReels([reel], viewerUserId);
+    return enriched;
+  },
+
+  getReelsFeed: async (
+    viewerUserId: string,
+    feed: ReelFeedKind = 'foryou',
+    limit?: number,
+    cursor?: string,
+  ): Promise<IReelFeedPage> => {
+    const pageSize = Math.max(1, Math.min(limit ?? 10, 20));
+    const decoded = decodeReelCursor(cursor);
+
+    if (feed === 'following') {
+      const friendIds = await userRepository.getFriendIds(viewerUserId, 200);
+      const authorIds = Array.from(new Set([...friendIds, viewerUserId]));
+      const perAuthor = Math.max(10, pageSize * 3);
+      const fetched: IReel[] = [];
+      await Promise.all(
+        authorIds.map(async (aid) => {
+          const { items } = await newsfeedRepository.listReelsByAuthor(aid, perAuthor);
+          fetched.push(...items);
+        }),
+      );
+
+      const cursorTime = decoded ? new Date(decoded.sortKey).getTime() : null;
+      const sorted = fetched
+        .filter((r) => (r.visibility ?? 'public') !== 'private' || r.authorId === viewerUserId)
+        .sort((a, b) => {
+          const t = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+          return t !== 0 ? t : b.reelId.localeCompare(a.reelId);
+        })
+        .filter((r) => {
+          if (!decoded || cursorTime === null) return true;
+          const t = new Date(r.createdAt).getTime();
+          if (t < cursorTime) return true;
+          if (t > cursorTime) return false;
+          return r.reelId.localeCompare(decoded.reelId) < 0;
+        });
+
+      const slice = sorted.slice(0, pageSize + 1);
+      const hasMore = slice.length > pageSize;
+      const items = hasMore ? slice.slice(0, pageSize) : slice;
+      const enriched = await newsfeedService.enrichReels(items, viewerUserId);
+      const last = enriched[enriched.length - 1];
+      const nextCursor =
+        hasMore && last ? encodeReelCursor({ sortKey: last.createdAt, reelId: last.reelId }) : null;
+      return { items: enriched, nextCursor, hasMore };
+    }
+
+    // For-you: fetch recent reels, score, paginate with score-based cursor
+    const { items: recentRaw } = await newsfeedRepository.listRecentReels(REEL_FORYOU_FETCH_SIZE);
+    const friendIds = new Set(await userRepository.getFriendIds(viewerUserId, 200));
+    const visibleRaw = recentRaw.filter((r) => {
+      const v = r.visibility ?? 'public';
+      if (v === 'public') return true;
+      if (v === 'private') return r.authorId === viewerUserId;
+      return r.authorId === viewerUserId || friendIds.has(r.authorId);
+    });
+
+    const now = Date.now();
+    const scored = visibleRaw
+      .map((r) => ({ reel: r, score: computeReelEngagementScore(r, now) }))
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        return b.reel.reelId.localeCompare(a.reel.reelId);
+      });
+
+    const cursorScore = decoded ? Number(decoded.sortKey) : null;
+    const filtered = scored.filter(({ reel, score }) => {
+      if (!decoded || cursorScore === null || Number.isNaN(cursorScore)) return true;
+      if (score < cursorScore) return true;
+      if (score > cursorScore) return false;
+      return reel.reelId.localeCompare(decoded.reelId) < 0;
+    });
+
+    const slice = filtered.slice(0, pageSize + 1);
+    const hasMore = slice.length > pageSize;
+    const items = (hasMore ? slice.slice(0, pageSize) : slice).map((s) => s.reel);
+    const enriched = await newsfeedService.enrichReels(items, viewerUserId);
+    const lastEntry = filtered[items.length - 1];
+    const nextCursor =
+      hasMore && lastEntry
+        ? encodeReelCursor({ sortKey: String(lastEntry.score), reelId: lastEntry.reel.reelId })
+        : null;
+    return { items: enriched, nextCursor, hasMore };
+  },
+
+  deleteReel: async (reelId: string, authorId: string): Promise<void> => {
+    const reel = await newsfeedRepository.getReelById(reelId);
+    if (!reel) throw new NotFoundError('Reel');
+    if (reel.authorId !== authorId) throw new ForbiddenError('Không có quyền xóa reel');
+
+    await newsfeedRepository.deleteCommentsByReelId(reelId);
+    await newsfeedRepository.deleteReactionsByReelId(reelId);
+    await newsfeedRepository.deleteReel(reelId);
+
+    await emitPostIndexEvent({
+      action: 'delete',
+      indexName: 'reels',
+      documentId: reelId,
+      document: null,
+    });
+
+    try {
+      getIO().emit('newsfeed:reel_deleted', { reelId });
+    } catch (err) {
+      logger.error('Failed to emit newsfeed:reel_deleted', err);
+    }
+  },
+
+  recordReelView: async (
+    reelId: string,
+    viewerUserId: string,
+    watchedMs: number,
+    completed?: boolean,
+  ): Promise<void> => {
+    const reel = await newsfeedRepository.getReelById(reelId);
+    if (!reel) throw new NotFoundError('Reel');
+
+    // Don't count views from author themselves
+    if (reel.authorId === viewerUserId) return;
+
+    // Require >2s watched to count
+    if (watchedMs < 2000) return;
+
+    // Debounce 1 view / user / reel / 24h via Redis
+    try {
+      const redis = getRedis();
+      const key = `reel:view:${reelId}:${viewerUserId}`;
+      const set = await redis.set(key, '1', 'EX', REEL_VIEW_DEDUP_TTL_SEC, 'NX');
+      if (set !== 'OK') return; // already counted
+    } catch (err) {
+      logger.error('Redis unavailable for reel view dedup', err);
+      // Fail-open: do not block view counting if Redis is down
+    }
+
+    await newsfeedRepository.incrementReelCounter(reelId, 'viewsCount', 1);
+    void completed;
+  },
+
+  toggleSaveReel: async (reelId: string, userId: string): Promise<{ isSaved: boolean }> => {
+    const reel = await newsfeedRepository.getReelById(reelId);
+    if (!reel) throw new NotFoundError('Reel');
+
+    const already = await newsfeedRepository.isReelSaved(userId, reelId);
+    if (already) {
+      await newsfeedRepository.unsaveReel(userId, reelId);
+      await newsfeedRepository.incrementReelCounter(reelId, 'savesCount', -1);
+      return { isSaved: false };
+    }
+    await newsfeedRepository.saveReel(userId, reelId);
+    await newsfeedRepository.incrementReelCounter(reelId, 'savesCount', 1);
+    return { isSaved: true };
+  },
+
+  reportReel: async (reelId: string, reporterId: string, dto: IReportReelDto): Promise<void> => {
+    const reel = await newsfeedRepository.getReelById(reelId);
+    if (!reel) throw new NotFoundError('Reel');
+    await newsfeedRepository.createReport({
+      reportId: uuidv4(),
+      entityType: 'REEL',
+      entityId: reelId,
+      reporterId,
+      reason: dto.reason,
+      details: dto.details,
+      createdAt: new Date().toISOString(),
+    });
+  },
+
+  getReelComments: async (
+    reelId: string,
+    viewerUserId: string,
+    limit?: number,
+    cursor?: string,
+    parentId?: string | null,
+  ): Promise<ICommentsPage> => {
+    const visible = await newsfeedService.getReelById(reelId, viewerUserId);
+    if (!visible) throw new NotFoundError('Reel');
+
+    const pageSize = Math.max(1, Math.min(limit ?? 5, 20));
+    const decoded = decodeCommentsCursor(cursor);
+    const result = await newsfeedRepository.getCommentsByReelId(
+      reelId,
+      pageSize,
+      decoded,
+      parentId ?? null,
+    );
+    const enriched = await newsfeedService.attachCommentAuthorInfo(result.items);
+    const lastKey = result.lastEvaluatedKey;
+    const hasMore = Boolean(lastKey?.SK);
+    const nextCursor =
+      hasMore && typeof lastKey?.SK === 'string'
+        ? (() => {
+            const parts = lastKey.SK.replace('CMT#', '').split('#');
+            if (parts.length < 2) return null;
+            const commentId = parts[parts.length - 1];
+            const createdAt = parts.slice(0, -1).join('#');
+            return encodeCommentsCursor({ createdAt, commentId });
+          })()
+        : null;
+    return { items: enriched, nextCursor, hasMore };
+  },
+
+  addReelComment: async (
+    reelId: string,
+    authorId: string,
+    content: string | undefined,
+    parentId?: string,
+    mediaUrls?: string[],
+  ): Promise<IComment> => {
+    const visible = await newsfeedService.getReelById(reelId, authorId);
+    if (!visible) throw new ForbiddenError('Không có quyền bình luận');
+
+    const now = new Date().toISOString();
+    const commentId = uuidv4();
+    const comment: IComment = {
+      commentId,
+      postId: reelId, // reuse field name; semantically references the reel
+      authorId,
+      content: content ?? '',
+      ...(mediaUrls?.length ? { mediaUrls } : {}),
+      parentId: parentId ?? null,
+      reactionsCount: {},
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await newsfeedRepository.createReelComment(reelId, comment);
+    await newsfeedRepository.incrementReelCounter(reelId, 'commentsCount', 1);
+
+    if (parentId) {
+      const parent = await newsfeedRepository.getReelCommentById(reelId, parentId);
+      if (parent) {
+        await newsfeedRepository.updateReelComment(reelId, parentId, parent.createdAt, {
+          repliesCount: (parent.repliesCount ?? 0) + 1,
+        });
+      }
+    }
+
+    try {
+      getIO()
+        .to(`reel:${reelId}`)
+        .emit('newsfeed:reel_commented', {
+          reelId,
+          comment: { commentId, authorId, content: comment.content, createdAt: now },
+        });
+    } catch (err) {
+      logger.error('Failed to emit newsfeed:reel_commented', err);
+    }
+
+    const [enriched] = await newsfeedService.attachCommentAuthorInfo([comment]);
+    return enriched;
+  },
+
+  getReelsByAuthor: async (
+    authorId: string,
+    viewerUserId: string,
+    limit?: number,
+  ): Promise<IReel[]> => {
+    const pageSize = Math.max(1, Math.min(limit ?? 20, 50));
+    const { items } = await newsfeedRepository.listReelsByAuthor(authorId, pageSize);
+    const visible = items.filter((r) => {
+      const v = r.visibility ?? 'public';
+      if (v === 'public') return true;
+      if (v === 'private') return r.authorId === viewerUserId;
+      return true; // friends — coarse; deep check skipped here for simplicity
+    });
+    return newsfeedService.enrichReels(visible, viewerUserId);
   },
 
   reactToComment: async (

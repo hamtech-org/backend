@@ -30,5 +30,9 @@ aws ecr get-login-password --region "${AWS_REGION}" \
 export ECR_REPO_WITH_TAG="${ECR_IMAGE}"
 
 docker compose -f docker-compose.prod.yml pull
+
+echo "Running database migrations..."
+docker compose -f docker-compose.prod.yml run --rm app npm run db:migrate
+
 docker compose -f docker-compose.prod.yml up -d --remove-orphans
 docker image prune -f

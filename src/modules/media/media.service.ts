@@ -1,5 +1,9 @@
 import { v4 as uuidv4 } from 'uuid';
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import sharp from 'sharp';
+import ffmpeg from 'fluent-ffmpeg';
 import { mediaRepository } from './media.repository.js';
 import type {
   AllowedMimeType,
@@ -262,6 +266,76 @@ async function processOneFile(
     size,
     mimeType,
   };
+}
+
+async function withTempFile<T>(
+  buffer: Buffer,
+  ext: string,
+  fn: (filePath: string) => Promise<T>,
+): Promise<T> {
+  const tmpPath = path.join(os.tmpdir(), `zalo-${uuidv4()}${ext}`);
+  await fs.writeFile(tmpPath, buffer);
+  try {
+    return await fn(tmpPath);
+  } finally {
+    fs.unlink(tmpPath).catch(() => {});
+  }
+}
+
+export interface VideoProbeResult {
+  durationMs: number;
+  width: number;
+  height: number;
+  codec: string | null;
+  bitrate: number | null;
+}
+
+export async function videoProbe(buffer: Buffer, mime: string): Promise<VideoProbeResult> {
+  const ext = mime === 'video/webm' ? '.webm' : mime === 'video/quicktime' ? '.mov' : '.mp4';
+  return withTempFile(
+    buffer,
+    ext,
+    (filePath) =>
+      new Promise<VideoProbeResult>((resolve, reject) => {
+        ffmpeg.ffprobe(filePath, (err, data) => {
+          if (err) return reject(err);
+          const stream = data.streams.find((s) => s.codec_type === 'video');
+          if (!stream) return reject(new Error('No video stream found'));
+          const durationSec = Number(data.format.duration ?? stream.duration ?? 0);
+          resolve({
+            durationMs: Math.round(durationSec * 1000),
+            width: Number(stream.width ?? 0),
+            height: Number(stream.height ?? 0),
+            codec: stream.codec_name ?? null,
+            bitrate: data.format.bit_rate ? Number(data.format.bit_rate) : null,
+          });
+        });
+      }),
+  );
+}
+
+export async function extractVideoThumbnail(buffer: Buffer, mime: string): Promise<Buffer> {
+  const ext = mime === 'video/webm' ? '.webm' : mime === 'video/quicktime' ? '.mov' : '.mp4';
+  return withTempFile(buffer, ext, async (inPath) => {
+    const outPath = path.join(os.tmpdir(), `zalo-thumb-${uuidv4()}.jpg`);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        ffmpeg(inPath)
+          .on('error', reject)
+          .on('end', () => resolve())
+          .screenshots({
+            timestamps: ['00:00:01.000'],
+            filename: path.basename(outPath),
+            folder: path.dirname(outPath),
+            size: '720x?',
+          });
+      });
+      const raw = await fs.readFile(outPath);
+      return sharp(raw).jpeg({ quality: 82 }).toBuffer();
+    } finally {
+      fs.unlink(outPath).catch(() => {});
+    }
+  });
 }
 
 export const mediaService = {

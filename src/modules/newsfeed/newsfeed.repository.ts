@@ -15,6 +15,15 @@ const COMMENTS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Comments`;
 const REACTIONS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Reactions`;
 const REELS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Reels`;
 const SAVED_POSTS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}SavedPosts`;
+const REPORTS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Reports`;
+
+/**
+ * GSI for global recency on reels.
+ * Schema: PK="REEL", SK="{createdAt}#{reelId}"
+ * Tradeoff: single hot partition (acceptable for student-scale <10k reels/day).
+ */
+const REELS_GLOBAL_GSI = 'GSI-2';
+const REELS_GLOBAL_PK = 'REEL';
 
 /** Helper: xây dựng IReactionSummary từ reactionsCount map và reaction của viewer */
 export const buildReactionSummary = (
@@ -289,7 +298,343 @@ export const newsfeedRepository = {
     await dynamoClient.send(
       new PutCommand({
         TableName: REELS_TABLE,
-        Item: { PK: `REEL#${reel.reelId}`, SK: 'META', ...reel },
+        Item: {
+          PK: `REEL#${reel.reelId}`,
+          SK: 'META',
+          // GSI-2 keys for global recency feed
+          GSI2PK: REELS_GLOBAL_PK,
+          GSI2SK: `${reel.createdAt}#${reel.reelId}`,
+          ...reel,
+        },
+      }),
+    );
+  },
+
+  listRecentReels: async (
+    limit: number,
+    exclusiveStartKey?: Record<string, unknown>,
+  ): Promise<{ items: IReel[]; lastEvaluatedKey?: Record<string, unknown> }> => {
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: REELS_TABLE,
+        IndexName: REELS_GLOBAL_GSI,
+        KeyConditionExpression: 'GSI2PK = :pk',
+        ExpressionAttributeValues: { ':pk': REELS_GLOBAL_PK },
+        ScanIndexForward: false,
+        Limit: limit,
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+    return {
+      items: (result.Items as IReel[]) ?? [],
+      lastEvaluatedKey: result.LastEvaluatedKey as Record<string, unknown> | undefined,
+    };
+  },
+
+  listReelsByAuthor: async (
+    authorId: string,
+    limit: number,
+    exclusiveStartKey?: Record<string, unknown>,
+  ): Promise<{ items: IReel[]; lastEvaluatedKey?: Record<string, unknown> }> => {
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: REELS_TABLE,
+        IndexName: 'GSI-1',
+        KeyConditionExpression: 'authorId = :a',
+        ExpressionAttributeValues: { ':a': authorId },
+        ScanIndexForward: false,
+        Limit: limit,
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+    return {
+      items: (result.Items as IReel[]) ?? [],
+      lastEvaluatedKey: result.LastEvaluatedKey as Record<string, unknown> | undefined,
+    };
+  },
+
+  incrementReelCounter: async (
+    reelId: string,
+    field: 'viewsCount' | 'commentsCount' | 'sharesCount' | 'savesCount',
+    delta: number,
+  ): Promise<void> => {
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: REELS_TABLE,
+        Key: { PK: `REEL#${reelId}`, SK: 'META' },
+        UpdateExpression: `SET #f = if_not_exists(#f, :zero) + :d`,
+        ExpressionAttributeNames: { '#f': field },
+        ExpressionAttributeValues: { ':d': delta, ':zero': 0 },
+      }),
+    );
+  },
+
+  deleteReel: async (reelId: string): Promise<void> => {
+    await dynamoClient.send(
+      new DeleteCommand({
+        TableName: REELS_TABLE,
+        Key: { PK: `REEL#${reelId}`, SK: 'META' },
+      }),
+    );
+  },
+
+  // ─── Reel Comments (mirror Post comments under PK=REEL#{reelId}) ────────────────────
+
+  getCommentsByReelId: async (
+    reelId: string,
+    limit: number = 5,
+    cursor?: { createdAt: string; commentId: string } | null,
+    parentId?: string | null,
+  ): Promise<{ items: IComment[]; lastEvaluatedKey?: Record<string, unknown> }> => {
+    const attrValues: Record<string, unknown> = { ':pk': `REEL#${reelId}` };
+    let filterExpr: string | undefined;
+    if (parentId === null) {
+      filterExpr = 'attribute_not_exists(parentId)';
+    } else if (typeof parentId === 'string') {
+      filterExpr = 'parentId = :parentId';
+      attrValues[':parentId'] = parentId;
+    }
+
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: COMMENTS_TABLE,
+        KeyConditionExpression: 'PK = :pk',
+        ExpressionAttributeValues: attrValues,
+        FilterExpression: filterExpr,
+        Limit: limit * 4,
+        ScanIndexForward: false,
+        ExclusiveStartKey: cursor
+          ? { PK: `REEL#${reelId}`, SK: `CMT#${cursor.createdAt}#${cursor.commentId}` }
+          : undefined,
+      }),
+    );
+
+    let all = (result.Items as IComment[]) ?? [];
+    if (parentId === null) all = all.filter((c) => c.parentId == null);
+    else if (typeof parentId === 'string') all = all.filter((c) => c.parentId === parentId);
+
+    const page = all.slice(0, limit);
+    const hasMoreFromOverscan = all.length > limit;
+    let lastEvaluatedKey: Record<string, unknown> | undefined;
+    if (hasMoreFromOverscan && page.length > 0) {
+      const last = page[page.length - 1];
+      lastEvaluatedKey = {
+        PK: `REEL#${reelId}`,
+        SK: `CMT#${last.createdAt}#${last.commentId}`,
+      };
+    } else if (result.LastEvaluatedKey) {
+      lastEvaluatedKey = result.LastEvaluatedKey as Record<string, unknown>;
+    }
+    return { items: page, lastEvaluatedKey };
+  },
+
+  createReelComment: async (reelId: string, comment: IComment): Promise<void> => {
+    const item: Record<string, unknown> = {
+      PK: `REEL#${reelId}`,
+      SK: `CMT#${comment.createdAt}#${comment.commentId}`,
+      commentId: comment.commentId,
+      reelId,
+      authorId: comment.authorId,
+      content: comment.content,
+      reactionsCount: comment.reactionsCount,
+      createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
+    };
+    if (comment.parentId) item.parentId = comment.parentId;
+    if (comment.repliesCount !== undefined) item.repliesCount = comment.repliesCount;
+    if (comment.mediaUrls?.length) item.mediaUrls = comment.mediaUrls;
+    await dynamoClient.send(new PutCommand({ TableName: COMMENTS_TABLE, Item: item }));
+  },
+
+  deleteCommentsByReelId: async (reelId: string): Promise<void> => {
+    const res = await dynamoClient.send(
+      new QueryCommand({
+        TableName: COMMENTS_TABLE,
+        KeyConditionExpression: 'PK = :pk',
+        ExpressionAttributeValues: { ':pk': `REEL#${reelId}` },
+        ProjectionExpression: 'PK, SK',
+      }),
+    );
+    const items = res.Items as Array<{ PK: string; SK: string }> | undefined;
+    if (!items?.length) return;
+    for (let i = 0; i < items.length; i += 25) {
+      const chunk = items.slice(i, i + 25);
+      await dynamoClient.send(
+        new BatchWriteCommand({
+          RequestItems: {
+            [COMMENTS_TABLE]: chunk.map((x) => ({
+              DeleteRequest: { Key: { PK: x.PK, SK: x.SK } },
+            })),
+          },
+        }),
+      );
+    }
+  },
+
+  deleteReactionsByReelId: async (reelId: string): Promise<void> => {
+    const res = await dynamoClient.send(
+      new QueryCommand({
+        TableName: REACTIONS_TABLE,
+        KeyConditionExpression: 'PK = :pk',
+        ExpressionAttributeValues: { ':pk': `REEL#${reelId}` },
+        ProjectionExpression: 'PK, SK',
+      }),
+    );
+    const items = res.Items as Array<{ PK: string; SK: string }> | undefined;
+    if (!items?.length) return;
+    for (let i = 0; i < items.length; i += 25) {
+      const chunk = items.slice(i, i + 25);
+      await dynamoClient.send(
+        new BatchWriteCommand({
+          RequestItems: {
+            [REACTIONS_TABLE]: chunk.map((x) => ({
+              DeleteRequest: { Key: { PK: x.PK, SK: x.SK } },
+            })),
+          },
+        }),
+      );
+    }
+  },
+
+  getReelCommentById: async (reelId: string, commentId: string): Promise<IComment | null> => {
+    const res = await dynamoClient.send(
+      new QueryCommand({
+        TableName: COMMENTS_TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        ExpressionAttributeValues: { ':pk': `REEL#${reelId}`, ':prefix': 'CMT#' },
+      }),
+    );
+    const items = res.Items as IComment[] | undefined;
+    return items?.find((c) => c.commentId === commentId) ?? null;
+  },
+
+  updateReelComment: async (
+    reelId: string,
+    commentId: string,
+    createdAt: string,
+    updates: Partial<IComment>,
+  ): Promise<void> => {
+    const entries = Object.entries(updates).filter(([, v]) => v !== undefined);
+    if (entries.length === 0) return;
+    const updateExpr = entries.map(([,], i) => `#k${i} = :v${i}`).join(', ');
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: COMMENTS_TABLE,
+        Key: { PK: `REEL#${reelId}`, SK: `CMT#${createdAt}#${commentId}` },
+        UpdateExpression: `SET ${updateExpr}, updatedAt = :now`,
+        ExpressionAttributeNames: Object.fromEntries(entries.map(([k], i) => [`#k${i}`, k])),
+        ExpressionAttributeValues: {
+          ...Object.fromEntries(entries.map(([, v], i) => [`:v${i}`, v])),
+          ':now': new Date().toISOString(),
+        },
+      }),
+    );
+  },
+
+  // ─── Reel Saves (reuses SavedPosts table with REEL prefix) ──────────────────────
+
+  saveReel: async (userId: string, reelId: string): Promise<void> => {
+    const savedAt = new Date().toISOString();
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: SAVED_POSTS_TABLE,
+        Item: {
+          PK: `USER#${userId}`,
+          SK: `SAVED#REEL#${savedAt}#${reelId}`,
+          GSI1SK: `SAVED#REEL#${reelId}`,
+          userId,
+          reelId,
+          entityType: 'REEL',
+          savedAt,
+        },
+      }),
+    );
+  },
+
+  unsaveReel: async (userId: string, reelId: string): Promise<void> => {
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: SAVED_POSTS_TABLE,
+        IndexName: 'GSI-PostLookup',
+        KeyConditionExpression: 'PK = :pk AND begins_with(GSI1SK, :prefix)',
+        ExpressionAttributeValues: {
+          ':pk': `USER#${userId}`,
+          ':prefix': `SAVED#REEL#${reelId}`,
+        },
+        ProjectionExpression: 'PK, SK',
+        Limit: 1,
+      }),
+    );
+    const item = result.Items?.[0] as { PK: string; SK: string } | undefined;
+    if (!item) return;
+    await dynamoClient.send(
+      new DeleteCommand({
+        TableName: SAVED_POSTS_TABLE,
+        Key: { PK: item.PK, SK: item.SK },
+      }),
+    );
+  },
+
+  isReelSaved: async (userId: string, reelId: string): Promise<boolean> => {
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: SAVED_POSTS_TABLE,
+        IndexName: 'GSI-PostLookup',
+        KeyConditionExpression: 'PK = :pk AND begins_with(GSI1SK, :prefix)',
+        ExpressionAttributeValues: {
+          ':pk': `USER#${userId}`,
+          ':prefix': `SAVED#REEL#${reelId}`,
+        },
+        ProjectionExpression: 'PK',
+        Limit: 1,
+      }),
+    );
+    return (result.Count ?? 0) > 0;
+  },
+
+  getSavedReelIds: async (userId: string, reelIds: string[]): Promise<Set<string>> => {
+    if (reelIds.length === 0) return new Set();
+    const checks = await Promise.all(
+      reelIds.map((reelId) =>
+        dynamoClient
+          .send(
+            new QueryCommand({
+              TableName: SAVED_POSTS_TABLE,
+              IndexName: 'GSI-PostLookup',
+              KeyConditionExpression: 'PK = :pk AND begins_with(GSI1SK, :prefix)',
+              ExpressionAttributeValues: {
+                ':pk': `USER#${userId}`,
+                ':prefix': `SAVED#REEL#${reelId}`,
+              },
+              ProjectionExpression: 'reelId',
+              Limit: 1,
+            }),
+          )
+          .then((r) => ((r.Count ?? 0) > 0 ? reelId : null)),
+      ),
+    );
+    return new Set(checks.filter(Boolean) as string[]);
+  },
+
+  // ─── Reports ────────────────────────────────────────────────────────────────
+
+  createReport: async (report: {
+    reportId: string;
+    entityType: 'REEL' | 'POST';
+    entityId: string;
+    reporterId: string;
+    reason: string;
+    details?: string;
+    createdAt: string;
+  }): Promise<void> => {
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: REPORTS_TABLE,
+        Item: {
+          PK: `${report.entityType}#${report.entityId}`,
+          SK: `REPORT#${report.createdAt}#${report.reporterId}`,
+          ...report,
+        },
       }),
     );
   },

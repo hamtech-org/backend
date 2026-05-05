@@ -22,8 +22,29 @@ export const updatePostSchema = z.object({
 
 export const createReelSchema = z.object({
   videoUrl: z.string().url(),
-  caption: z.string().max(500),
-  thumbnailUrl: z.string().url().optional(),
+  thumbnailUrl: z.string().url(),
+  caption: z.string().max(2200),
+  durationMs: z.number().int().min(1000).max(60000),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  aspectRatio: z.enum(['9:16', '1:1', '4:5']).optional(),
+  visibility: z.enum(['public', 'friends', 'private']).optional(),
+});
+
+export const reelsFeedQuerySchema = z.object({
+  feed: z.enum(['foryou', 'following']).optional(),
+  limit: z.coerce.number().int().min(1).max(20).optional(),
+  cursor: z.string().optional(),
+});
+
+export const reelViewSchema = z.object({
+  watchedMs: z.number().int().min(0).max(120000),
+  completed: z.boolean().optional(),
+});
+
+export const reportReelSchema = z.object({
+  reason: z.enum(['spam', 'nudity', 'hate', 'violence', 'other']),
+  details: z.string().max(500).optional(),
 });
 
 export const addCommentSchema = z

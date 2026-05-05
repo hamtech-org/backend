@@ -243,8 +243,13 @@ const tableDefinitions: CreateTableCommandInput[] = [
       { AttributeName: 'SK', AttributeType: S },
       { AttributeName: 'authorId', AttributeType: S },
       { AttributeName: 'createdAt', AttributeType: S },
+      { AttributeName: 'GSI2PK', AttributeType: S },
+      { AttributeName: 'GSI2SK', AttributeType: S },
     ],
-    GlobalSecondaryIndexes: [gsi('GSI-1', 'authorId', 'createdAt')],
+    GlobalSecondaryIndexes: [
+      gsi('GSI-1', 'authorId', 'createdAt'),
+      gsi('GSI-2', 'GSI2PK', 'GSI2SK'),
+    ],
     BillingMode: 'PAY_PER_REQUEST',
   },
 
