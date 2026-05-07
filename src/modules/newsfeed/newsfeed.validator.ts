@@ -24,7 +24,7 @@ export const createReelSchema = z.object({
   videoUrl: z.string().url(),
   thumbnailUrl: z.string().url(),
   caption: z.string().max(2200),
-  durationMs: z.number().int().min(1000).max(60000),
+  durationMs: z.number().int().min(1000).max(600000),
   width: z.number().int().positive(),
   height: z.number().int().positive(),
   aspectRatio: z.enum(['9:16', '1:1', '4:5']).optional(),
