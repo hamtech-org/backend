@@ -251,6 +251,21 @@ export const newsfeedController = {
     }
   },
 
+  reactToReelComment: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { type } = req.body as { type: ReactionType };
+      const summary = await newsfeedService.reactToReelComment(
+        req.params.reelId,
+        req.params.commentId,
+        req.user!.userId,
+        type,
+      );
+      sendSuccess(res, summary, 'Đã thả cảm xúc');
+    } catch (error) {
+      next(error);
+    }
+  },
+
   sharePost: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const post = await newsfeedService.sharePost(req.params.postId, req.user!.userId, req.body);

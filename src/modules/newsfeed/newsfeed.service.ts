@@ -185,6 +185,19 @@ export const newsfeedService = {
     });
   },
 
+  attachCommentCurrentUserReaction: async (
+    comments: IComment[],
+    viewerUserId: string,
+  ): Promise<IComment[]> => {
+    if (comments.length === 0) return comments;
+    return Promise.all(
+      comments.map(async (c) => {
+        const reaction = await newsfeedRepository.getCommentReaction(c.commentId, viewerUserId);
+        return { ...c, currentUserReaction: (reaction?.type as ReactionType) ?? null };
+      }),
+    );
+  },
+
   getFeed: async (viewerUserId: string, limit?: number, cursor?: string): Promise<IFeedPage> => {
     const pageSize = Math.max(1, Math.min(limit ?? 20, 50));
     const friendIds = await userRepository.getFriendIds(viewerUserId, 100);
@@ -908,7 +921,11 @@ export const newsfeedService = {
       decoded,
       parentId ?? null,
     );
-    const enriched = await newsfeedService.attachCommentAuthorInfo(result.items);
+    const withAuthors = await newsfeedService.attachCommentAuthorInfo(result.items);
+    const enriched = await newsfeedService.attachCommentCurrentUserReaction(
+      withAuthors,
+      viewerUserId,
+    );
     const lastKey = result.lastEvaluatedKey;
     const hasMore = Boolean(lastKey?.SK);
     const nextCursor =
@@ -1250,6 +1267,61 @@ export const newsfeedService = {
       });
     } catch (err) {
       logger.error('Failed to emit newsfeed:reel_reacted', err);
+    }
+    return summary;
+  },
+
+  reactToReelComment: async (
+    reelId: string,
+    commentId: string,
+    userId: string,
+    type: ReactionType,
+  ): Promise<IReactionSummary> => {
+    // Validate reel visibility
+    const reel = await newsfeedService.getReelById(reelId, userId);
+    if (!reel) throw new NotFoundError('Reel');
+
+    // Lấy comment từ reel comments (PK=REEL#reelId)
+    const comment = await newsfeedRepository.getReelCommentById(reelId, commentId);
+    if (!comment) throw new NotFoundError('Bình luận');
+
+    const existingReaction = await newsfeedRepository.getCommentReaction(commentId, userId);
+    const oldType = existingReaction?.type ?? null;
+
+    const nextReactionsCount = { ...(comment.reactionsCount ?? {}) };
+    let nextUserReaction: ReactionType | null = type;
+
+    if (oldType === type) {
+      // Toggle off
+      nextReactionsCount[type] = Math.max(0, (nextReactionsCount[type] ?? 0) - 1);
+      await newsfeedRepository.deleteCommentReaction(commentId, userId);
+      await newsfeedRepository.updateReelComment(reelId, commentId, comment.createdAt, {
+        reactionsCount: nextReactionsCount,
+      });
+      nextUserReaction = null;
+    } else {
+      // Switch or new reaction
+      if (oldType) {
+        nextReactionsCount[oldType] = Math.max(0, (nextReactionsCount[oldType] ?? 0) - 1);
+      }
+      nextReactionsCount[type] = (nextReactionsCount[type] ?? 0) + 1;
+      await newsfeedRepository.upsertCommentReaction(commentId, userId, type);
+      await newsfeedRepository.updateReelComment(reelId, commentId, comment.createdAt, {
+        reactionsCount: nextReactionsCount,
+      });
+    }
+
+    const summary = buildReactionSummary(nextReactionsCount, nextUserReaction);
+    try {
+      getIO().to(`reel:${reelId}`).emit('newsfeed:reel_comment_reacted', {
+        reelId,
+        commentId,
+        userId,
+        reactionType: nextUserReaction,
+        summary,
+      });
+    } catch (err) {
+      logger.error('Failed to emit newsfeed:reel_comment_reacted', err);
     }
     return summary;
   },

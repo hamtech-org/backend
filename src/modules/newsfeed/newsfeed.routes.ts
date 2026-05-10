@@ -79,6 +79,12 @@ router.post(
   newsfeedController.addReelComment,
 );
 router.post(
+  '/reels/:reelId/comments/:commentId/react',
+  authenticate,
+  validate(reactReelSchema),
+  newsfeedController.reactToReelComment,
+);
+router.post(
   '/comments/:commentId/react',
   authenticate,
   validate(reactCommentSchema),
