@@ -21,7 +21,7 @@ export const startSearchConsumer = async (): Promise<void> => {
     eachMessage: async ({ message }) => {
       try {
         const event = JSON.parse(message.value!.toString()) as ISearchIndexEvent;
-        
+
         logger.debug(`Processing ${event.action} event for ${event.indexName}/${event.documentId}`);
 
         switch (event.action) {
@@ -29,11 +29,15 @@ export const startSearchConsumer = async (): Promise<void> => {
           case 'update':
             if (event.indexName === 'users') {
               await elasticsearchUtils.indexUser(event.documentId, event.document || {});
+            } else if (event.indexName === 'messages') {
+              await elasticsearchUtils.indexMessage(event.documentId, event.document || {});
             }
             break;
           case 'delete':
             if (event.indexName === 'users') {
               await elasticsearchUtils.deleteUser(event.documentId);
+            } else if (event.indexName === 'messages') {
+              await elasticsearchUtils.deleteMessage(event.documentId);
             }
             break;
         }

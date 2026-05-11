@@ -138,6 +138,38 @@ async function refreshReplyMediaDelivery(
   };
 }
 
+type SearchIndexAction = 'index' | 'update' | 'delete';
+
+async function emitMessageSearchIndexEvent(
+  action: SearchIndexAction,
+  payload: {
+    messageId: string;
+    conversationId: string;
+    senderId: string;
+    content?: string;
+    createdAt?: string;
+  },
+): Promise<void> {
+  const safeContent = String(payload.content ?? '').trim();
+  const isIndexLike = action === 'index' || action === 'update';
+  await kafkaProducer.send(KAFKA_TOPICS.SEARCH_INDEX, {
+    action,
+    indexName: 'messages',
+    documentId: payload.messageId,
+    ...(isIndexLike
+      ? {
+          document: {
+            messageId: payload.messageId,
+            conversationId: payload.conversationId,
+            senderId: payload.senderId,
+            content: safeContent,
+            createdAt: payload.createdAt ?? new Date().toISOString(),
+          },
+        }
+      : { document: null }),
+  });
+}
+
 export const messageService = {
   getMessages: async (
     conversationId: string,
@@ -476,6 +508,13 @@ export const messageService = {
           recipientIds: pushRecipientIds,
         },
       }),
+      emitMessageSearchIndexEvent('index', {
+        messageId,
+        conversationId,
+        senderId,
+        content: lastPreviewContent,
+        createdAt: now,
+      }),
     ]);
 
     const {
@@ -533,6 +572,13 @@ export const messageService = {
       content,
       isEdited: true,
     });
+    await emitMessageSearchIndexEvent('update', {
+      messageId,
+      conversationId,
+      senderId,
+      content,
+      createdAt: message.createdAt,
+    });
     await syncConversationLastMessageMeta(conversationId, {
       getMessages: conversationRepository.getMessages,
       updateConversationLastMessage: conversationRepository.updateConversationLastMessage,
@@ -574,6 +620,12 @@ export const messageService = {
       isRecalled: true,
       content: 'Tin nhắn đã được thu hồi',
       isPinned: false,
+    });
+    await emitMessageSearchIndexEvent('delete', {
+      messageId,
+      conversationId,
+      senderId,
+      createdAt: message.createdAt,
     });
     if (wasPinned) {
       await conversationRepository.adjustPinnedMessageCount(conversationId, -1);
