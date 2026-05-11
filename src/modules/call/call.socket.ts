@@ -71,6 +71,15 @@ const emitToMemberUsers = (
   }
 };
 
+/** Đồng bộ đa thiết bị: mọi socket user:{calleeId} tắt chuông khi một máy accept/reject. */
+const emitCalleeIncomingDismissed = (
+  io: Server,
+  calleeId: string,
+  payload: { channelName: string; conversationId: string; reason: 'accepted' | 'rejected' },
+): void => {
+  io.to(`user:${calleeId}`).emit('call:incoming-dismissed', payload);
+};
+
 export const registerCallHandlers = (io: Server, socket: Socket): void => {
   const userId = socket.data.userId as string;
 
@@ -198,6 +207,11 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
       conversationId: data.conversationId,
       type: data.type,
     });
+    emitCalleeIncomingDismissed(io, userId, {
+      channelName: data.channelName,
+      conversationId: data.conversationId,
+      reason: 'accepted',
+    });
     logger.info(`Call accepted: ${userId} on channel=${data.channelName}`);
   });
 
@@ -208,6 +222,11 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
         channelName: data.channelName,
         conversationId: data.conversationId,
       });
+      emitCalleeIncomingDismissed(io, userId, {
+        channelName: data.channelName,
+        conversationId: data.conversationId,
+        reason: 'rejected',
+      });
       logger.info(`Call group member declined: ${userId} channel=${data.channelName}`);
       return;
     }
@@ -216,6 +235,11 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
       calleeId: userId,
       channelName: data.channelName,
       conversationId: data.conversationId,
+    });
+    emitCalleeIncomingDismissed(io, userId, {
+      channelName: data.channelName,
+      conversationId: data.conversationId,
+      reason: 'rejected',
     });
     logger.info(`Call rejected: ${userId} on channel=${data.channelName}`);
 
