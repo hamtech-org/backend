@@ -14,6 +14,8 @@ export interface ISearchOptions {
   sortOrder?: 'asc' | 'desc';
   filters?: Record<string, unknown>;
   userId?: string; // Current user ID for friendship check
+  tags?: string[];
+  categories?: string[];
 }
 
 export interface ISearchUserResult {

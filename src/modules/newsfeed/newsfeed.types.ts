@@ -1,8 +1,32 @@
 import type { TimestampFields } from '@/shared/types/common.types.js';
 
+// ─── Reaction ─────────────────────────────────────────────────────────────────
+
+export type ReactionType = 'like' | 'love' | 'haha' | 'wow' | 'sad' | 'angry';
+
+export interface IReactionSummary {
+  /** Số lượng từng loại reaction */
+  counts: Partial<Record<ReactionType, number>>;
+  /** Tổng số reactions */
+  total: number;
+  /** Reaction hiện tại của viewer (null = chưa react) */
+  userReaction: ReactionType | null;
+  /** Top 3 reaction nhiều nhất (để hiển thị emoji mini) */
+  topReactions: ReactionType[];
+}
+
+// ─── Post ─────────────────────────────────────────────────────────────────────
+
 export type PostType = 'text' | 'image' | 'video' | 'link';
 export type PostVisibility = 'public' | 'friends' | 'private';
 export type ModerationStatus = 'pending' | 'approved' | 'rejected';
+export type PostPublicationStatus = 'draft' | 'published';
+
+export interface IAuthorInfo {
+  userId: string;
+  displayName: string;
+  avatar: string | null;
+}
 
 export interface IPost extends TimestampFields {
   postId: string;
@@ -11,12 +35,19 @@ export interface IPost extends TimestampFields {
   mediaUrls: string[];
   type: PostType;
   visibility: PostVisibility;
-  reactionsCount: Record<string, number>;
+  publicationStatus: PostPublicationStatus;
+  categories: string[];
+  tags: string[];
+  reactionsCount: Partial<Record<ReactionType, number>>;
   commentsCount: number;
   sharesCount: number;
   viewsCount: number;
   isModerated: boolean;
   moderationStatus: ModerationStatus;
+  author?: IAuthorInfo; // Enrich ở service (không lưu DB)
+  currentUserReaction?: ReactionType | null; // Enrich ở service
+  isSaved?: boolean; // Enrich ở service
+  sharedFrom?: ISharedPostInfo; // Bài gốc nếu đây là shared post
 }
 
 export interface IComment extends TimestampFields {
@@ -24,8 +55,12 @@ export interface IComment extends TimestampFields {
   postId: string;
   authorId: string;
   content: string;
+  mediaUrls?: string[];
   parentId: string | null;
-  reactionsCount: Record<string, number>;
+  reactionsCount: Partial<Record<ReactionType, number>>;
+  repliesCount?: number;
+  author?: IAuthorInfo;
+  currentUserReaction?: ReactionType | null;
 }
 
 export interface IReel {
@@ -36,15 +71,19 @@ export interface IReel {
   caption: string;
   duration: number;
   viewsCount: number;
-  reactionsCount: Record<string, number>;
+  reactionsCount: Partial<Record<ReactionType, number>>;
   commentsCount: number;
   createdAt: string;
+  currentUserReaction?: ReactionType | null; // Enrich ở service
 }
 
 export interface ICreatePostDto {
   content: string;
   type: PostType;
   visibility: PostVisibility;
+  publicationStatus: PostPublicationStatus;
+  categories?: string[];
+  tags?: string[];
   mediaUrls?: string[];
 }
 
@@ -52,4 +91,58 @@ export interface ICreateReelDto {
   videoUrl: string;
   caption: string;
   thumbnailUrl?: string;
+}
+
+export interface IFeedCursorPayload {
+  createdAt: string;
+  postId: string;
+}
+
+export interface IFeedPage {
+  items: IPost[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+export interface ICommentsCursorPayload {
+  createdAt: string;
+  commentId: string;
+}
+
+export interface ICommentsPage {
+  items: IComment[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+// ─── Share ────────────────────────────────────────────────────────────────────
+
+export interface ISharedPostInfo {
+  postId: string;
+  authorId: string;
+  content?: string;
+  mediaUrls?: string[];
+  type?: PostType;
+  author?: IAuthorInfo;
+  createdAt: string;
+}
+
+export interface ISharePostDto {
+  content?: string;
+  visibility?: PostVisibility;
+}
+
+// ─── Save ─────────────────────────────────────────────────────────────────────
+
+export interface ISavedPost {
+  userId: string;
+  postId: string;
+  savedAt: string;
+  post?: IPost;
+}
+
+export interface ISavedPostsPage {
+  items: ISavedPost[];
+  nextCursor: string | null;
+  hasMore: boolean;
 }

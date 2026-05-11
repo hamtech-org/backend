@@ -316,6 +316,16 @@ export const searchService = {
     const from = (page - 1) * pageSize;
 
     try {
+      const filter: Array<Record<string, unknown>> = [{ term: { publicationStatus: 'published' } }];
+
+      if (options.tags && options.tags.length > 0) {
+        filter.push({ terms: { tags: options.tags } });
+      }
+
+      if (options.categories && options.categories.length > 0) {
+        filter.push({ terms: { categories: options.categories } });
+      }
+
       const result = await esClient.search({
         index: 'posts',
         from,
@@ -339,6 +349,7 @@ export const searchService = {
               },
             ],
             minimum_should_match: 1,
+            filter,
           },
         },
         _source: ['postId', 'authorId', 'content', 'type', 'createdAt'],
