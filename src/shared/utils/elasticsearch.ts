@@ -262,7 +262,9 @@ export const elasticsearchUtils = {
         id: messageId,
       });
       logger.debug(`Message ${messageId} deleted successfully`);
-    } catch (error) {
+    } catch (error: unknown) {
+      const status = (error as { meta?: { statusCode?: number } })?.meta?.statusCode;
+      if (status === 404) return;
       logger.error(`Failed to delete message ${messageId}:`, error);
       throw error;
     }
@@ -346,35 +348,6 @@ export const elasticsearchUtils = {
       logger.debug(`Post ${postId} deleted successfully`);
     } catch (error) {
       logger.error(`Failed to delete post ${postId}:`, error);
-      throw error;
-    }
-  },
-
-  indexMessage: async (messageId: string, doc: Record<string, unknown>): Promise<void> => {
-    try {
-      await esClient.index({
-        index: 'messages',
-        id: messageId,
-        document: doc,
-      });
-      logger.debug(`Message ${messageId} indexed successfully`);
-    } catch (error) {
-      logger.error(`Failed to index message ${messageId}:`, error);
-      throw error;
-    }
-  },
-
-  deleteMessage: async (messageId: string): Promise<void> => {
-    try {
-      await esClient.delete({
-        index: 'messages',
-        id: messageId,
-      });
-      logger.debug(`Message ${messageId} deleted from index`);
-    } catch (error: unknown) {
-      const status = (error as { meta?: { statusCode?: number } })?.meta?.statusCode;
-      if (status === 404) return;
-      logger.error(`Failed to delete message ${messageId} from index:`, error);
       throw error;
     }
   },
