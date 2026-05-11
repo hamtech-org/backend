@@ -16,6 +16,8 @@ import type {
   CallGroupEndAllPayload,
   CallGroupMissedPayload,
   CallGroupVacantPayload,
+  CallGroupRtcJoinedPayload,
+  CallGroupRtcLeftPayload,
 } from './call.types.js';
 
 const buildChannelName = (userA: string, userB: string): string => {
@@ -34,6 +36,28 @@ const groupCallMeta = new Map<
   string,
   { hostId: string; conversationId: string; sessionId: string; startedAt: number }
 >();
+
+/** userId → channelName — đang trong RTC (1-1 đã accept hoặc nhóm đã join). */
+const userActiveRtcChannel = new Map<string, string>();
+
+const bindDirectCallPair = (callerId: string, calleeId: string, channelName: string): void => {
+  userActiveRtcChannel.set(callerId, channelName);
+  userActiveRtcChannel.set(calleeId, channelName);
+};
+
+const bindUserRtcChannel = (uid: string, channelName: string): void => {
+  userActiveRtcChannel.set(uid, channelName);
+};
+
+const unbindUserRtc = (uid: string): void => {
+  userActiveRtcChannel.delete(uid);
+};
+
+const unbindAllUsersOnChannel = (channelName: string): void => {
+  for (const [uid, ch] of [...userActiveRtcChannel.entries()]) {
+    if (ch === channelName) userActiveRtcChannel.delete(uid);
+  }
+};
 
 /** Chỉ `user:*` — tránh trùng socket vừa ở `conv:` vừa ở `user:`. */
 const emitToMemberUsers = (
@@ -107,7 +131,9 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
           hostId: userId,
           sessionId,
         });
-        logger.info(`Call group: ${userId} -> conv=${data.conversationId} (${data.type}) channel=${channelName}`);
+        logger.info(
+          `Call group: ${userId} -> conv=${data.conversationId} (${data.type}) channel=${channelName}`,
+        );
       } catch (e) {
         logger.error('call:initiate group failed:', e);
       }
@@ -116,6 +142,30 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
 
     if (!data.calleeId) {
       logger.warn('call:initiate direct: missing calleeId');
+      return;
+    }
+
+    if (userActiveRtcChannel.has(data.calleeId)) {
+      socket.emit('call:busy', {
+        conversationId: data.conversationId,
+        calleeId: data.calleeId,
+        type: data.type,
+      });
+      try {
+        const message = await messageService.sendMessage(userId, data.conversationId, {
+          type: 'call',
+          content: JSON.stringify({
+            kind: 'missed',
+            callType: data.type,
+            durationSec: 0,
+            reason: 'callee_busy',
+          }),
+        });
+        await broadcastMessageNew(message);
+      } catch (e) {
+        logger.error('Create call log (busy missed) failed:', e);
+      }
+      logger.info(`Call busy: ${userId} -> ${data.calleeId} (${data.type})`);
       return;
     }
 
@@ -130,11 +180,18 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
       scope: 'direct',
     });
 
-    socket.emit('call:channel-ready', { channelName, conversationId: data.conversationId, scope: 'direct' });
+    socket.emit('call:channel-ready', {
+      channelName,
+      conversationId: data.conversationId,
+      scope: 'direct',
+    });
     logger.info(`Call: ${userId} -> ${data.calleeId} (${data.type}) channel=${channelName}`);
   });
 
   socket.on('call:accept', (data: CallAcceptPayload) => {
+    if (!data.channelName.startsWith('grp_')) {
+      bindDirectCallPair(data.callerId, userId, data.channelName);
+    }
     io.to(`user:${data.callerId}`).emit('call:accepted', {
       calleeId: userId,
       channelName: data.channelName,
@@ -179,7 +236,9 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
 
   socket.on('call:end', async (data: CallEndPayload) => {
     if (data.channelName.startsWith('grp_')) {
-      logger.info(`call:end ignored for group channel (use call:group-leave / call:group-end-all): ${data.channelName}`);
+      logger.info(
+        `call:end ignored for group channel (use call:group-leave / call:group-end-all): ${data.channelName}`,
+      );
       return;
     }
 
@@ -190,11 +249,19 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
     });
     logger.info(`Call ended by ${userId} on channel=${data.channelName}`);
 
+    unbindUserRtc(userId);
+    unbindUserRtc(data.peerId);
+
+    let logKind: 'completed' | 'missed' | 'rejected' | 'cancelled' = 'completed';
+    if (data.result === 'cancelled') logKind = 'cancelled';
+    else if (data.result === 'missed') logKind = 'missed';
+    else if (data.result === 'rejected') logKind = 'rejected';
+
     try {
       const message = await messageService.sendMessage(userId, data.conversationId, {
         type: 'call',
         content: JSON.stringify({
-          kind: data.result ?? 'completed',
+          kind: logKind,
           callType: data.type,
           durationSec: data.durationSec ?? 0,
         }),
@@ -256,6 +323,7 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
         sessionId,
       });
       groupCallMeta.delete(data.channelName);
+      unbindAllUsersOnChannel(data.channelName);
 
       const message = await messageService.sendMessage(userId, data.conversationId, {
         type: 'call',
@@ -273,8 +341,41 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
     }
   });
 
+  socket.on('call:group-rtc-joined', async (data: CallGroupRtcJoinedPayload) => {
+    if (!data.channelName.startsWith('grp_')) {
+      logger.warn('call:group-rtc-joined: not a group channel');
+      return;
+    }
+    const meta = groupCallMeta.get(data.channelName);
+    if (!meta || meta.conversationId !== data.conversationId) {
+      logger.warn('call:group-rtc-joined: unknown or inactive session');
+      return;
+    }
+    try {
+      const members = await conversationRepository.getConversationMembers(data.conversationId);
+      if (!members.some((m) => m.userId === userId)) {
+        logger.warn('call:group-rtc-joined: not a member');
+        return;
+      }
+      bindUserRtcChannel(userId, data.channelName);
+      logger.info(`call:group-rtc-joined ${userId} ${data.channelName}`);
+    } catch (e) {
+      logger.error('call:group-rtc-joined failed:', e);
+    }
+  });
+
+  socket.on('call:group-rtc-left', (data: CallGroupRtcLeftPayload) => {
+    if (!data.channelName.startsWith('grp_')) return;
+    const ch = userActiveRtcChannel.get(userId);
+    if (ch === data.channelName) {
+      unbindUserRtc(userId);
+      logger.info(`call:group-rtc-left ${userId} ${data.channelName}`);
+    }
+  });
+
   socket.on('call:group-leave', async (data: CallGroupLeavePayload) => {
     try {
+      unbindUserRtc(userId);
       const members = await conversationRepository.getConversationMembers(data.conversationId);
       const ids = members.map((m) => m.userId);
       emitToMemberUsers(io, ids, 'call:group-participant-left', {
@@ -320,6 +421,7 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
         sessionId,
       });
       groupCallMeta.delete(data.channelName);
+      unbindAllUsersOnChannel(data.channelName);
 
       const message = await messageService.sendMessage(userId, data.conversationId, {
         type: 'call',
@@ -355,6 +457,7 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
         sessionId,
       });
       groupCallMeta.delete(data.channelName);
+      unbindAllUsersOnChannel(data.channelName);
       logger.info(`call:group-vacant ${data.channelName} conv=${data.conversationId}`);
     } catch (e) {
       logger.error('call:group-vacant failed:', e);
@@ -375,6 +478,8 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
       channelName: data.channelName,
       accepted: data.accepted,
     });
-    logger.info(`Upgrade ${data.accepted ? 'accepted' : 'rejected'}: ${userId} on channel=${data.channelName}`);
+    logger.info(
+      `Upgrade ${data.accepted ? 'accepted' : 'rejected'}: ${userId} on channel=${data.channelName}`,
+    );
   });
 };

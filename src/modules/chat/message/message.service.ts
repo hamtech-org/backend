@@ -5,8 +5,10 @@ import type { IConversation, IMessage, ISendMessageDto } from '../shared/chat.ty
 import type { MessageStatus } from '@/shared/types/chat.types.js';
 import { NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
 import { MAX_PINNED_MESSAGES_PER_CONVERSATION } from '../shared/chat.constants.js';
+import { getKafkaProducer } from '@/config/kafka.js';
 import { kafkaProducer } from '@/shared/kafka/producer.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
+import { logger } from '@/shared/utils/logger.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { mediaService } from '@/modules/media/media.service.js';
 import {
@@ -16,6 +18,32 @@ import {
   attachReplyToDetails,
   isConversationNotificationPushMuted,
 } from '../shared/chat.helpers.js';
+
+async function emitMessageSearchIndexEvent(payload: {
+  action: 'index' | 'delete';
+  documentId: string;
+  document?: Record<string, unknown> | null;
+}): Promise<void> {
+  try {
+    const producer = getKafkaProducer();
+    await producer.send({
+      topic: KAFKA_TOPICS.SEARCH_INDEX,
+      messages: [
+        {
+          key: payload.documentId,
+          value: JSON.stringify({
+            action: payload.action,
+            indexName: 'messages',
+            documentId: payload.documentId,
+            document: payload.document ?? null,
+          }),
+        },
+      ],
+    });
+  } catch (error) {
+    logger.warn('[search.index messages] Kafka emit skipped or failed:', error);
+  }
+}
 
 /**
  * Lấy tin theo PK+SK (nhanh) hoặc Query theo messageId — client có thể gửi `createdAt` hơi lệch
@@ -406,6 +434,19 @@ export const messageService = {
 
     await conversationRepository.createMessage(message);
 
+    void emitMessageSearchIndexEvent({
+      action: 'index',
+      documentId: messageId,
+      document: {
+        messageId,
+        conversationId,
+        senderId,
+        conversationType: conversation.type,
+        content: (message.content ?? '').slice(0, 500),
+        createdAt: now,
+      },
+    });
+
     const senders = await userRepository.findByIds([senderId]);
     const senderDisplayName = senders[0]?.displayName?.trim() ?? null;
 
@@ -583,6 +624,8 @@ export const messageService = {
       updateConversationLastMessage: conversationRepository.updateConversationLastMessage,
       clearConversationLastMessage: conversationRepository.clearConversationLastMessage,
     });
+
+    void emitMessageSearchIndexEvent({ action: 'delete', documentId: messageId });
   },
 
   /**
