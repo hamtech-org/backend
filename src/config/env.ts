@@ -44,6 +44,11 @@ const envSchema = z.object({
   S3_BUCKET_NAME: z.string().default('zalogram-media'),
   S3_REGION: z.string().default('us-east-1'),
   CLOUDFRONT_DOMAIN: z.string().default(''),
+  CLOUDFRONT_PUBLIC_DOMAIN: z.string().default(''),
+  CLOUDFRONT_PRIVATE_DOMAIN: z.string().default(''),
+  CLOUDFRONT_SIGNING_KEY_PAIR_ID: z.string().default(''),
+  CLOUDFRONT_SIGNING_PRIVATE_KEY: z.string().default(''),
+  CLOUDFRONT_PRIVATE_URL_TTL_SECONDS: z.coerce.number().default(600),
 
   API_PUBLIC_ORIGIN: z.string().default('http://localhost:3000'),
 
