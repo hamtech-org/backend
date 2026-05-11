@@ -20,9 +20,9 @@ import {
 } from '../shared/chat.helpers.js';
 
 async function emitMessageSearchIndexEvent(payload: {
-  action: 'index' | 'delete';
+  action: 'index' | 'update' | 'delete';
   documentId: string;
-  document?: Record<string, unknown> | null;
+  document: Record<string, unknown> | null;
 }): Promise<void> {
   try {
     const producer = getKafkaProducer();
@@ -35,7 +35,7 @@ async function emitMessageSearchIndexEvent(payload: {
             action: payload.action,
             indexName: 'messages',
             documentId: payload.documentId,
-            document: payload.document ?? null,
+            document: payload.document,
           }),
         },
       ],
@@ -434,19 +434,6 @@ export const messageService = {
 
     await conversationRepository.createMessage(message);
 
-    void emitMessageSearchIndexEvent({
-      action: 'index',
-      documentId: messageId,
-      document: {
-        messageId,
-        conversationId,
-        senderId,
-        conversationType: conversation.type,
-        content: (message.content ?? '').slice(0, 500),
-        createdAt: now,
-      },
-    });
-
     const senders = await userRepository.findByIds([senderId]);
     const senderDisplayName = senders[0]?.displayName?.trim() ?? null;
 
@@ -517,6 +504,18 @@ export const messageService = {
           recipientIds: pushRecipientIds,
         },
       }),
+      emitMessageSearchIndexEvent({
+        action: 'index',
+        documentId: messageId,
+        document: {
+          messageId,
+          conversationId,
+          senderId,
+          conversationType: conversation.type,
+          content: lastPreviewContent.slice(0, 500),
+          createdAt: now,
+        },
+      }),
     ]);
 
     const {
@@ -574,6 +573,17 @@ export const messageService = {
       content,
       isEdited: true,
     });
+    await emitMessageSearchIndexEvent({
+      action: 'update',
+      documentId: messageId,
+      document: {
+        messageId,
+        conversationId,
+        senderId,
+        content: content.trim(),
+        createdAt: message.createdAt,
+      },
+    });
     await syncConversationLastMessageMeta(conversationId, {
       getMessages: conversationRepository.getMessages,
       updateConversationLastMessage: conversationRepository.updateConversationLastMessage,
@@ -616,6 +626,11 @@ export const messageService = {
       content: 'Tin nhắn đã được thu hồi',
       isPinned: false,
     });
+    await emitMessageSearchIndexEvent({
+      action: 'delete',
+      documentId: messageId,
+      document: null,
+    });
     if (wasPinned) {
       await conversationRepository.adjustPinnedMessageCount(conversationId, -1);
     }
@@ -624,8 +639,6 @@ export const messageService = {
       updateConversationLastMessage: conversationRepository.updateConversationLastMessage,
       clearConversationLastMessage: conversationRepository.clearConversationLastMessage,
     });
-
-    void emitMessageSearchIndexEvent({ action: 'delete', documentId: messageId });
   },
 
   /**

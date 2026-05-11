@@ -41,6 +41,16 @@ const envSchema = z.object({
   ELASTICSEARCH_USERNAME: z.string().default(''),
   ELASTICSEARCH_PASSWORD: z.string().default(''),
 
+  /** Qdrant vector DB (optional — AI RAG disabled if empty). */
+  QDRANT_URL: z.string().default(''),
+  QDRANT_API_KEY: z.string().default(''),
+  QDRANT_COLLECTION: z.string().default('hamtech_ai_messages'),
+  /** Titan v2 default 1024. */
+  AI_EMBEDDING_DIMENSION: z.coerce.number().default(1024),
+  BEDROCK_EMBEDDING_MODEL_ID: z.string().default('amazon.titan-embed-text-v2:0'),
+  /** Optional second Bedrock model for tool `invoke_secondary_model`. */
+  BEDROCK_SECONDARY_MODEL_ID: z.string().optional(),
+
   S3_BUCKET_NAME: z.string().default('zalogram-media'),
   S3_REGION: z.string().default('us-east-1'),
   CLOUDFRONT_DOMAIN: z.string().default(''),

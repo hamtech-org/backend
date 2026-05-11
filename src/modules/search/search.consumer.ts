@@ -29,6 +29,8 @@ export const startSearchConsumer = async (): Promise<void> => {
           case 'update':
             if (event.indexName === 'users') {
               await elasticsearchUtils.indexUser(event.documentId, event.document || {});
+            } else if (event.indexName === 'messages') {
+              await elasticsearchUtils.indexMessage(event.documentId, event.document || {});
             }
             if (event.indexName === 'posts') {
               if (event.action === 'index') {
@@ -44,6 +46,8 @@ export const startSearchConsumer = async (): Promise<void> => {
           case 'delete':
             if (event.indexName === 'users') {
               await elasticsearchUtils.deleteUser(event.documentId);
+            } else if (event.indexName === 'messages') {
+              await elasticsearchUtils.deleteMessage(event.documentId);
             }
             if (event.indexName === 'posts') {
               await elasticsearchUtils.deletePost(event.documentId);

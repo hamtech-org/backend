@@ -1,5 +1,6 @@
 import { esClient } from '@/config/elasticsearch.js';
 import { userRepository } from '@/modules/user/user.repository.js';
+import { conversationRepository } from '@/modules/chat/conversation/conversation.repository.js';
 import type {
   ISearchResult,
   ISearchOptions,
@@ -21,6 +22,12 @@ export const searchService = {
     const from = (page - 1) * pageSize;
 
     try {
+      const convs = await conversationRepository.getConversations(_userId);
+      const conversationIds = convs.map((c) => c.conversationId);
+      if (conversationIds.length === 0) {
+        return { items: [], total: 0, page, pageSize, hasMore: false };
+      }
+
       const result = await esClient.search({
         index: 'messages',
         from,
@@ -29,8 +36,8 @@ export const searchService = {
           bool: {
             must: [
               {
-                term: {
-                  senderId: _userId, // Filter messages from/to user
+                terms: {
+                  conversationId: conversationIds, // Only messages in conversations user belongs to
                 },
               },
             ],

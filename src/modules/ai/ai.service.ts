@@ -10,79 +10,17 @@ import type {
   IAiSuggestReplyContextResponse,
   IAiGroupSummaryRequest,
   IAiGroupSummaryResponse,
+  IAiAssistantRequest,
+  IAiAssistantResponse,
 } from './ai.types.js';
-import { ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
-import { aiConfig, bedrockRuntimeClient, type BedrockAiConfig } from '@/config/ai.js';
+import { aiConfig } from '@/config/ai.js';
 import { conversationRepository } from '@/modules/chat/conversation/conversation.repository.js';
 import type { IMessage } from '@/modules/chat/shared/chat.types.js';
+import { generateText } from './ai-generate-text.js';
+import { runAiAssistantPipeline } from './ai-assistant.pipeline.js';
 
-export type AiGenerateTextOptions = Partial<
-  Pick<BedrockAiConfig, 'modelId' | 'maxTokens' | 'temperature' | 'topP'>
-> & {
-  systemPrompt?: string;
-};
-
-export type AiGenerateTextResult = {
-  text: string;
-  model: string;
-  tokensUsed?: number;
-};
-
-export async function generateText(
-  prompt: string,
-  options: AiGenerateTextOptions = {},
-): Promise<AiGenerateTextResult> {
-  const input = prompt?.trim();
-  if (!input) {
-    return { text: '', model: options.modelId ?? aiConfig.modelId, tokensUsed: 0 };
-  }
-
-  const modelId = options.modelId ?? aiConfig.modelId;
-  const maxTokens = options.maxTokens ?? aiConfig.maxTokens;
-  const temperature = options.temperature ?? aiConfig.temperature;
-  const topP = options.topP ?? aiConfig.topP;
-
-  const res = await bedrockRuntimeClient.send(
-    new ConverseCommand({
-      modelId,
-      ...(options.systemPrompt
-        ? {
-            system: [
-              {
-                text: options.systemPrompt,
-              },
-            ],
-          }
-        : {}),
-      messages: [
-        {
-          role: 'user',
-          content: [{ text: input }],
-        },
-      ],
-      inferenceConfig: {
-        maxTokens,
-        temperature,
-        topP,
-      },
-    }),
-  );
-
-  const text =
-    res.output?.message?.content
-      ?.map((c) => ('text' in c ? c.text : ''))
-      .filter(Boolean)
-      .join('')
-      .trim() ?? '';
-
-  const tokensUsed = res.usage?.totalTokens;
-
-  return {
-    text,
-    model: modelId,
-    ...(typeof tokensUsed === 'number' ? { tokensUsed } : {}),
-  };
-}
+export { generateText } from './ai-generate-text.js';
+export type { AiGenerateTextOptions, AiGenerateTextResult } from './ai-generate-text.js';
 
 export const aiService = {
   suggestContent: async (request: IAiSuggestRequest): Promise<IAiSuggestResponse> => {
@@ -287,7 +225,7 @@ export const aiService = {
     const transcript = kept
       .map((m: IMessage) => {
         const name = (m.senderDisplayName ?? '').trim();
-        const speaker = name.length ? name : m.senderId;
+        const speaker = name.length ? name : 'người dùng';
         const text = String((m as any).content ?? '').trim();
         return `${speaker}: ${text}`;
       })
@@ -345,5 +283,9 @@ export const aiService = {
   generatePost: async (_request: IAiGeneratePostRequest): Promise<IAiGeneratePostResponse> => {
     // TODO: implement using generateText()
     throw new Error('Chưa triển khai');
+  },
+
+  aiAssistant: async (request: IAiAssistantRequest): Promise<IAiAssistantResponse> => {
+    return runAiAssistantPipeline(request);
   },
 };
