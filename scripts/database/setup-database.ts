@@ -303,6 +303,20 @@ const tableDefinitions: CreateTableCommandInput[] = [
     ],
     BillingMode: 'PAY_PER_REQUEST',
   },
+
+  // 16. AI Assistant threads + messages (PK/SK giống pattern các bảng khác)
+  {
+    TableName: tableName('AiAssistant'),
+    KeySchema: [
+      { AttributeName: 'PK', KeyType: HASH },
+      { AttributeName: 'SK', KeyType: RANGE },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: 'PK', AttributeType: S },
+      { AttributeName: 'SK', AttributeType: S },
+    ],
+    BillingMode: 'PAY_PER_REQUEST',
+  },
 ];
 
 const TTL_TABLES: Record<string, string> = {
