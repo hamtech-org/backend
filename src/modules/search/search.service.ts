@@ -1,20 +1,33 @@
 import { esClient } from '@/config/elasticsearch.js';
 import { userRepository } from '@/modules/user/user.repository.js';
+import { conversationRepository } from '@/modules/chat/conversation/conversation.repository.js';
 import type {
-  ISearchResult, ISearchOptions,
-  ISearchUserResult, ISearchPostResult,
-  ISearchGroupResult, ISearchMessageResult,
+  ISearchResult,
+  ISearchOptions,
+  ISearchUserResult,
+  ISearchPostResult,
+  ISearchGroupResult,
+  ISearchMessageResult,
   ISearchAllResult,
   ISearchAllChatResult,
 } from './search.types.js';
 
 export const searchService = {
-  searchMessages: async (_userId: string, options: ISearchOptions): Promise<ISearchResult<ISearchMessageResult>> => {
+  searchMessages: async (
+    _userId: string,
+    options: ISearchOptions,
+  ): Promise<ISearchResult<ISearchMessageResult>> => {
     const page = options.page || 1;
     const pageSize = options.pageSize || 20;
     const from = (page - 1) * pageSize;
 
     try {
+      const convs = await conversationRepository.getConversations(_userId);
+      const conversationIds = convs.map((c) => c.conversationId);
+      if (conversationIds.length === 0) {
+        return { items: [], total: 0, page, pageSize, hasMore: false };
+      }
+
       const result = await esClient.search({
         index: 'messages',
         from,
@@ -23,8 +36,8 @@ export const searchService = {
           bool: {
             must: [
               {
-                term: {
-                  senderId: _userId,  // Filter messages from/to user
+                terms: {
+                  conversationId: conversationIds, // Only messages in conversations user belongs to
                 },
               },
             ],
@@ -51,7 +64,7 @@ export const searchService = {
         track_total_hits: true,
       });
 
-      const items: ISearchMessageResult[] = result.hits.hits.map(hit => {
+      const items: ISearchMessageResult[] = result.hits.hits.map((hit) => {
         const source = hit._source as ISearchMessageResult;
         return {
           messageId: source.messageId,
@@ -62,7 +75,8 @@ export const searchService = {
         };
       });
 
-      const total = typeof result.hits.total === 'number' ? result.hits.total : result.hits.total?.value || 0;
+      const total =
+        typeof result.hits.total === 'number' ? result.hits.total : result.hits.total?.value || 0;
       const hasMore = from + pageSize < total;
 
       return {
@@ -127,7 +141,7 @@ export const searchService = {
         track_total_hits: true,
       });
 
-      let items: ISearchUserResult[] = result.hits.hits.map(hit => {
+      let items: ISearchUserResult[] = result.hits.hits.map((hit) => {
         const source = hit._source as ISearchUserResult;
         return {
           userId: source.userId,
@@ -141,13 +155,16 @@ export const searchService = {
 
       // ✅ Filter out current user
       if (options.userId) {
-        items = items.filter(user => user.userId !== options.userId);
+        items = items.filter((user) => user.userId !== options.userId);
       }
 
       // ✅ Optimized: Batch get all friend IDs once instead of checking each individually
       console.log('searchUsers - Current userId:', options.userId);
-      console.log('searchUsers - Found users:', items.map(u => u.userId));
-      
+      console.log(
+        'searchUsers - Found users:',
+        items.map((u) => u.userId),
+      );
+
       if (options.userId) {
         try {
           const userFriendIds = await userRepository.getFriendIds(options.userId, 1000);
@@ -160,34 +177,42 @@ export const searchService = {
           const pendingReceivedSet = new Set(received);
           const pendingSentSet = new Set(sent);
 
-          items = await Promise.all(items.map(async user => {
-            let friendshipStatus: 'friend' | 'pending_sent' | 'pending_received' | 'none' = 'none';
-            
-            console.log(`Checking friendship for user ${user.userId} against currentUser ${options.userId}`);
-            
-            // Double-check friendship status directly from DB to ensure accuracy
-            if (userFriendIdsSet.has(user.userId) && options.userId) {
-              console.log(`User ${user.userId} is in friend list`);
-              const isFriendConfirmed = await userRepository.checkFriendship(options.userId, user.userId);
-              if (isFriendConfirmed) {
-                friendshipStatus = 'friend';
-              }
-            } else if (pendingSentSet.has(user.userId)) {
-              console.log(`User ${user.userId} has pending_sent status`);
-              friendshipStatus = 'pending_sent';
-            } else if (pendingReceivedSet.has(user.userId)) {
-              console.log(`User ${user.userId} has pending_received status`);
-              friendshipStatus = 'pending_received';
-            } else {
-              console.log(`User ${user.userId} has no friendship`);
-            }
+          items = await Promise.all(
+            items.map(async (user) => {
+              let friendshipStatus: 'friend' | 'pending_sent' | 'pending_received' | 'none' =
+                'none';
 
-            return {
-              ...user,
-              isFriend: friendshipStatus === 'friend',
-              friendshipStatus,
-            };
-          }));
+              console.log(
+                `Checking friendship for user ${user.userId} against currentUser ${options.userId}`,
+              );
+
+              // Double-check friendship status directly from DB to ensure accuracy
+              if (userFriendIdsSet.has(user.userId) && options.userId) {
+                console.log(`User ${user.userId} is in friend list`);
+                const isFriendConfirmed = await userRepository.checkFriendship(
+                  options.userId,
+                  user.userId,
+                );
+                if (isFriendConfirmed) {
+                  friendshipStatus = 'friend';
+                }
+              } else if (pendingSentSet.has(user.userId)) {
+                console.log(`User ${user.userId} has pending_sent status`);
+                friendshipStatus = 'pending_sent';
+              } else if (pendingReceivedSet.has(user.userId)) {
+                console.log(`User ${user.userId} has pending_received status`);
+                friendshipStatus = 'pending_received';
+              } else {
+                console.log(`User ${user.userId} has no friendship`);
+              }
+
+              return {
+                ...user,
+                isFriend: friendshipStatus === 'friend',
+                friendshipStatus,
+              };
+            }),
+          );
         } catch (error) {
           console.error('Error checking friendships:', error);
           // Continue without friendship data if check fails
@@ -196,7 +221,8 @@ export const searchService = {
         console.log('searchUsers - No userId provided, skipping friendship check');
       }
 
-      const total = typeof result.hits.total === 'number' ? result.hits.total : result.hits.total?.value || 0;
+      const total =
+        typeof result.hits.total === 'number' ? result.hits.total : result.hits.total?.value || 0;
       const hasMore = from + pageSize < total;
 
       return {
@@ -206,7 +232,6 @@ export const searchService = {
         pageSize,
         hasMore,
       };
-
     } catch (error) {
       console.error('Search users error:', error);
       return { items: [], total: 0, page, pageSize, hasMore: false };
@@ -257,7 +282,7 @@ export const searchService = {
         track_total_hits: true,
       });
 
-      const items: ISearchGroupResult[] = result.hits.hits.map(hit => {
+      const items: ISearchGroupResult[] = result.hits.hits.map((hit) => {
         const source = hit._source as ISearchGroupResult;
         return {
           groupId: source.groupId,
@@ -268,7 +293,8 @@ export const searchService = {
         };
       });
 
-      const total = typeof result.hits.total === 'number' ? result.hits.total : result.hits.total?.value || 0;
+      const total =
+        typeof result.hits.total === 'number' ? result.hits.total : result.hits.total?.value || 0;
       const hasMore = from + pageSize < total;
 
       return {
@@ -319,7 +345,7 @@ export const searchService = {
         track_total_hits: true,
       });
 
-      const items: ISearchPostResult[] = result.hits.hits.map(hit => {
+      const items: ISearchPostResult[] = result.hits.hits.map((hit) => {
         const source = hit._source as ISearchPostResult;
         return {
           postId: source.postId,
@@ -330,7 +356,8 @@ export const searchService = {
         };
       });
 
-      const total = typeof result.hits.total === 'number' ? result.hits.total : result.hits.total?.value || 0;
+      const total =
+        typeof result.hits.total === 'number' ? result.hits.total : result.hits.total?.value || 0;
       const hasMore = from + pageSize < total;
 
       return {
@@ -361,7 +388,6 @@ export const searchService = {
         groups: groupsResult,
       };
     } catch (error) {
-
       console.error('Search all error:', error);
 
       return {
@@ -372,7 +398,10 @@ export const searchService = {
     }
   },
 
-  searchAllChat: async (_userId: string, options: ISearchOptions): Promise<ISearchAllChatResult> => {
+  searchAllChat: async (
+    _userId: string,
+    options: ISearchOptions,
+  ): Promise<ISearchAllChatResult> => {
     // Tìm kiếm tổng hợp cho chat: users, groups, messages
     try {
       const [usersResult, groupsResult, messagesResult] = await Promise.all([
@@ -396,7 +425,9 @@ export const searchService = {
     }
   },
 
-  searchUsersByContact: async (options: ISearchOptions): Promise<ISearchResult<ISearchUserResult>> => {
+  searchUsersByContact: async (
+    options: ISearchOptions,
+  ): Promise<ISearchResult<ISearchUserResult>> => {
     const page = options.page || 1;
     const pageSize = options.pageSize || 20;
     const from = (page - 1) * pageSize;
@@ -445,7 +476,7 @@ export const searchService = {
         track_total_hits: true,
       });
 
-      let items: ISearchUserResult[] = result.hits.hits.map(hit => {
+      let items: ISearchUserResult[] = result.hits.hits.map((hit) => {
         const source = hit._source as ISearchUserResult & { phone?: string };
         return {
           userId: source.userId,
@@ -461,7 +492,7 @@ export const searchService = {
 
       // ✅ Filter out current user
       if (options.userId) {
-        items = items.filter(user => user.userId !== options.userId);
+        items = items.filter((user) => user.userId !== options.userId);
       }
 
       // Check friendship status if userId is provided
@@ -474,7 +505,7 @@ export const searchService = {
           const pendingReceivedSet = new Set(received);
           const pendingSentSet = new Set(sent);
 
-          items = items.map(user => ({
+          items = items.map((user) => ({
             ...user,
             isFriend: userFriendIdsSet.has(user.userId),
             friendshipStatus: userFriendIdsSet.has(user.userId)
@@ -491,7 +522,8 @@ export const searchService = {
         }
       }
 
-      const total = typeof result.hits.total === 'number' ? result.hits.total : result.hits.total?.value || 0;
+      const total =
+        typeof result.hits.total === 'number' ? result.hits.total : result.hits.total?.value || 0;
       const hasMore = from + pageSize < total;
 
       return {
@@ -506,5 +538,4 @@ export const searchService = {
       return { items: [], total: 0, page, pageSize, hasMore: false };
     }
   },
-
 };
