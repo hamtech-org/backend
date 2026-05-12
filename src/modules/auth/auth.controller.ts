@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
+import { z } from 'zod';
 import { authService } from './auth.service.js';
 import { sendSuccess, sendCreated } from '@/shared/utils/response.js';
 import type { IRequestMeta, IRegisterDto, ILoginDto } from './auth.types.js';
-import { logger } from '@/shared/utils/logger.js';
+import { ValidationError } from '@/shared/utils/errors.js';
 
 /**
  * Extract IP + User-Agent từ request
@@ -54,6 +55,28 @@ export const authController = {
     try {
       await authService.logoutAll(req.user!.userId);
       sendSuccess(res, null, 'Đã đăng xuất tất cả thiết bị');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  listSessions: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const data = await authService.listMySessions(req.user!.userId, req.user!.sessionId);
+      sendSuccess(res, data, 'Danh sách phiên đăng nhập');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  revokeSession: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const parsed = z.object({ sessionId: z.string().uuid() }).safeParse(req.params);
+      if (!parsed.success) {
+        throw new ValidationError('Session ID không hợp lệ');
+      }
+      await authService.revokeUserSession(req.user!.userId, parsed.data.sessionId);
+      sendSuccess(res, null, 'Đã thu hồi phiên đăng nhập');
     } catch (error) {
       next(error);
     }
@@ -159,11 +182,7 @@ export const authController = {
         email: string;
         livenessSessionId: string;
       };
-      const result = await authService.loginWithFace(
-        email,
-        livenessSessionId,
-        getRequestMeta(req),
-      );
+      const result = await authService.loginWithFace(email, livenessSessionId, getRequestMeta(req));
       sendSuccess(res, result, 'Đăng nhập bằng khuôn mặt thành công');
     } catch (error) {
       next(error);
