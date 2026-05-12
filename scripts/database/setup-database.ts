@@ -309,7 +309,21 @@ const tableDefinitions: CreateTableCommandInput[] = [
     BillingMode: 'PAY_PER_REQUEST',
   },
 
-  // 16. SavedPosts — PK=USER#{userId}, SK=SAVED#{savedAt}#{postId}
+  // 16. AI Assistant threads + messages (PK/SK giống pattern các bảng khác)
+  {
+    TableName: tableName('AiAssistant'),
+    KeySchema: [
+      { AttributeName: 'PK', KeyType: HASH },
+      { AttributeName: 'SK', KeyType: RANGE },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: 'PK', AttributeType: S },
+      { AttributeName: 'SK', AttributeType: S },
+    ],
+    BillingMode: 'PAY_PER_REQUEST',
+  },
+
+  // 17. SavedPosts — PK=USER#{userId}, SK=SAVED#{savedAt}#{postId}
   //     GSI-PostLookup: PK=USER#{userId}, SK=GSI1SK (SAVED#{postId}) — dùng để check/unsave theo postId
   {
     TableName: tableName('SavedPosts'),

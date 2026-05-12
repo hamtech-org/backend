@@ -5,8 +5,10 @@ import type { IConversation, IMessage, ISendMessageDto } from '../shared/chat.ty
 import type { MessageStatus } from '@/shared/types/chat.types.js';
 import { NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
 import { MAX_PINNED_MESSAGES_PER_CONVERSATION } from '../shared/chat.constants.js';
+import { getKafkaProducer } from '@/config/kafka.js';
 import { kafkaProducer } from '@/shared/kafka/producer.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
+import { logger } from '@/shared/utils/logger.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { mediaService } from '@/modules/media/media.service.js';
 import {
@@ -16,6 +18,32 @@ import {
   attachReplyToDetails,
   isConversationNotificationPushMuted,
 } from '../shared/chat.helpers.js';
+
+async function emitMessageSearchIndexEvent(payload: {
+  action: 'index' | 'update' | 'delete';
+  documentId: string;
+  document: Record<string, unknown> | null;
+}): Promise<void> {
+  try {
+    const producer = getKafkaProducer();
+    await producer.send({
+      topic: KAFKA_TOPICS.SEARCH_INDEX,
+      messages: [
+        {
+          key: payload.documentId,
+          value: JSON.stringify({
+            action: payload.action,
+            indexName: 'messages',
+            documentId: payload.documentId,
+            document: payload.document,
+          }),
+        },
+      ],
+    });
+  } catch (error) {
+    logger.warn('[search.index messages] Kafka emit skipped or failed:', error);
+  }
+}
 
 /**
  * Lấy tin theo PK+SK (nhanh) hoặc Query theo messageId — client có thể gửi `createdAt` hơi lệch
@@ -476,6 +504,18 @@ export const messageService = {
           recipientIds: pushRecipientIds,
         },
       }),
+      emitMessageSearchIndexEvent({
+        action: 'index',
+        documentId: messageId,
+        document: {
+          messageId,
+          conversationId,
+          senderId,
+          conversationType: conversation.type,
+          content: lastPreviewContent.slice(0, 500),
+          createdAt: now,
+        },
+      }),
     ]);
 
     const {
@@ -533,6 +573,17 @@ export const messageService = {
       content,
       isEdited: true,
     });
+    await emitMessageSearchIndexEvent({
+      action: 'update',
+      documentId: messageId,
+      document: {
+        messageId,
+        conversationId,
+        senderId,
+        content: content.trim(),
+        createdAt: message.createdAt,
+      },
+    });
     await syncConversationLastMessageMeta(conversationId, {
       getMessages: conversationRepository.getMessages,
       updateConversationLastMessage: conversationRepository.updateConversationLastMessage,
@@ -574,6 +625,11 @@ export const messageService = {
       isRecalled: true,
       content: 'Tin nhắn đã được thu hồi',
       isPinned: false,
+    });
+    await emitMessageSearchIndexEvent({
+      action: 'delete',
+      documentId: messageId,
+      document: null,
     });
     if (wasPinned) {
       await conversationRepository.adjustPinnedMessageCount(conversationId, -1);

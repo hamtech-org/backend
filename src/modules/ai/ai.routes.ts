@@ -10,5 +10,7 @@ router.post('/group-summary', authenticate, aiController.summarizeGroupMessages)
 router.post('/chatbot', authenticate, aiController.chatbot);
 router.post('/sentiment', authenticate, aiController.analyzeSentiment);
 router.post('/generate-post', authenticate, aiController.generatePost);
+router.post('/assistant', authenticate, aiController.aiAssistant);
+router.get('/assistant/thread', authenticate, aiController.getAiAssistantThread);
 
 export default router;

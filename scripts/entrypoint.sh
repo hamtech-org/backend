@@ -31,5 +31,9 @@ echo "[5/5] Syncing users to Elasticsearch..."
 npx tsx scripts/database/sync-users-to-es.ts
 echo ""
 
+echo "[6/6] Syncing messages to Elasticsearch..."
+npx npx tsx scripts/database/backfill-messages-to-es.ts
+echo ""
+
 echo "[6/6] Starting dev server..."
 exec npm run dev

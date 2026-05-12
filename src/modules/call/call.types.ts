@@ -40,7 +40,7 @@ export interface CallEndPayload {
   conversationId: string;
   type: CallType;
   durationSec?: number;
-  result?: 'completed' | 'missed' | 'rejected';
+  result?: 'completed' | 'missed' | 'rejected' | 'cancelled';
 }
 
 export interface CallMissedPayload {
@@ -84,6 +84,18 @@ export interface CallGroupMissedPayload {
 
 /** Client báo không còn ai trong kênh Agora (phiên nhóm kết thúc tự nhiên). */
 export interface CallGroupVacantPayload {
+  channelName: string;
+  conversationId: string;
+}
+
+/** Client đã vào kênh Agora nhóm — server đánh dấu user busy cho gọi 1-1. */
+export interface CallGroupRtcJoinedPayload {
+  channelName: string;
+  conversationId: string;
+}
+
+/** Client rời RTC nhóm (đóng CallPage / mất kết nối) — bỏ đánh dấu busy. */
+export interface CallGroupRtcLeftPayload {
   channelName: string;
   conversationId: string;
 }

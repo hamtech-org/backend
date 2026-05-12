@@ -156,6 +156,7 @@ export const elasticsearchUtils = {
             messageId: { type: 'keyword' },
             conversationId: { type: 'keyword' },
             senderId: { type: 'keyword' },
+            conversationType: { type: 'keyword' },
             content: { type: 'text', analyzer: 'standard' },
             createdAt: { type: 'date' },
           },
@@ -230,6 +231,41 @@ export const elasticsearchUtils = {
       logger.debug(`User ${userId} deleted successfully`);
     } catch (error) {
       logger.error(`Failed to delete user ${userId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Index/Update a message document (idempotent upsert).
+   */
+  indexMessage: async (messageId: string, messageData: Record<string, unknown>): Promise<void> => {
+    try {
+      await esClient.index({
+        index: 'messages',
+        id: messageId,
+        document: messageData,
+      });
+      logger.debug(`Message ${messageId} indexed successfully`);
+    } catch (error) {
+      logger.error(`Failed to index message ${messageId}:`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Delete a message document from search index.
+   */
+  deleteMessage: async (messageId: string): Promise<void> => {
+    try {
+      await esClient.delete({
+        index: 'messages',
+        id: messageId,
+      });
+      logger.debug(`Message ${messageId} deleted successfully`);
+    } catch (error: unknown) {
+      const status = (error as { meta?: { statusCode?: number } })?.meta?.statusCode;
+      if (status === 404) return;
+      logger.error(`Failed to delete message ${messageId}:`, error);
       throw error;
     }
   },
