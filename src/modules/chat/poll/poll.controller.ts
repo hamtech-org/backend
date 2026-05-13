@@ -1,17 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
 import { pollService } from './poll.service.js';
 import { sendSuccess, sendCreated } from '@/shared/utils/response.js';
-import { broadcastMessageNew, emitToConversationAndMembers } from '../shared/chat.broadcast.js';
+import { emitToConversationAndMembers } from '../shared/chat.broadcast.js';
 
 export const pollController = {
   createPoll: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const systemMessage = await pollService.createPoll(req.user!.userId, req.params.groupId, req.body);
-      try {
-        if (systemMessage) {
-          await broadcastMessageNew(systemMessage);
-        }
-      } catch { /* ignore */ }
+      /** `pollService.createPoll` → `createAndBroadcastSystemMessage` đã `broadcastMessageNew` — không gọi lại (tránh message:new + banner đúp trên client). */
+      await pollService.createPoll(req.user!.userId, req.params.groupId, req.body);
       try {
         await emitToConversationAndMembers(req.params.groupId, 'group:poll_new', { groupId: req.params.groupId });
       } catch {
