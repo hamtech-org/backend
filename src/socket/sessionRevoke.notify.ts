@@ -39,3 +39,19 @@ export const emitAuthSessionsChanged = (userId: string): void => {
     logger.warn('emitAuthSessionsChanged: Socket.io chưa sẵn sàng hoặc lỗi emit', e);
   }
 };
+
+export interface NewDeviceLoginPayload {
+  sessionId: string;
+  ipAddress?: string;
+}
+
+/** Các phiên khác của cùng user: có đăng nhập / phiên mới (client tự bỏ qua nếu trùng sessionId JWT). */
+export const emitNewDeviceLogin = (userId: string, payload: NewDeviceLoginPayload): void => {
+  try {
+    const io = getIO();
+    io.to(`user:${userId}`).emit('auth:new_device_login', payload);
+    logger.debug(`Emitted auth:new_device_login to user:${userId} (${payload.sessionId})`);
+  } catch (e) {
+    logger.warn('emitNewDeviceLogin: Socket.io chưa sẵn sàng hoặc lỗi emit', e);
+  }
+};

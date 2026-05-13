@@ -21,7 +21,11 @@ import {
 } from '@/shared/utils/errors.js';
 import { authRepository } from './auth.repository.js';
 import { userService } from '@/modules/user/user.service.js';
-import { emitForceLogout, emitAuthSessionsChanged } from '@/socket/sessionRevoke.notify.js';
+import {
+  emitForceLogout,
+  emitAuthSessionsChanged,
+  emitNewDeviceLogin,
+} from '@/socket/sessionRevoke.notify.js';
 import type { ForceLogoutReason } from '@/socket/sessionRevoke.notify.js';
 import type { JwtAccessPayload, JwtRefreshPayload } from '@/shared/types/auth.types.js';
 import type {
@@ -162,6 +166,7 @@ const createNewSession = async (
 
   await authRepository.createSession(session);
   emitAuthSessionsChanged(user.userId);
+  emitNewDeviceLogin(user.userId, { sessionId: session.sessionId, ipAddress: meta.ipAddress });
 };
 
 /**
