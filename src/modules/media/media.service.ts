@@ -408,6 +408,7 @@ export const mediaService = {
     mediaSize: number;
     thumbnailUrl: string | null;
     originalName: string;
+    uploaderId: string;
   } | null> => {
     const id = parseMediaIdFromAppDownloadUrl(mediaUrl) ?? parseMediaIdFromObjectUrl(mediaUrl);
     if (!id) return null;
@@ -420,6 +421,7 @@ export const mediaService = {
       mediaSize: media.size,
       thumbnailUrl: delivery.thumbnailUrl,
       originalName: media.originalName,
+      uploaderId: media.uploaderId,
     };
   },
 

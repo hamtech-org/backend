@@ -656,6 +656,9 @@ export const newsfeedService = {
     if (!media || !media.mediaType.startsWith('video/')) {
       throw new ValidationError('videoUrl không hợp lệ hoặc không phải video');
     }
+    if (media.uploaderId !== authorId) {
+      throw new ForbiddenError('Không thể dùng video của người khác');
+    }
 
     const hashtags = extractHashtagsFromText(data.caption);
     const mentions = extractMentionsFromText(data.caption);
@@ -877,6 +880,8 @@ export const newsfeedService = {
   toggleSaveReel: async (reelId: string, userId: string): Promise<{ isSaved: boolean }> => {
     const reel = await newsfeedRepository.getReelById(reelId);
     if (!reel) throw new NotFoundError('Reel');
+    const canView = await newsfeedService.getReelById(reelId, userId);
+    if (!canView) throw new ForbiddenError('Không có quyền thao tác reel này');
 
     const already = await newsfeedRepository.isReelSaved(userId, reelId);
     if (already) {
@@ -999,11 +1004,18 @@ export const newsfeedService = {
   ): Promise<IReel[]> => {
     const pageSize = Math.max(1, Math.min(limit ?? 20, 50));
     const { items } = await newsfeedRepository.listReelsByAuthor(authorId, pageSize);
+    const hasFriendsReels = items.some(
+      (r) => (r.visibility ?? 'public') === 'friends' && r.authorId !== viewerUserId,
+    );
+    const isFriendOfAuthor = hasFriendsReels
+      ? (await userRepository.getFriendIds(viewerUserId, 200)).includes(authorId)
+      : false;
+
     const visible = items.filter((r) => {
       const v = r.visibility ?? 'public';
       if (v === 'public') return true;
       if (v === 'private') return r.authorId === viewerUserId;
-      return true; // friends — coarse; deep check skipped here for simplicity
+      return r.authorId === viewerUserId || isFriendOfAuthor;
     });
     return newsfeedService.enrichReels(visible, viewerUserId);
   },
@@ -1235,6 +1247,8 @@ export const newsfeedService = {
   ): Promise<IReactionSummary> => {
     const reel = await newsfeedRepository.getReelById(reelId);
     if (!reel) throw new NotFoundError('Reel');
+    const canView = await newsfeedService.getReelById(reelId, userId);
+    if (!canView) throw new ForbiddenError('Không có quyền thao tác reel này');
 
     const existingReaction = await newsfeedRepository.getReelReaction(reelId, userId);
     const oldType = existingReaction?.type ?? null;
