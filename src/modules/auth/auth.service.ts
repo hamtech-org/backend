@@ -21,7 +21,7 @@ import {
 } from '@/shared/utils/errors.js';
 import { authRepository } from './auth.repository.js';
 import { userService } from '@/modules/user/user.service.js';
-import { emitForceLogout } from '@/socket/sessionRevoke.notify.js';
+import { emitForceLogout, emitAuthSessionsChanged } from '@/socket/sessionRevoke.notify.js';
 import type { ForceLogoutReason } from '@/socket/sessionRevoke.notify.js';
 import type { JwtAccessPayload, JwtRefreshPayload } from '@/shared/types/auth.types.js';
 import type {
@@ -161,6 +161,7 @@ const createNewSession = async (
   };
 
   await authRepository.createSession(session);
+  emitAuthSessionsChanged(user.userId);
 };
 
 /**
@@ -438,12 +439,14 @@ export const authService = {
     if (session.expiresAt < Math.floor(Date.now() / 1000)) {
       await authRepository.deleteSession(decoded.sessionId, decoded.userId);
       emitForceLogout(decoded.sessionId, { reason: 'session_expired' });
+      emitAuthSessionsChanged(decoded.userId);
       throw new UnauthorizedError('Session đã hết hạn');
     }
 
     if (!session.refreshTokenHash) {
       await authRepository.deleteSession(decoded.sessionId, decoded.userId);
       emitForceLogout(decoded.sessionId, { reason: 'session_invalid' });
+      emitAuthSessionsChanged(decoded.userId);
       throw new UnauthorizedError('Session không còn hiệu lực');
     }
 
@@ -453,6 +456,7 @@ export const authService = {
       // Có thể token đã bị đánh cắp → xóa session
       await authRepository.deleteSession(decoded.sessionId, decoded.userId);
       emitForceLogout(decoded.sessionId, { reason: 'token_reuse' });
+      emitAuthSessionsChanged(decoded.userId);
       logger.warn(`Possible token theft detected for user ${decoded.userId}, session revoked`);
       throw new UnauthorizedError('Refresh token không khớp — session đã bị thu hồi');
     }
@@ -462,6 +466,7 @@ export const authService = {
     if (!user || user.tokenVersion !== decoded.tokenVersion) {
       await authRepository.deleteSession(decoded.sessionId, decoded.userId);
       emitForceLogout(decoded.sessionId, { reason: 'token_version_revoked' });
+      emitAuthSessionsChanged(decoded.userId);
       throw new UnauthorizedError('Token đã bị thu hồi');
     }
 
@@ -497,6 +502,7 @@ export const authService = {
   logout: async (userId: string, sessionId: string): Promise<void> => {
     await authRepository.deleteSession(sessionId, userId);
     emitForceLogout(sessionId, { reason: 'logout' });
+    emitAuthSessionsChanged(userId);
     logger.info(`User logged out: ${userId}, session: ${sessionId}`);
   },
 
@@ -541,6 +547,7 @@ export const authService = {
     }
     await authRepository.deleteSession(sessionId, userId);
     emitForceLogout(sessionId, { reason: 'session_revoked' });
+    emitAuthSessionsChanged(userId);
     logger.info(`Session deleted by user: ${userId}, session: ${sessionId}`);
   },
 
@@ -550,6 +557,7 @@ export const authService = {
   logoutAll: async (userId: string): Promise<void> => {
     await emitForceLogoutForAllUserSessions(userId, 'logout_all');
     await authRepository.deleteAllUserSessions(userId);
+    emitAuthSessionsChanged(userId);
     await authRepository.incrementTokenVersion(userId);
     logger.info(`All sessions revoked for user: ${userId}`);
   },
@@ -616,6 +624,7 @@ export const authService = {
     await redis.del(`${REDIS_RESET_PREFIX}${user.userId}`);
     await emitForceLogoutForAllUserSessions(user.userId, 'password_reset');
     await authRepository.deleteAllUserSessions(user.userId);
+    emitAuthSessionsChanged(user.userId);
 
     logger.info(`Password reset successful for user: ${user.userId}`);
   },
@@ -648,6 +657,7 @@ export const authService = {
     await authRepository.updateUserPassword(userId, passwordHash, newTokenVersion);
     await emitForceLogoutForAllUserSessions(userId, 'password_changed');
     await authRepository.deleteAllUserSessions(userId);
+    emitAuthSessionsChanged(userId);
 
     logger.info(`Password changed for user: ${userId} — all sessions revoked`);
   },

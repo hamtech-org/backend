@@ -28,3 +28,14 @@ export const emitForceLogout = (sessionId: string, payload: ForceLogoutPayload):
     logger.warn('emitForceLogout: Socket.io chưa sẵn sàng hoặc lỗi emit', e);
   }
 };
+
+/** Mọi tab/thiết bị cùng user đang mở socket — refetch danh sách phiên (Profile, v.v.) */
+export const emitAuthSessionsChanged = (userId: string): void => {
+  try {
+    const io = getIO();
+    io.to(`user:${userId}`).emit('auth:sessions_changed', {});
+    logger.debug(`Emitted auth:sessions_changed to user:${userId}`);
+  } catch (e) {
+    logger.warn('emitAuthSessionsChanged: Socket.io chưa sẵn sàng hoặc lỗi emit', e);
+  }
+};
