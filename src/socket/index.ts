@@ -22,7 +22,7 @@ export const initializeSocket = (httpServer: HttpServer): void => {
   io.on('connection', (socket) => {
     logger.info(`Socket kết nối: ${socket.id} (user: ${socket.data.userId})`);
     const userId = socket.data.userId as string;
-    
+
     // Set user status to online
     userService.updateUserStatus(userId, 'online').catch((error) => {
       logger.error('Failed to update user status to online:', error);
@@ -30,16 +30,22 @@ export const initializeSocket = (httpServer: HttpServer): void => {
 
     // Join user-specific room for targeted notifications
     socket.join(`user:${userId}`);
-    
+
+    const sessionId = socket.data.sessionId as string | undefined;
+    if (sessionId) {
+      socket.join(`session:${sessionId}`);
+      logger.debug(`Socket ${socket.id} joined session:${sessionId}`);
+    }
+
     registerHandlers(io, socket);
 
     socket.on('disconnect', async (reason) => {
       logger.info(`Socket ngắt kết nối: ${socket.id} — ${reason}`);
-      
+
       // Set user status to offline
       try {
         await userService.updateUserStatus(userId, 'offline');
-        
+
         // Notify friends about status change
         try {
           const friends = await userService.getFriends(userId, 1000);
