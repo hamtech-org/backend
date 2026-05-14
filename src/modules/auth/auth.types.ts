@@ -7,7 +7,7 @@ export interface ISession extends TimestampFields {
   sessionId: string;
   userId: string;
 
-  refreshTokenHash: string;
+  refreshTokenHash?: string;
 
   deviceInfo: {
     userAgent: string;
@@ -20,6 +20,22 @@ export interface ISession extends TimestampFields {
 
   expiresAt: number;
   isRevoked: boolean;
+}
+
+/** Phiên trả về client (không có refreshTokenHash) */
+export interface IAuthSessionSummary {
+  sessionId: string;
+  deviceInfo: ISession['deviceInfo'];
+  ipAddress: string;
+  location: ISession['location'];
+  expiresAt: number;
+  isRevoked: boolean;
+  createdAt: string;
+  updatedAt: string;
+  /** Trùng session trong JWT hiện tại */
+  isCurrent: boolean;
+  /** Refresh token còn dùng được (chưa thu hồi, chưa hết hạn) */
+  isActive: boolean;
 }
 
 // ─── DTOs ───
