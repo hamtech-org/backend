@@ -5,7 +5,13 @@ import { env } from '@/config/env.js';
 import { getRedis } from '@/config/redis.js';
 import { logger } from '@/shared/utils/logger.js';
 import { getLocationFromIp } from '@/shared/utils/geolocation.js';
-import { indexFace, searchFace, deleteFace, createLivenessSession, detectFaceLiveness } from '@/shared/utils/rekognition.js';
+import {
+  indexFace,
+  searchFace,
+  deleteFace,
+  createLivenessSession,
+  detectFaceLiveness,
+} from '@/shared/utils/rekognition.js';
 import { sendVerificationEmail, sendPasswordResetEmail } from '@/shared/utils/email.js';
 import {
   UnauthorizedError,
@@ -15,6 +21,12 @@ import {
 } from '@/shared/utils/errors.js';
 import { authRepository } from './auth.repository.js';
 import { userService } from '@/modules/user/user.service.js';
+import {
+  emitForceLogout,
+  emitAuthSessionsChanged,
+  emitNewDeviceLogin,
+} from '@/socket/sessionRevoke.notify.js';
+import type { ForceLogoutReason } from '@/socket/sessionRevoke.notify.js';
 import type { JwtAccessPayload, JwtRefreshPayload } from '@/shared/types/auth.types.js';
 import type {
   IRegisterDto,
@@ -23,6 +35,7 @@ import type {
   IAuthTokens,
   IRequestMeta,
   ISession,
+  IAuthSessionSummary,
 } from './auth.types.js';
 import type { IUser } from '@/modules/user/user.types.js';
 
@@ -97,9 +110,7 @@ const generateTokens = (payload: {
 /**
  * Parse User-Agent thành device info
  */
-const parseDeviceInfo = (
-  userAgent: string,
-): { userAgent: string; os: string; browser: string } => {
+const parseDeviceInfo = (userAgent: string): { userAgent: string; os: string; browser: string } => {
   let os = 'Unknown';
   let browser = 'Unknown';
 
@@ -154,6 +165,8 @@ const createNewSession = async (
   };
 
   await authRepository.createSession(session);
+  emitAuthSessionsChanged(user.userId);
+  emitNewDeviceLogin(user.userId, { sessionId: session.sessionId, ipAddress: meta.ipAddress });
 };
 
 /**
@@ -162,6 +175,18 @@ const createNewSession = async (
 const extractSessionIdFromToken = (token: string): string => {
   const decoded = jsonwebtoken.decode(token) as JwtRefreshPayload;
   return decoded.sessionId;
+};
+
+/** Socket: báo mọi client đang join room session:* trước khi xóa hàng loạt */
+const emitForceLogoutForAllUserSessions = async (
+  userId: string,
+  reason: ForceLogoutReason,
+): Promise<void> => {
+  const sessions = await authRepository.findSessionsByUser(userId);
+  for (const row of sessions) {
+    const s = row as ISession;
+    emitForceLogout(s.sessionId, { reason });
+  }
 };
 
 // ──────────────────────────────────────────────
@@ -198,11 +223,7 @@ export const authService = {
     // 4. Tạo OTP và lưu vào Redis
     const otp = generateOTP();
     const otpHash = await bcrypt.hash(otp, SALT_ROUNDS);
-    await redis.setex(
-      `${REDIS_VERIFY_PREFIX}${data.email}`,
-      OTP_EXPIRY_SECONDS,
-      otpHash,
-    );
+    await redis.setex(`${REDIS_VERIFY_PREFIX}${data.email}`, OTP_EXPIRY_SECONDS, otpHash);
 
     // 5. Gửi OTP qua email
     try {
@@ -219,11 +240,7 @@ export const authService = {
   /**
    * Xác thực email - Step 2: Verify OTP và hoàn tất đăng ký
    */
-  verifyEmail: async (
-    email: string,
-    otp: string,
-    meta: IRequestMeta,
-  ): Promise<ILoginResponse> => {
+  verifyEmail: async (email: string, otp: string, meta: IRequestMeta): Promise<ILoginResponse> => {
     const redis = getRedis();
 
     // 1. Lấy và xác thực OTP
@@ -331,11 +348,7 @@ export const authService = {
     // 4. Tạo OTP và lưu vào Redis
     const otp = generateOTP();
     const otpHash = await bcrypt.hash(otp, SALT_ROUNDS);
-    await redis.setex(
-      `${REDIS_VERIFY_PREFIX}${data.email}`,
-      OTP_EXPIRY_SECONDS,
-      otpHash,
-    );
+    await redis.setex(`${REDIS_VERIFY_PREFIX}${data.email}`, OTP_EXPIRY_SECONDS, otpHash);
 
     // 5. Gửi OTP qua email
     try {
@@ -430,14 +443,25 @@ export const authService = {
     // 3. Kiểm tra session hết hạn
     if (session.expiresAt < Math.floor(Date.now() / 1000)) {
       await authRepository.deleteSession(decoded.sessionId, decoded.userId);
+      emitForceLogout(decoded.sessionId, { reason: 'session_expired' });
+      emitAuthSessionsChanged(decoded.userId);
       throw new UnauthorizedError('Session đã hết hạn');
+    }
+
+    if (!session.refreshTokenHash) {
+      await authRepository.deleteSession(decoded.sessionId, decoded.userId);
+      emitForceLogout(decoded.sessionId, { reason: 'session_invalid' });
+      emitAuthSessionsChanged(decoded.userId);
+      throw new UnauthorizedError('Session không còn hiệu lực');
     }
 
     // 4. Verify refresh token hash
     const isTokenValid = await bcrypt.compare(refreshToken, session.refreshTokenHash);
     if (!isTokenValid) {
-      // Có thể token đã bị đánh cắp → revoke session
+      // Có thể token đã bị đánh cắp → xóa session
       await authRepository.deleteSession(decoded.sessionId, decoded.userId);
+      emitForceLogout(decoded.sessionId, { reason: 'token_reuse' });
+      emitAuthSessionsChanged(decoded.userId);
       logger.warn(`Possible token theft detected for user ${decoded.userId}, session revoked`);
       throw new UnauthorizedError('Refresh token không khớp — session đã bị thu hồi');
     }
@@ -446,6 +470,8 @@ export const authService = {
     const user = await authRepository.findUserById(decoded.userId);
     if (!user || user.tokenVersion !== decoded.tokenVersion) {
       await authRepository.deleteSession(decoded.sessionId, decoded.userId);
+      emitForceLogout(decoded.sessionId, { reason: 'token_version_revoked' });
+      emitAuthSessionsChanged(decoded.userId);
       throw new UnauthorizedError('Token đã bị thu hồi');
     }
 
@@ -476,18 +502,67 @@ export const authService = {
   },
 
   /**
-   * Đăng xuất (xóa 1 session)
+   * Đăng xuất (xóa session hiện tại)
    */
   logout: async (userId: string, sessionId: string): Promise<void> => {
     await authRepository.deleteSession(sessionId, userId);
+    emitForceLogout(sessionId, { reason: 'logout' });
+    emitAuthSessionsChanged(userId);
     logger.info(`User logged out: ${userId}, session: ${sessionId}`);
+  },
+
+  /**
+   * Danh sách phiên đăng nhập của user (ẩn refreshTokenHash)
+   */
+  listMySessions: async (
+    userId: string,
+    currentSessionId: string,
+  ): Promise<IAuthSessionSummary[]> => {
+    const rows = await authRepository.findSessionsByUser(userId);
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    return rows
+      .map((row) => {
+        const s = row as ISession;
+        const isActive = !s.isRevoked && s.expiresAt > nowSec;
+
+        return {
+          sessionId: s.sessionId,
+          deviceInfo: s.deviceInfo,
+          ipAddress: s.ipAddress,
+          location: s.location ?? null,
+          expiresAt: s.expiresAt,
+          isRevoked: s.isRevoked,
+          createdAt: s.createdAt,
+          updatedAt: s.updatedAt,
+          isCurrent: s.sessionId === currentSessionId,
+          isActive,
+        };
+      })
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  },
+
+  /**
+   * Thu hồi một phiên khác (hoặc chính phiên hiện tại) theo sessionId
+   */
+  revokeUserSession: async (userId: string, sessionId: string): Promise<void> => {
+    const session = await authRepository.findSession(sessionId, userId);
+    if (!session) {
+      throw new NotFoundError('Session');
+    }
+    await authRepository.deleteSession(sessionId, userId);
+    emitForceLogout(sessionId, { reason: 'session_revoked' });
+    emitAuthSessionsChanged(userId);
+    logger.info(`Session deleted by user: ${userId}, session: ${sessionId}`);
   },
 
   /**
    * Đăng xuất tất cả thiết bị
    */
   logoutAll: async (userId: string): Promise<void> => {
+    await emitForceLogoutForAllUserSessions(userId, 'logout_all');
     await authRepository.deleteAllUserSessions(userId);
+    emitAuthSessionsChanged(userId);
     await authRepository.incrementTokenVersion(userId);
     logger.info(`All sessions revoked for user: ${userId}`);
   },
@@ -524,11 +599,7 @@ export const authService = {
   /**
    * Reset mật khẩu bằng OTP
    */
-  resetPassword: async (
-    email: string,
-    token: string,
-    newPassword: string,
-  ): Promise<void> => {
+  resetPassword: async (email: string, token: string, newPassword: string): Promise<void> => {
     // 1. Tìm user
     const user = await authRepository.findUserByEmail(email);
     if (!user) {
@@ -556,7 +627,9 @@ export const authService = {
 
     // 4. Xóa OTP & revoke tất cả sessions
     await redis.del(`${REDIS_RESET_PREFIX}${user.userId}`);
+    await emitForceLogoutForAllUserSessions(user.userId, 'password_reset');
     await authRepository.deleteAllUserSessions(user.userId);
+    emitAuthSessionsChanged(user.userId);
 
     logger.info(`Password reset successful for user: ${user.userId}`);
   },
@@ -587,7 +660,9 @@ export const authService = {
 
     // 4. Cập nhật + revoke tất cả sessions (buộc đăng nhập lại)
     await authRepository.updateUserPassword(userId, passwordHash, newTokenVersion);
+    await emitForceLogoutForAllUserSessions(userId, 'password_changed');
     await authRepository.deleteAllUserSessions(userId);
+    emitAuthSessionsChanged(userId);
 
     logger.info(`Password changed for user: ${userId} — all sessions revoked`);
   },
@@ -619,7 +694,6 @@ export const authService = {
     password: string,
     livenessSessionId: string,
   ): Promise<void> => {
-
     logger.debug(`0Password verified for user ${userId} before enabling face login`);
     const user = await authRepository.findUserById(userId);
     if (!user) {
@@ -636,8 +710,9 @@ export const authService = {
     // (Image này đã được AWS xác thực là liveness, không cần imageBase64 từ frontend)
     const livenessResult = await detectFaceLiveness(livenessSessionId);
 
-    logger.debug(`3Liveness result for user ${userId}: ${JSON.stringify(livenessResult.confidence)}`);
-
+    logger.debug(
+      `3Liveness result for user ${userId}: ${JSON.stringify(livenessResult.confidence)}`,
+    );
 
     if (!livenessResult.isLive) {
       throw new ValidationError(
@@ -649,7 +724,9 @@ export const authService = {
       throw new ValidationError('Không thể lấy reference image từ AWS. Vui lòng thử lại.');
     }
 
-    logger.info(`Face liveness verified for user ${userId} (confidence: ${livenessResult.confidence}%)`);
+    logger.info(
+      `Face liveness verified for user ${userId} (confidence: ${livenessResult.confidence}%)`,
+    );
 
     // 3. Nếu đã có face cũ → xóa trước
     if (user.rekognitionFaceId) {
@@ -698,7 +775,6 @@ export const authService = {
     livenessSessionId: string,
     meta: IRequestMeta,
   ): Promise<ILoginResponse> => {
-    
     // Validate email parameter
     if (!email || typeof email !== 'string') {
       logger.error('Email parameter missing or invalid:', { email, type: typeof email });

@@ -48,6 +48,8 @@ router.delete('/face-login/disable', authenticate, authController.disableFaceLog
 // ── Protected routes (cần access token) ──
 router.post('/logout', authenticate, authController.logout);
 router.post('/logout-all', authenticate, authController.logoutAll);
+router.get('/sessions', authenticate, authController.listSessions);
+router.delete('/sessions/:sessionId', authenticate, authController.revokeSession);
 router.put(
   '/change-password',
   authenticate,
