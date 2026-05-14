@@ -22,11 +22,11 @@ export const updatePostSchema = z.object({
 
 export const createReelSchema = z.object({
   videoUrl: z.string().url(),
-  thumbnailUrl: z.string().url(),
-  caption: z.string().max(2200),
-  durationMs: z.number().int().min(1000).max(600000),
-  width: z.number().int().positive(),
-  height: z.number().int().positive(),
+  thumbnailUrl: z.string().url().optional().nullable(),
+  caption: z.string().max(2200).optional().default(''),
+  durationMs: z.number().int().min(0).max(600000),
+  width: z.number().int().min(0),
+  height: z.number().int().min(0),
   aspectRatio: z.enum(['9:16', '1:1', '4:5']).optional(),
   visibility: z.enum(['public', 'friends', 'private']).optional(),
 });
