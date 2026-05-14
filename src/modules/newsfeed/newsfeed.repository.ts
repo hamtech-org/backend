@@ -5,6 +5,7 @@ import {
   UpdateCommand,
   DeleteCommand,
   BatchWriteCommand,
+  BatchGetCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { dynamoClient } from '@/config/database.js';
 import { env } from '@/config/env.js';
@@ -753,6 +754,33 @@ export const newsfeedRepository = {
     const item = result.Item as { type?: string } | undefined;
     if (!item?.type) return null;
     return { type: item.type as ReactionType };
+  },
+
+  batchGetReelReactions: async (
+    reelIds: string[],
+    userId: string,
+  ): Promise<Map<string, ReactionType>> => {
+    if (reelIds.length === 0) return new Map();
+    const result = await dynamoClient.send(
+      new BatchGetCommand({
+        RequestItems: {
+          [REACTIONS_TABLE]: {
+            Keys: reelIds.map((id) => ({ PK: `REEL#${id}`, SK: `REACT#${userId}` })),
+          },
+        },
+      }),
+    );
+    const map = new Map<string, ReactionType>();
+    const items = (result.Responses?.[REACTIONS_TABLE] ?? []) as {
+      reelId?: string;
+      type?: string;
+    }[];
+    for (const item of items) {
+      if (item.reelId && item.type) {
+        map.set(item.reelId, item.type as ReactionType);
+      }
+    }
+    return map;
   },
 
   upsertReelReaction: async (reelId: string, userId: string, type: ReactionType): Promise<void> => {

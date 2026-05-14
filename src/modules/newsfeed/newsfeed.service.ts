@@ -626,12 +626,14 @@ export const newsfeedService = {
 
   attachReelCurrentUserReaction: async (reels: IReel[], viewerUserId: string): Promise<IReel[]> => {
     if (reels.length === 0) return reels;
-    return Promise.all(
-      reels.map(async (reel) => {
-        const reaction = await newsfeedRepository.getReelReaction(reel.reelId, viewerUserId);
-        return { ...reel, currentUserReaction: (reaction?.type as ReactionType) ?? null };
-      }),
+    const reactionMap = await newsfeedRepository.batchGetReelReactions(
+      reels.map((r) => r.reelId),
+      viewerUserId,
     );
+    return reels.map((reel) => ({
+      ...reel,
+      currentUserReaction: (reactionMap.get(reel.reelId) as ReactionType) ?? null,
+    }));
   },
 
   attachReelSavedStatus: async (reels: IReel[], viewerUserId: string): Promise<IReel[]> => {
