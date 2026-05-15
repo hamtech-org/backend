@@ -133,6 +133,7 @@ export const conversationRepository = {
     const item: Record<string, unknown> = {
       PK: `CONV#${member.conversationId}`,
       SK: `MEMBER#${member.userId}`,
+      userId: member.userId,
       ...rest,
     };
     if (lastReadAt != null) item['lastReadAt'] = lastReadAt;
@@ -308,12 +309,94 @@ export const conversationRepository = {
   },
 
   removeMember: async (conversationId: string, userId: string): Promise<void> => {
-    await dynamoClient.send(
-      new DeleteCommand({
-        TableName: CONVERSATIONS_TABLE,
-        Key: { PK: `CONV#${conversationId}`, SK: `MEMBER#${userId}` },
-      }),
-    );
+    await conversationRepository.removeAllMemberRecordsForUser(conversationId, userId);
+  },
+
+  /**
+   * Xóa mọi MEMBER# trùng user (SK hoặc field userId) — tránh phải kick 2 lần khi dữ liệu lệch.
+   */
+  removeAllMemberRecordsForUser: async (
+    conversationId: string,
+    userId: string,
+  ): Promise<number> => {
+    const trimmed = userId.trim();
+    if (!trimmed) return 0;
+
+    const pk = `CONV#${conversationId}`;
+    const deletedKeys = new Set<string>();
+
+    const deleteMemberKey = async (itemPk: string, itemSk: string): Promise<void> => {
+      const sig = `${itemPk}\0${itemSk}`;
+      if (deletedKeys.has(sig)) return;
+      await dynamoClient.send(
+        new DeleteCommand({
+          TableName: CONVERSATIONS_TABLE,
+          Key: { PK: itemPk, SK: itemSk },
+        }),
+      );
+      deletedKeys.add(sig);
+    };
+
+    try {
+      await deleteMemberKey(pk, `MEMBER#${trimmed}`);
+    } catch {
+      /* ignore */
+    }
+
+    let convStartKey: Record<string, unknown> | undefined;
+    do {
+      const result = await dynamoClient.send(
+        new QueryCommand({
+          TableName: CONVERSATIONS_TABLE,
+          KeyConditionExpression: 'PK = :pk AND begins_with(SK, :memberPrefix)',
+          ExpressionAttributeValues: {
+            ':pk': pk,
+            ':memberPrefix': 'MEMBER#',
+          },
+          ExclusiveStartKey: convStartKey,
+        }),
+      );
+
+      for (const raw of result.Items ?? []) {
+        const sk = String((raw as { SK?: string }).SK ?? '');
+        if (!sk.startsWith('MEMBER#')) continue;
+        const skUserId = sk.slice('MEMBER#'.length).trim();
+        const itemUserId = String((raw as IConversationMember).userId ?? '').trim();
+        if (skUserId !== trimmed && itemUserId !== trimmed) continue;
+        await deleteMemberKey(pk, sk);
+      }
+
+      convStartKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (convStartKey);
+
+    let gsiStartKey: Record<string, unknown> | undefined;
+    do {
+      const gsi = await dynamoClient.send(
+        new QueryCommand({
+          TableName: CONVERSATIONS_TABLE,
+          IndexName: 'GSI-2',
+          KeyConditionExpression: 'userId = :uid',
+          FilterExpression: 'PK = :pk AND begins_with(SK, :memberPrefix)',
+          ExpressionAttributeValues: {
+            ':uid': trimmed,
+            ':pk': pk,
+            ':memberPrefix': 'MEMBER#',
+          },
+          ExclusiveStartKey: gsiStartKey,
+        }),
+      );
+
+      for (const raw of gsi.Items ?? []) {
+        const itemPk = String((raw as { PK?: string }).PK ?? '');
+        const sk = String((raw as { SK?: string }).SK ?? '');
+        if (itemPk !== pk || !sk.startsWith('MEMBER#')) continue;
+        await deleteMemberKey(itemPk, sk);
+      }
+
+      gsiStartKey = gsi.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (gsiStartKey);
+
+    return deletedKeys.size;
   },
 
   updateMemberRole: async (conversationId: string, userId: string, role: string): Promise<void> => {
@@ -531,6 +614,59 @@ export const conversationRepository = {
       }),
     );
     return (result.Items as IMessage[]) ?? [];
+  },
+
+  /**
+   * Tin gần đây (mới → cũ), phân trang Dynamo.
+   * `minCreatedAtMs`: bỏ qua tin cũ hơn mốc (dùng khi tắt đọc tin trước khi vào nhóm).
+   */
+  listRecentMessages: async (
+    conversationId: string,
+    opts: { limit: number; minCreatedAtMs?: number | null },
+  ): Promise<IMessage[]> => {
+    const limit = Math.min(Math.max(1, opts.limit), 500);
+    const minMs = opts.minCreatedAtMs;
+    const hasCutoff = minMs != null && Number.isFinite(minMs);
+    const collected: IMessage[] = [];
+    let exclusiveStartKey: Record<string, unknown> | undefined;
+    const PAGE = 64;
+    let rounds = 0;
+
+    while (collected.length < limit && rounds < 24) {
+      rounds += 1;
+      const result = await dynamoClient.send(
+        new QueryCommand({
+          TableName: MESSAGES_TABLE,
+          KeyConditionExpression: 'PK = :pk',
+          ExpressionAttributeValues: { ':pk': `CONV#${conversationId}` },
+          Limit: PAGE,
+          ScanIndexForward: false,
+          ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
+        }),
+      );
+
+      const items = (result.Items as IMessage[]) ?? [];
+      if (items.length === 0) break;
+
+      let reachedHistoryCutoff = false;
+      for (const m of items) {
+        if (hasCutoff) {
+          const t = Date.parse(m.createdAt);
+          if (Number.isFinite(t) && t < minMs!) {
+            reachedHistoryCutoff = true;
+            continue;
+          }
+        }
+        collected.push(m);
+        if (collected.length >= limit) break;
+      }
+
+      exclusiveStartKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+      if (!exclusiveStartKey) break;
+      if (reachedHistoryCutoff) break;
+    }
+
+    return collected;
   },
 
   /**
