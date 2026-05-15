@@ -11,6 +11,7 @@ import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { logger } from '@/shared/utils/logger.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { mediaService } from '@/modules/media/media.service.js';
+import { groupService } from '../group/group.service.js';
 import {
   isMessageHiddenFromViewer,
   syncConversationLastMessageMeta,
@@ -378,6 +379,9 @@ export const messageService = {
   ): Promise<IMessage> => {
     const conversation = await conversationRepository.getConversationById(conversationId);
     if (!conversation) throw new NotFoundError('Hội thoại');
+    if (conversation.type === 'group') {
+      await groupService.assertUserMaySendMessage(senderId, conversationId);
+    }
 
     const now = new Date().toISOString();
     const messageId = uuidv4();

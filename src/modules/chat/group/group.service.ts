@@ -42,6 +42,24 @@ export function mergeGroupSettings(raw: Partial<IGroupSettings> | undefined | nu
   };
 }
 
+/** Trạng thái yêu cầu khi mời / xin vào nhóm. */
+export async function resolveGroupRequestStatus(
+  conversationId: string,
+  userId: string,
+  groupSettings?: Partial<IGroupSettings> | null,
+): Promise<'pending' | 'invited'> {
+  const wasKicked = await memberRequestRepository.isKickedMember(conversationId, userId);
+  if (wasKicked) return 'pending';
+  let settings = groupSettings;
+  if (settings === undefined) {
+    const c = await conversationRepository.getConversationById(conversationId);
+    settings = c?.groupSettings;
+  }
+  const merged = mergeGroupSettings(settings);
+  if (merged.adminSettings.approvalRequired) return 'pending';
+  return 'invited';
+}
+
 export type UpdateGroupSettingsPayload = {
   memberPermissions?: Partial<IGroupSettings['memberPermissions']>;
   adminSettings?: Partial<IGroupSettings['adminSettings']>;
@@ -299,14 +317,13 @@ export const groupService = {
     }
     if (memberIdsToInvite.length === 0) return;
 
+    const convMeta = await conversationRepository.getConversationById(conversationId);
+    const mergedSettings = mergeGroupSettings(convMeta?.groupSettings);
+
     await Promise.all(
       memberIdsToInvite.map(async (userId) => {
-        const wasKicked = await memberRequestRepository.isKickedMember(conversationId, userId);
-        await memberRequestRepository.createGroupRequest(
-          conversationId,
-          userId,
-          wasKicked ? 'pending' : 'invited',
-        );
+        const status = await resolveGroupRequestStatus(conversationId, userId, mergedSettings);
+        await memberRequestRepository.createGroupRequest(conversationId, userId, status);
       }),
     );
 
@@ -479,6 +496,18 @@ export const groupService = {
       if (!s.memberPermissions.pinMessages) {
         throw new ForbiddenError('Nhóm không cho phép thành viên ghim tin nhắn');
       }
+    }
+  },
+
+  assertUserMaySendMessage: async (userId: string, conversationId: string): Promise<void> => {
+    const c = await conversationRepository.getConversationById(conversationId);
+    if (!c || c.type !== 'group') return;
+    const member = await conversationRepository.getMember(conversationId, userId);
+    if (!member) throw new ForbiddenError('Bạn không phải thành viên nhóm');
+    if (member.role === 'owner' || member.role === 'admin') return;
+    const s = mergeGroupSettings(c.groupSettings);
+    if (!s.memberPermissions.sendMessages) {
+      throw new ForbiddenError('Nhóm không cho phép thành viên gửi tin nhắn');
     }
   },
 };
