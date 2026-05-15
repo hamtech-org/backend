@@ -35,7 +35,7 @@ export const memberRequestController = {
 
   approveRequest: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { memberCount } = await memberRequestService.approveRequest(
+      const { memberCount, joinedAt } = await memberRequestService.approveRequest(
         req.params.groupId,
         req.user!.userId,
         req.params.userId,
@@ -49,13 +49,20 @@ export const memberRequestController = {
           conversationId: gid,
           userId: uid,
           memberCount,
+          joinedAt,
         };
         io.to(`conv:${gid}`).emit('group:member_joined', joinedPayload);
         const members = await groupService.getGroupMembers(gid);
         for (const m of members) {
           io.to(`user:${m.userId}`).emit('group:member_joined', joinedPayload);
         }
-        io.to(`user:${uid}`).emit('group:request_approved', { groupId: gid, memberCount });
+        io.to(`user:${uid}`).emit('group:request_approved', {
+          groupId: gid,
+          conversationId: gid,
+          userId: uid,
+          memberCount,
+          joinedAt,
+        });
       } catch { /* ignore */ }
       sendSuccess(res, null, 'Đã duyệt thành viên');
     } catch (error) {
