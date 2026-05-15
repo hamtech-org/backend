@@ -2,6 +2,7 @@ import { conversationRepository } from '../conversation/conversation.repository.
 import { pollService } from '../poll/poll.service.js';
 import { taskService } from '../task/task.service.js';
 import { ForbiddenError } from '@/shared/utils/errors.js';
+import { resolveMessageHistoryMinCreatedAtMs } from '../shared/chat.helpers.js';
 
 function stripDynamoKeys(row: Record<string, unknown>): Record<string, unknown> {
   const { PK: _pk, SK: _sk, ...rest } = row;
@@ -18,8 +19,13 @@ export const bulletinService = {
    * Đã gộp enrich creatorDisplayName (từ poll/task service) và bỏ PK/SK Dynamo.
    */
   getBulletinFeed: async (requesterId: string, conversationId: string): Promise<{ items: BulletinFeedItem[] }> => {
-    const member = await conversationRepository.getMember(conversationId, requesterId);
+    const [member, conv] = await Promise.all([
+      conversationRepository.getMember(conversationId, requesterId),
+      conversationRepository.getConversationById(conversationId),
+    ]);
     if (!member) throw new ForbiddenError('Bạn không thuộc nhóm');
+
+    const minCreatedAtMs = resolveMessageHistoryMinCreatedAtMs(conv, member);
 
     const [polls, tasks] = await Promise.all([
       pollService.getPolls(conversationId),
@@ -48,6 +54,14 @@ export const bulletinService = {
       if (tb !== ta) return tb - ta;
       return `${a.kind}-${rowId(a)}`.localeCompare(`${b.kind}-${rowId(b)}`);
     });
+
+    if (minCreatedAtMs != null) {
+      const visible = items.filter((it) => {
+        const t = Date.parse(it.createdAt);
+        return Number.isFinite(t) && t >= minCreatedAtMs;
+      });
+      return { items: visible };
+    }
 
     return { items };
   },

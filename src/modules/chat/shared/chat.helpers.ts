@@ -1,4 +1,10 @@
-import type { IMessage, ILastMessage, IReplyToDetails, IConversationMember } from './chat.types.js';
+import type {
+  IMessage,
+  ILastMessage,
+  IReplyToDetails,
+  IConversationMember,
+  IConversation,
+} from './chat.types.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 
 /**
@@ -22,6 +28,55 @@ export function isConversationNotificationPushMuted(
 export function isMessageHiddenFromViewer(m: IMessage, hiddenMessageIds: Set<string>): boolean {
   if (m.isDeleted) return true;
   return hiddenMessageIds.has(m.messageId);
+}
+
+/**
+ * Khi trưởng nhóm tắt "Cho phép thành viên mới đọc tin nhắn gần nhất",
+ * thành viên thường chỉ được xem tin từ lúc vào nhóm (`joinedAt`) trở đi.
+ * Trưởng nhóm / phó nhóm luôn xem được toàn bộ lịch sử.
+ */
+export function resolveMessageHistoryMinCreatedAtMs(
+  conversation: Pick<IConversation, 'type' | 'groupSettings' | 'creatorId'> | null | undefined,
+  member: Pick<IConversationMember, 'joinedAt' | 'role' | 'userId'>,
+): number | null {
+  if (!conversation || conversation.type !== 'group') return null;
+
+  const role = String(member.role ?? '')
+    .trim()
+    .toLowerCase();
+  if (role === 'owner' || role === 'admin') return null;
+  if (conversation.creatorId && String(conversation.creatorId).trim() === member.userId) {
+    return null;
+  }
+
+  const allowPreJoin =
+    conversation.groupSettings?.adminSettings?.newMembersReadRecent !== false;
+  if (allowPreJoin) return null;
+
+  const joinedMs = Date.parse(member.joinedAt);
+  if (!Number.isFinite(joinedMs)) return null;
+  return joinedMs;
+}
+
+export function messageCreatedAtMs(m: Pick<IMessage, 'createdAt'>): number {
+  const t = Date.parse(m.createdAt);
+  return Number.isFinite(t) ? t : 0;
+}
+
+export function isMessageAtOrAfterJoinCutoff(
+  m: Pick<IMessage, 'createdAt'>,
+  minCreatedAtMs: number | null,
+): boolean {
+  if (minCreatedAtMs == null) return true;
+  return messageCreatedAtMs(m) >= minCreatedAtMs;
+}
+
+export function filterMessagesByJoinHistoryCutoff<T extends Pick<IMessage, 'createdAt'>>(
+  messages: T[],
+  minCreatedAtMs: number | null,
+): T[] {
+  if (minCreatedAtMs == null) return messages;
+  return messages.filter((m) => isMessageAtOrAfterJoinCutoff(m, minCreatedAtMs));
 }
 
 export async function messageToLastMessageSnapshot(m: IMessage): Promise<ILastMessage> {
@@ -149,4 +204,18 @@ export async function attachReplyToDetails(
       replyToDetails,
     };
   });
+}
+
+/** Nhãn hiển thị an toàn cho system message — không trả về "undefined"/rỗng. */
+export function resolveChatMemberLabel(
+  userId: string,
+  user?: { displayName?: string | null; email?: string | null; name?: string | null } | null,
+): string {
+  const candidates = [user?.displayName, user?.name, user?.email];
+  for (const raw of candidates) {
+    const label = String(raw ?? '').trim();
+    if (!label || label === 'undefined' || label === 'null') continue;
+    return label;
+  }
+  return 'Thành viên';
 }

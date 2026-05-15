@@ -2,7 +2,10 @@ import { Request, Response, NextFunction } from 'express';
 import { groupService } from './group.service.js';
 import { sendSuccess } from '@/shared/utils/response.js';
 import { getIO } from '@/socket/index.js';
-import { emitToConversationAndMembers } from '../shared/chat.broadcast.js';
+import {
+  emitToConversationAndMembers,
+  forceUserLeaveConversationRoom,
+} from '../shared/chat.broadcast.js';
 
 export const groupController = {
   getGroupMembers: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -126,12 +129,14 @@ export const groupController = {
         const gid = req.params.groupId;
         const uid = req.params.userId;
         const payload = { groupId: gid, conversationId: gid, userId: uid, memberCount };
+        await forceUserLeaveConversationRoom(gid, uid);
         io.to(`conv:${gid}`).emit('group:member_removed', payload);
         const members = await groupService.getGroupMembers(gid);
         for (const m of members) {
           io.to(`user:${m.userId}`).emit('group:member_removed', payload);
         }
         io.to(`user:${uid}`).emit('group:member_removed', payload);
+        io.to(`user:${uid}`).emit('group:membership_revoked', payload);
       } catch { /* ignore */ }
       sendSuccess(res, null, 'Xóa thành viên thành công');
     } catch (error) {

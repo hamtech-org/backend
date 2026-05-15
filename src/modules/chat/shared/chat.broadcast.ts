@@ -73,3 +73,21 @@ export async function emitToConversationAndMembers(
 ): Promise<void> {
   await emitEventsToConversationAndMembers(conversationId, [{ event, payload }]);
 }
+
+/** Kick / rời nhóm: buộc socket rời room hội thoại để không còn nhận tin realtime. */
+export async function forceUserLeaveConversationRoom(
+  conversationId: string,
+  userId: string,
+): Promise<void> {
+  let io: ReturnType<typeof getIO>;
+  try {
+    io = getIO();
+  } catch {
+    return;
+  }
+  const room = `conv:${conversationId}`;
+  const sockets = await io.in(`user:${userId}`).fetchSockets();
+  for (const s of sockets) {
+    void s.leave(room);
+  }
+}
