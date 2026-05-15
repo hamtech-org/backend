@@ -133,8 +133,8 @@ export const conversationRepository = {
     const item: Record<string, unknown> = {
       PK: `CONV#${member.conversationId}`,
       SK: `MEMBER#${member.userId}`,
-      userId: member.userId,
       ...rest,
+      userId: member.userId,
     };
     if (lastReadAt != null) item['lastReadAt'] = lastReadAt;
     if (nickname != null) item['nickname'] = nickname;
