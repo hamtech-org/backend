@@ -1,4 +1,5 @@
 import { conversationRepository } from '../conversation/conversation.repository.js';
+import { memberRequestRepository } from '../member-request/member-request.repository.js';
 import { randomBytes } from 'node:crypto';
 import type {
   IConversationMember,
@@ -9,6 +10,7 @@ import type {
 import { NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { createAndBroadcastSystemMessage } from '../shared/system-message.factory.js';
+import { resolveChatMemberLabel } from '../shared/chat.helpers.js';
 import type { MemberRole } from '@/shared/types/chat.types.js';
 import { MIN_GROUP_MEMBERS } from './group.constants.js';
 
@@ -51,7 +53,9 @@ export const groupService = {
    * Lấy danh sách thành viên nhóm (group)
    */
   getGroupMembers: async (groupId: string): Promise<IConversationMember[]> => {
-    const members = await conversationRepository.getConversationMembers(groupId);
+    const members = (
+      await conversationRepository.getConversationMembers(groupId)
+    ).filter((m) => Boolean(String(m.userId ?? '').trim()));
     if (members.length === 0) return members;
 
     // Enrich để FE hiển thị avatar/name đồng bộ (không phá compatibility: vẫn giữ fields gốc).
@@ -282,21 +286,28 @@ export const groupService = {
       throw new ForbiddenError('Bạn không có quyền thêm thành viên');
     }
 
-    const now = new Date().toISOString();
-    const { memberRequestRepository } = await import('../member-request/member-request.repository.js');
-
     const memberIdsToInvite: string[] = [];
     for (const userId of data.memberIds) {
-      const alreadyMember = await conversationRepository.getMember(conversationId, userId);
-      if (alreadyMember) continue;
+      const existingMember = await conversationRepository.getMember(conversationId, userId);
+      if (existingMember) {
+        // MEMBER# còn sót sau kick — xóa rồi mời lại qua chờ duyệt.
+        await conversationRepository.removeMember(conversationId, userId);
+        memberIdsToInvite.push(userId);
+        continue;
+      }
       memberIdsToInvite.push(userId);
     }
     if (memberIdsToInvite.length === 0) return;
 
     await Promise.all(
-      memberIdsToInvite.map((userId) =>
-        memberRequestRepository.createGroupRequest(conversationId, userId, 'invited'),
-      ),
+      memberIdsToInvite.map(async (userId) => {
+        const wasKicked = await memberRequestRepository.isKickedMember(conversationId, userId);
+        await memberRequestRepository.createGroupRequest(
+          conversationId,
+          userId,
+          wasKicked ? 'pending' : 'invited',
+        );
+      }),
     );
 
     // System message: ai đã mời ai vào nhóm
@@ -311,9 +322,9 @@ export const groupService = {
       try {
         const invitedProfiles = await userRepository.findByIds(memberIdsToInvite);
         const nameById = new Map(
-          invitedProfiles.map((u) => [u.userId, u.displayName || u.email || u.userId]),
+          invitedProfiles.map((u) => [u.userId, resolveChatMemberLabel(u.userId, u)]),
         );
-        invitedNames = memberIdsToInvite.map((id) => nameById.get(id) ?? id);
+        invitedNames = memberIdsToInvite.map((id) => nameById.get(id) ?? resolveChatMemberLabel(id, null));
       } catch {
         invitedNames = memberIdsToInvite;
       }
@@ -342,10 +353,6 @@ export const groupService = {
       throw new ForbiddenError('Chỉ Admin/Owner mới có quyền xóa thành viên');
     }
 
-    const target = await conversationRepository.getMember(conversationId, targetUserId);
-    if (!target) throw new NotFoundError('Thành viên');
-    if (target.role === 'owner') throw new ForbiddenError('Không thể xóa chủ nhóm');
-
     const allMembers = await conversationRepository.getConversationMembers(conversationId);
     if (allMembers.length <= MIN_GROUP_MEMBERS) {
       throw new ValidationError(
@@ -353,23 +360,48 @@ export const groupService = {
       );
     }
 
-    await conversationRepository.removeMember(conversationId, targetUserId);
+    const resolved = await conversationRepository.resolveMemberForRemoval(
+      conversationId,
+      targetUserId,
+    );
+    if (!resolved) {
+      await memberRequestRepository.removeGroupRequest(conversationId, targetUserId.trim());
+      const membersAfter = await conversationRepository.getConversationMembers(conversationId);
+      const memberCount = membersAfter.length;
+      await conversationRepository.updateConversation(conversationId, { memberCount });
+      return { memberCount };
+    }
 
-    const memberCount = Math.max(0, allMembers.length - 1);
+    const { member: target, deleteUserId } = resolved;
+    if (target.role === 'owner') throw new ForbiddenError('Không thể xóa chủ nhóm');
+
+    await conversationRepository.removeMember(conversationId, deleteUserId);
+    await memberRequestRepository.removeGroupRequest(conversationId, deleteUserId);
+    await memberRequestRepository.recordKickedMember(conversationId, deleteUserId);
+
+    const membersAfter = await conversationRepository.getConversationMembers(conversationId);
+    const memberCount = membersAfter.length;
     await conversationRepository.updateConversation(conversationId, {
       memberCount,
     });
 
     // System message: ai đã mời ai ra khỏi nhóm
     try {
+      const targetWithName = target as IConversationMember & { name?: string | null };
       let requesterName = 'Ai đó';
-      let targetName = targetUserId;
+      let targetName = resolveChatMemberLabel(deleteUserId, targetWithName);
       try {
-        const users = await userRepository.findByIds([requesterId, targetUserId]);
+        const users = await userRepository.findByIds([requesterId, deleteUserId]);
         const byId = new Map(users.map((u) => [u.userId, u]));
-        requesterName = byId.get(requesterId)?.displayName ?? requesterName;
-        targetName = byId.get(targetUserId)?.displayName ?? targetName;
-      } catch {}
+        requesterName = resolveChatMemberLabel(requesterId, byId.get(requesterId));
+        targetName = resolveChatMemberLabel(
+          deleteUserId,
+          byId.get(deleteUserId) ?? targetWithName,
+        );
+      } catch {
+        requesterName = resolveChatMemberLabel(requesterId, null);
+        targetName = resolveChatMemberLabel(deleteUserId, targetWithName);
+      }
 
       await createAndBroadcastSystemMessage(
         { conversationId, senderId: requesterId, content: `${requesterName} đã mời ${targetName} ra khỏi nhóm` },
