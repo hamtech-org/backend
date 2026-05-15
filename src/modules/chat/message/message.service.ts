@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { conversationRepository } from '../conversation/conversation.repository.js';
 import { messageUserHideRepository } from './message-user-hide.repository.js';
-import type { IConversation, IMessage, ISendMessageDto } from '../shared/chat.types.js';
+import type { IConversation, IConversationMember, IMessage, ISendMessageDto } from '../shared/chat.types.js';
 import type { MessageStatus } from '@/shared/types/chat.types.js';
 import { NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
 import { MAX_PINNED_MESSAGES_PER_CONVERSATION } from '../shared/chat.constants.js';
@@ -11,12 +11,15 @@ import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { logger } from '@/shared/utils/logger.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { mediaService } from '@/modules/media/media.service.js';
+import { groupService } from '../group/group.service.js';
 import {
   isMessageHiddenFromViewer,
   syncConversationLastMessageMeta,
   attachSenderDisplayNames,
   attachReplyToDetails,
   isConversationNotificationPushMuted,
+  resolveMessageHistoryMinCreatedAtMs,
+  filterMessagesByJoinHistoryCutoff,
 } from '../shared/chat.helpers.js';
 
 async function emitMessageSearchIndexEvent(payload: {
@@ -166,43 +169,87 @@ async function refreshReplyMediaDelivery(
   };
 }
 
+async function getViewerMessageAccess(
+  conversationId: string,
+  viewerUserId: string,
+): Promise<{
+  member: IConversationMember;
+  conv: IConversation | null;
+  minCreatedAtMs: number | null;
+  hidden: Set<string>;
+}> {
+  const [member, conv] = await Promise.all([
+    conversationRepository.getMember(conversationId, viewerUserId),
+    conversationRepository.getConversationById(conversationId),
+  ]);
+  if (!member) throw new ForbiddenError('Bạn không phải thành viên của hội thoại này');
+
+  const minCreatedAtMs = resolveMessageHistoryMinCreatedAtMs(conv, member);
+  const hidden = await messageUserHideRepository.queryHiddenMessageIdsForConversation(
+    viewerUserId,
+    conversationId,
+  );
+  return { member, conv, minCreatedAtMs, hidden };
+}
+
+async function enrichMessagesForViewer(
+  conversationId: string,
+  viewerUserId: string,
+  messages: IMessage[],
+  conv: IConversation | null,
+  hidden: Set<string>,
+  minCreatedAtMs: number | null,
+): Promise<IMessage[]> {
+  const getMessagesForReply = (convId: string, limit: number) =>
+    conversationRepository.listRecentMessages(convId, { limit, minCreatedAtMs });
+
+  const withNames = await attachSenderDisplayNames(messages);
+  const withReply = await attachReplyToDetails(
+    conversationId,
+    withNames,
+    hidden,
+    getMessagesForReply,
+  );
+  const withFreshMedia = await refreshMediaDeliveryForMessages(withReply);
+  const withFreshReplyMedia = await Promise.all(
+    withFreshMedia.map(async (m) => ({
+      ...m,
+      replyToDetails: await refreshReplyMediaDelivery(m.replyToDetails ?? null),
+    })),
+  );
+  const withReadBy = await attachReadReceipts(conversationId, viewerUserId, withFreshReplyMedia);
+  return withReadBy.map((m) => attachPublicMessageStatus(conv, viewerUserId, m));
+}
+
 export const messageService = {
   getMessages: async (
     conversationId: string,
     viewerUserId: string,
     limit?: number,
   ): Promise<IMessage[]> => {
-    const member = await conversationRepository.getMember(conversationId, viewerUserId);
-    if (!member) throw new ForbiddenError('Bạn không phải thành viên của hội thoại này');
+    const { conv, minCreatedAtMs, hidden } = await getViewerMessageAccess(
+      conversationId,
+      viewerUserId,
+    );
 
     const effectiveLimit = limit ?? 20;
-    // Lấy gấp đôi rồi lọc ẩn-theo-user để giảm lỗ hổng phân trang (Dynamo Limit áp trước khi lọc).
-    const fetchLimit = Math.min(Math.max(effectiveLimit * 2, effectiveLimit), 100);
-    const raw = await conversationRepository.getMessages(conversationId, fetchLimit);
-    const hidden = await messageUserHideRepository.queryHiddenMessageIdsForConversation(
-      viewerUserId,
-      conversationId,
-    );
+    const fetchLimit = Math.min(Math.max(effectiveLimit * 3, effectiveLimit), 400);
+    const raw = await conversationRepository.listRecentMessages(conversationId, {
+      limit: fetchLimit,
+      minCreatedAtMs,
+    });
     const filtered = raw
       .filter((m) => !isMessageHiddenFromViewer(m, hidden))
       .slice(0, effectiveLimit);
-    const conv = await conversationRepository.getConversationById(conversationId);
-    const withNames = await attachSenderDisplayNames(filtered);
-    const withReply = await attachReplyToDetails(
+
+    return enrichMessagesForViewer(
       conversationId,
-      withNames,
+      viewerUserId,
+      filtered,
+      conv,
       hidden,
-      conversationRepository.getMessages,
+      minCreatedAtMs,
     );
-    const withFreshMedia = await refreshMediaDeliveryForMessages(withReply);
-    const withFreshReplyMedia = await Promise.all(
-      withFreshMedia.map(async (m) => ({
-        ...m,
-        replyToDetails: await refreshReplyMediaDelivery(m.replyToDetails ?? null),
-      })),
-    );
-    const withReadBy = await attachReadReceipts(conversationId, viewerUserId, withFreshReplyMedia);
-    return withReadBy.map((m) => attachPublicMessageStatus(conv, viewerUserId, m));
   },
 
   /**
@@ -214,15 +261,24 @@ export const messageService = {
     viewerUserId: string,
     opts: { senderId?: string; from?: string; to?: string; limit?: number },
   ): Promise<IMessage[]> => {
-    const member = await conversationRepository.getMember(conversationId, viewerUserId);
-    if (!member) throw new ForbiddenError('Bạn không phải thành viên của hội thoại này');
+    const { conv, minCreatedAtMs, hidden } = await getViewerMessageAccess(
+      conversationId,
+      viewerUserId,
+    );
 
     const senderId = opts.senderId?.trim() || undefined;
-    const from = opts.from?.trim() || undefined;
+    let from = opts.from?.trim() || undefined;
     const to = opts.to?.trim() || undefined;
 
     if (!senderId && (!from || !to)) {
       throw new ValidationError('Cần senderId hoặc cả hai tham số from và to (ISO 8601)');
+    }
+
+    if (minCreatedAtMs != null && from && to) {
+      const fromMs = Date.parse(from);
+      if (!Number.isFinite(fromMs) || fromMs < minCreatedAtMs) {
+        from = new Date(minCreatedAtMs).toISOString();
+      }
     }
 
     const maxItems = Math.min(Math.max(1, opts.limit ?? 200), 500);
@@ -234,29 +290,19 @@ export const messageService = {
       maxItems,
     });
 
-    const hidden = await messageUserHideRepository.queryHiddenMessageIdsForConversation(
-      viewerUserId,
-      conversationId,
+    const filtered = filterMessagesByJoinHistoryCutoff(
+      raw.filter((m) => !isMessageHiddenFromViewer(m, hidden)),
+      minCreatedAtMs,
     );
-    const filtered = raw.filter((m) => !isMessageHiddenFromViewer(m, hidden));
 
-    const conv = await conversationRepository.getConversationById(conversationId);
-    const withNames = await attachSenderDisplayNames(filtered);
-    const withReply = await attachReplyToDetails(
+    return enrichMessagesForViewer(
       conversationId,
-      withNames,
+      viewerUserId,
+      filtered,
+      conv,
       hidden,
-      conversationRepository.getMessages,
+      minCreatedAtMs,
     );
-    const withFreshMedia = await refreshMediaDeliveryForMessages(withReply);
-    const withFreshReplyMedia = await Promise.all(
-      withFreshMedia.map(async (m) => ({
-        ...m,
-        replyToDetails: await refreshReplyMediaDelivery(m.replyToDetails ?? null),
-      })),
-    );
-    const withReadBy = await attachReadReceipts(conversationId, viewerUserId, withFreshReplyMedia);
-    return withReadBy.map((m) => attachPublicMessageStatus(conv, viewerUserId, m));
   },
 
   /**
@@ -281,16 +327,14 @@ export const messageService = {
       createdAt: string;
     }>
   > => {
-    const member = await conversationRepository.getMember(conversationId, viewerUserId);
-    if (!member) throw new ForbiddenError('Bạn không phải thành viên của hội thoại này');
+    const { minCreatedAtMs, hidden } = await getViewerMessageAccess(conversationId, viewerUserId);
 
     const maxOut = Math.min(Math.max(1, limit ?? 80), 200);
     const fetchLimit = Math.min(400, Math.max(maxOut * 4, 120));
-    const raw = await conversationRepository.getMessages(conversationId, fetchLimit);
-    const hidden = await messageUserHideRepository.queryHiddenMessageIdsForConversation(
-      viewerUserId,
-      conversationId,
-    );
+    const raw = await conversationRepository.listRecentMessages(conversationId, {
+      limit: fetchLimit,
+      minCreatedAtMs,
+    });
     const visible = raw.filter((m) => !isMessageHiddenFromViewer(m, hidden));
 
     const isRecalledOrDeleted = (m: IMessage) => m.isRecalled || m.isDeleted;
@@ -378,6 +422,9 @@ export const messageService = {
   ): Promise<IMessage> => {
     const conversation = await conversationRepository.getConversationById(conversationId);
     if (!conversation) throw new NotFoundError('Hội thoại');
+    if (conversation.type === 'group') {
+      await groupService.assertUserMaySendMessage(senderId, conversationId);
+    }
 
     const now = new Date().toISOString();
     const messageId = uuidv4();

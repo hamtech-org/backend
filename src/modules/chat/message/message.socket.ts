@@ -40,8 +40,15 @@ export const registerChatHandlers = (io: Server, socket: Socket): void => {
 
   // ─── Room management ───────────────────────────────────────────────────
 
-  socket.on('conversation:join', (conversationId: string) => {
-    socket.join(`conv:${conversationId}`);
+  socket.on('conversation:join', async (conversationId: string) => {
+    const cid = String(conversationId ?? '').trim();
+    if (!cid) return;
+    const member = await conversationRepository.getMember(cid, userId);
+    if (!member) {
+      socket.emit('conversation:forbidden', { conversationId: cid });
+      return;
+    }
+    socket.join(`conv:${cid}`);
     logger.debug(`User ${userId} tham gia room conv:${conversationId}`);
   });
 

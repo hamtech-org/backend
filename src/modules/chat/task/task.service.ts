@@ -3,6 +3,7 @@ import { conversationRepository } from '../conversation/conversation.repository.
 import { taskRepository } from './task.repository.js';
 import type { IMessage } from '../shared/chat.types.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
+import { groupService } from '../group/group.service.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { createAndBroadcastSystemMessage } from '../shared/system-message.factory.js';
 import { messageService } from '../message/message.service.js';
@@ -80,6 +81,10 @@ async function normalizeSubtasksWithNames(subtasks: unknown): Promise<any[] | un
 
 export const taskService = {
   createTask: async (requesterId: string, conversationId: string, data: any): Promise<any> => {
+    const member = await conversationRepository.getMember(conversationId, requesterId);
+    if (!member) throw new ForbiddenError('Bạn không thuộc nhóm');
+    await groupService.assertUserMayCreateTask(requesterId, conversationId);
+
     const taskId = uuidv4();
     const now = new Date().toISOString();
 

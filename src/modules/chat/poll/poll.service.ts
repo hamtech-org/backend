@@ -5,6 +5,7 @@ import type { IMessage } from '../shared/chat.types.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { createAndBroadcastSystemMessage } from '../shared/system-message.factory.js';
+import { groupService } from '../group/group.service.js';
 
 const sysMsgDeps = {
   createMessage: conversationRepository.createMessage,
@@ -19,6 +20,7 @@ export const pollService = {
   ): Promise<IMessage | null> => {
     const member = await conversationRepository.getMember(conversationId, requesterId);
     if (!member) throw new ForbiddenError('Bạn không thuộc nhóm');
+    await groupService.assertUserMayCreatePoll(requesterId, conversationId);
 
     const pollId = uuidv4();
     const now = new Date().toISOString();
