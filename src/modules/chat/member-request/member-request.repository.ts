@@ -10,6 +10,8 @@ type IGroupRequestRecord = {
   userId: string;
   status: 'pending' | 'invited';
   requestedAt: string;
+  /** User mời vào nhóm (addMembers); không có khi user tự xin vào. */
+  invitedBy?: string;
 };
 
 export const memberRequestRepository = {
@@ -17,7 +19,9 @@ export const memberRequestRepository = {
     conversationId: string,
     userId: string,
     status: 'pending' | 'invited' = 'pending',
+    invitedBy?: string,
   ): Promise<void> => {
+    const inviter = String(invitedBy ?? '').trim();
     await dynamoClient.send(
       new PutCommand({
         TableName: CONVERSATIONS_TABLE,
@@ -28,9 +32,23 @@ export const memberRequestRepository = {
           userId,
           status,
           requestedAt: new Date().toISOString(),
+          ...(inviter ? { invitedBy: inviter } : {}),
         },
       }),
     );
+  },
+
+  getGroupRequest: async (
+    conversationId: string,
+    userId: string,
+  ): Promise<IGroupRequestRecord | null> => {
+    const result = await dynamoClient.send(
+      new GetCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: `REQUEST#${userId}` },
+      }),
+    );
+    return (result.Item as IGroupRequestRecord) ?? null;
   },
 
   getGroupRequests: async (conversationId: string): Promise<IGroupRequestRecord[]> => {
