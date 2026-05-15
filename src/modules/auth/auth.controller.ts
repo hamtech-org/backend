@@ -140,7 +140,6 @@ export const authController = {
   },
 
   // ── Face Login ──
-
   /**
    * Tạo session mới cho face liveness check
    * Frontend gọi endpoint này để bắt đầu movement challenge
