@@ -4,6 +4,7 @@ import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { contactRepository } from '@/modules/contact/contact.repository.js';
 import { createAndBroadcastSystemMessage } from '../shared/system-message.factory.js';
+import { resolveChatMemberLabel } from '../shared/chat.helpers.js';
 
 const sysMsgDeps = {
   createMessage: conversationRepository.createMessage,
@@ -22,11 +23,26 @@ export const memberRequestService = {
     if (!member || !['owner', 'admin'].includes(member.role)) {
       throw new ForbiddenError('Chỉ Admin/Owner mới xem được danh sách chờ');
     }
-    const requests = await memberRequestRepository.getGroupRequests(conversationId);
-    if (!requests.length) return [];
+    const [requests, members] = await Promise.all([
+      memberRequestRepository.getGroupRequests(conversationId),
+      conversationRepository.getConversationMembers(conversationId),
+    ]);
+    const memberIdSet = new Set(members.map((m) => m.userId));
+
+    const staleRequests = requests.filter((r) => memberIdSet.has(r.userId));
+    if (staleRequests.length > 0) {
+      await Promise.all(
+        staleRequests.map((r) =>
+          memberRequestRepository.removeGroupRequest(conversationId, r.userId),
+        ),
+      );
+    }
+
+    const pendingRequests = requests.filter((r) => !memberIdSet.has(r.userId));
+    if (!pendingRequests.length) return [];
 
     // Enrich: trả về name/avatar để FE hiển thị đúng tên dù chưa kết bạn.
-    const userIds = requests.map((r) => r.userId).filter(Boolean);
+    const userIds = pendingRequests.map((r) => r.userId).filter(Boolean);
     let users: any[] = [];
     try {
       users = await userRepository.findByIds(userIds);
@@ -44,7 +60,7 @@ export const memberRequestService = {
       friendSet = new Set();
     }
 
-    return requests.map((r) => {
+    return pendingRequests.map((r) => {
       const u = byId.get(r.userId);
       return {
         ...r,
@@ -68,6 +84,7 @@ export const memberRequestService = {
     const exists = await conversationRepository.getMember(conversationId, targetUserId);
     if (exists) {
       await memberRequestRepository.removeGroupRequest(conversationId, targetUserId);
+      await memberRequestRepository.clearKickedMember(conversationId, targetUserId);
       const members = await conversationRepository.getConversationMembers(conversationId);
       return { memberCount: members.length };
     }
@@ -90,14 +107,17 @@ export const memberRequestService = {
     });
 
     await memberRequestRepository.removeGroupRequest(conversationId, targetUserId);
+    await memberRequestRepository.clearKickedMember(conversationId, targetUserId);
 
     // System message: thành viên được duyệt vào nhóm
     try {
-      let targetName = targetUserId;
+      let targetName = resolveChatMemberLabel(targetUserId, null);
       try {
         const users = await userRepository.findByIds([targetUserId]);
-        targetName = users[0]?.displayName ?? targetName;
-      } catch {}
+        targetName = resolveChatMemberLabel(targetUserId, users[0] ?? null);
+      } catch {
+        /* ignore */
+      }
 
       await createAndBroadcastSystemMessage(
         { conversationId, senderId: requesterId, content: `${targetName} đã tham gia nhóm` },
