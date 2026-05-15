@@ -43,6 +43,55 @@ export function mergeGroupSettings(raw: Partial<IGroupSettings> | undefined | nu
 }
 
 /** Trạng thái yêu cầu khi mời / xin vào nhóm. */
+type MemberPermKey = keyof IGroupSettings['memberPermissions'];
+
+const MEMBER_PERM_MESSAGES: Record<MemberPermKey, string> = {
+  changeNameAvatar: 'Nhóm không cho phép thành viên đổi tên hoặc ảnh đại diện nhóm',
+  pinMessages: 'Nhóm không cho phép thành viên ghim tin nhắn',
+  createNotesReminders: 'Nhóm không cho phép thành viên tạo công việc / nhắc hẹn',
+  createPolls: 'Nhóm không cho phép thành viên tạo bình chọn',
+  sendMessages: 'Nhóm không cho phép thành viên gửi tin nhắn',
+};
+
+function normalizeMemberRole(
+  role: unknown,
+  userId: string,
+  conversationCreatorId?: string | null,
+): MemberRole | null {
+  const r = String(role ?? '')
+    .trim()
+    .toLowerCase();
+  if (r === 'owner' || r === 'admin' || r === 'member') return r;
+  if (conversationCreatorId && String(conversationCreatorId).trim() === userId) return 'owner';
+  return null;
+}
+
+/** owner/admin bỏ qua; member phải có quyền trong groupSettings. */
+async function assertMemberGroupPermission(
+  userId: string,
+  conversationId: string,
+  permission: MemberPermKey,
+): Promise<void> {
+  const c = await conversationRepository.getConversationById(conversationId);
+  if (!c) throw new NotFoundError('Hội thoại');
+  if (c.type !== 'group') return;
+  const member = await conversationRepository.getMember(conversationId, userId);
+  if (!member) throw new ForbiddenError('Bạn không phải thành viên nhóm');
+
+  let role = normalizeMemberRole(member.role, userId, c.creatorId);
+  if (!role) {
+    const members = await conversationRepository.getConversationMembers(conversationId);
+    const fromList = members.find((m) => String(m.userId ?? '').trim() === userId);
+    role = normalizeMemberRole(fromList?.role, userId, c.creatorId);
+  }
+  if (role === 'owner' || role === 'admin') return;
+
+  const s = mergeGroupSettings(c.groupSettings);
+  if (!s.memberPermissions[permission]) {
+    throw new ForbiddenError(MEMBER_PERM_MESSAGES[permission]);
+  }
+}
+
 export async function resolveGroupRequestStatus(
   conversationId: string,
   userId: string,
@@ -108,14 +157,8 @@ export const groupService = {
       throw new ForbiddenError('Bạn không phải thành viên của nhóm này');
     }
 
-    if (
-      (data.name !== undefined || data.avatar !== undefined) &&
-      member.role === 'member'
-    ) {
-      const s = mergeGroupSettings(conversation.groupSettings);
-      if (!s.memberPermissions.changeNameAvatar) {
-        throw new ForbiddenError('Nhóm không cho phép thành viên đổi tên hoặc ảnh đại diện nhóm');
-      }
+    if (data.name !== undefined || data.avatar !== undefined) {
+      await assertMemberGroupPermission(requesterId, conversationId, 'changeNameAvatar');
     }
 
     const oldName = conversation.name || '';
@@ -486,28 +529,18 @@ export const groupService = {
    * Kiểm tra thành viên có được ghim/bỏ ghim trong nhóm (theo groupSettings + role).
    */
   assertUserMayPinMessage: async (userId: string, conversationId: string): Promise<void> => {
-    const c = await conversationRepository.getConversationById(conversationId);
-    if (!c) throw new NotFoundError('Hội thoại');
-    if (c.type === 'group') {
-      const member = await conversationRepository.getMember(conversationId, userId);
-      if (!member) throw new ForbiddenError('Bạn không phải thành viên nhóm');
-      if (member.role === 'owner' || member.role === 'admin') return;
-      const s = mergeGroupSettings(c.groupSettings);
-      if (!s.memberPermissions.pinMessages) {
-        throw new ForbiddenError('Nhóm không cho phép thành viên ghim tin nhắn');
-      }
-    }
+    await assertMemberGroupPermission(userId, conversationId, 'pinMessages');
   },
 
   assertUserMaySendMessage: async (userId: string, conversationId: string): Promise<void> => {
-    const c = await conversationRepository.getConversationById(conversationId);
-    if (!c || c.type !== 'group') return;
-    const member = await conversationRepository.getMember(conversationId, userId);
-    if (!member) throw new ForbiddenError('Bạn không phải thành viên nhóm');
-    if (member.role === 'owner' || member.role === 'admin') return;
-    const s = mergeGroupSettings(c.groupSettings);
-    if (!s.memberPermissions.sendMessages) {
-      throw new ForbiddenError('Nhóm không cho phép thành viên gửi tin nhắn');
-    }
+    await assertMemberGroupPermission(userId, conversationId, 'sendMessages');
+  },
+
+  assertUserMayCreatePoll: async (userId: string, conversationId: string): Promise<void> => {
+    await assertMemberGroupPermission(userId, conversationId, 'createPolls');
+  },
+
+  assertUserMayCreateTask: async (userId: string, conversationId: string): Promise<void> => {
+    await assertMemberGroupPermission(userId, conversationId, 'createNotesReminders');
   },
 };
