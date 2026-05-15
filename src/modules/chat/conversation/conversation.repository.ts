@@ -157,7 +157,56 @@ export const conversationRepository = {
         },
       }),
     );
-    return (result.Items as IConversationMember[]) ?? [];
+    const items = (result.Items as Array<IConversationMember & { SK?: string }>) ?? [];
+    const byUserId = new Map<string, IConversationMember>();
+    for (const raw of items) {
+      const sk = String(raw.SK ?? '');
+      if (!sk.startsWith('MEMBER#')) continue;
+      const fromSk = sk.slice('MEMBER#'.length).trim();
+      const userId = (fromSk || String(raw.userId ?? '').trim()).trim();
+      if (!userId) continue;
+      byUserId.set(userId, { ...raw, conversationId, userId });
+    }
+    return [...byUserId.values()];
+  },
+
+  /** Tìm MEMBER# theo userId (khớp SK hoặc field) — dùng khi kick/remove. */
+  resolveMemberForRemoval: async (
+    conversationId: string,
+    userId: string,
+  ): Promise<{ member: IConversationMember; deleteUserId: string } | null> => {
+    const trimmed = userId.trim();
+    if (!trimmed) return null;
+
+    const direct = await conversationRepository.getMember(conversationId, trimmed);
+    if (direct) {
+      return { member: direct, deleteUserId: trimmed };
+    }
+
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: CONVERSATIONS_TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :memberPrefix)',
+        ExpressionAttributeValues: {
+          ':pk': `CONV#${conversationId}`,
+          ':memberPrefix': 'MEMBER#',
+        },
+      }),
+    );
+
+    for (const raw of result.Items ?? []) {
+      const sk = String((raw as { SK?: string }).SK ?? '');
+      if (!sk.startsWith('MEMBER#')) continue;
+      const skUserId = sk.slice('MEMBER#'.length).trim();
+      const itemUserId = String((raw as IConversationMember).userId ?? '').trim();
+      if (skUserId !== trimmed && itemUserId !== trimmed) continue;
+      const deleteUserId = skUserId || itemUserId || trimmed;
+      return {
+        member: { ...(raw as IConversationMember), conversationId, userId: deleteUserId },
+        deleteUserId,
+      };
+    }
+    return null;
   },
 
   updateConversationLastMessage: async (
