@@ -20,6 +20,9 @@ async function getFileTypeFromBuffer(): Promise<
 > {
   if (!fileTypeFromBufferCached) {
     const mod = await import('file-type');
+    if (!mod.fileTypeFromBuffer) {
+      throw new Error('file-type: fileTypeFromBuffer is not available');
+    }
     fileTypeFromBufferCached = mod.fileTypeFromBuffer;
   }
   return fileTypeFromBufferCached;
