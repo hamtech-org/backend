@@ -1,4 +1,4 @@
-import { PutCommand, QueryCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
+import { PutCommand, QueryCommand, DeleteCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { dynamoClient } from '@/config/database.js';
 import { env } from '@/config/env.js';
 
@@ -52,6 +52,40 @@ export const memberRequestRepository = {
       new DeleteCommand({
         TableName: CONVERSATIONS_TABLE,
         Key: { PK: `CONV#${conversationId}`, SK: `REQUEST#${userId}` },
+      }),
+    );
+  },
+
+  recordKickedMember: async (conversationId: string, userId: string): Promise<void> => {
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Item: {
+          PK: `CONV#${conversationId}`,
+          SK: `KICKED#${userId}`,
+          conversationId,
+          userId,
+          kickedAt: new Date().toISOString(),
+        },
+      }),
+    );
+  },
+
+  isKickedMember: async (conversationId: string, userId: string): Promise<boolean> => {
+    const result = await dynamoClient.send(
+      new GetCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: `KICKED#${userId}` },
+      }),
+    );
+    return !!result.Item;
+  },
+
+  clearKickedMember: async (conversationId: string, userId: string): Promise<void> => {
+    await dynamoClient.send(
+      new DeleteCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: `KICKED#${userId}` },
       }),
     );
   },
