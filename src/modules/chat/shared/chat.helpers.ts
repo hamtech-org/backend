@@ -150,3 +150,17 @@ export async function attachReplyToDetails(
     };
   });
 }
+
+/** Nhãn hiển thị an toàn cho system message — không trả về "undefined"/rỗng. */
+export function resolveChatMemberLabel(
+  userId: string,
+  user?: { displayName?: string | null; email?: string | null; name?: string | null } | null,
+): string {
+  const candidates = [user?.displayName, user?.name, user?.email];
+  for (const raw of candidates) {
+    const label = String(raw ?? '').trim();
+    if (!label || label === 'undefined' || label === 'null') continue;
+    return label;
+  }
+  return 'Thành viên';
+}
