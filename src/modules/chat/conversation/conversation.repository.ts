@@ -836,4 +836,48 @@ export const conversationRepository = {
       }),
     );
   },
+
+  /** PK=JOIN#{suffix}, SK=META — tra cứu nhóm theo link mời (O(1)). */
+  upsertJoinLinkLookup: async (conversationId: string, suffix: string): Promise<void> => {
+    const normalized = suffix.trim().toLowerCase();
+    if (!normalized) return;
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Item: {
+          PK: `JOIN#${normalized}`,
+          SK: 'META',
+          conversationId,
+          joinLinkSuffix: normalized,
+          updatedAt: new Date().toISOString(),
+        },
+      }),
+    );
+  },
+
+  deleteJoinLinkLookup: async (suffix: string): Promise<void> => {
+    const normalized = suffix.trim().toLowerCase();
+    if (!normalized) return;
+    await dynamoClient.send(
+      new DeleteCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `JOIN#${normalized}`, SK: 'META' },
+      }),
+    );
+  },
+
+  findConversationIdByJoinLinkSuffix: async (suffix: string): Promise<string | null> => {
+    const normalized = suffix.trim().toLowerCase();
+    if (!normalized) return null;
+    const result = await dynamoClient.send(
+      new GetCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `JOIN#${normalized}`, SK: 'META' },
+      }),
+    );
+    const conversationId = String(
+      (result.Item as { conversationId?: string })?.conversationId ?? '',
+    ).trim();
+    return conversationId || null;
+  },
 };
