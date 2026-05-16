@@ -1,6 +1,5 @@
 import { taskRepository } from './task.repository.js';
 import { taskService } from './task.service.js';
-import { logger } from '@/shared/utils/logger.js';
 
 let started = false;
 
@@ -10,8 +9,8 @@ function parseDueDateToMs(raw: unknown): number {
   const ms = new Date(s).getTime();
   if (Number.isFinite(ms)) return ms;
   const m =
-    s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:\s+(\d{1,2}):(\d{2}))?$/) ??
-    s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?$/);
+    s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:\s+(\d{1,2}):(\d{2}))?$/) ??
+    s.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?$/);
   if (!m) return NaN;
   const a = Number(m[1]);
   const b = Number(m[2]);
@@ -41,18 +40,6 @@ export function startTaskDueReminderJob(): void {
     try {
       const rows = await taskRepository.scanDueTasksCandidates();
       if (!rows || rows.length === 0) return;
-      let minDueMs = Number.POSITIVE_INFINITY;
-      let dueNowCount = 0;
-      for (const r of rows) {
-        const dueRaw = (r as any)?.dueDate;
-        const dm = parseDueDateToMs(dueRaw);
-        if (!Number.isFinite(dm)) continue;
-        if (dm < minDueMs) minDueMs = dm;
-        if (dm <= toMs && dm >= fromMs) dueNowCount++;
-      }
-      logger.debug(
-        `[taskDueReminderJob] candidates=${rows.length} dueNow=${dueNowCount} nextDue=${Number.isFinite(minDueMs) ? new Date(minDueMs).toISOString() : 'n/a'}`,
-      );
 
       for (const row of rows) {
         const conversationId = String((row as any)?.conversationId ?? '').trim();
@@ -69,26 +56,20 @@ export function startTaskDueReminderJob(): void {
         const actorId = String((row as any)?.creatorId ?? '').trim();
         const requesterId = actorId || 'system';
         try {
-          logger.info(`[taskDueReminderJob] due now conv=${conversationId} task=${taskId}`);
-          const r = await taskService.broadcastDueReminder(requesterId, conversationId, taskId, {
+          await taskService.broadcastDueReminder(requesterId, conversationId, taskId, {
             skipMemberCheck: true,
             senderIdOverride: actorId || null,
           });
-          logger.info(
-            `[taskDueReminderJob] broadcast result conv=${conversationId} task=${taskId} sent=${String((r as any)?.sent)}`,
-          );
         } catch {
           /* ignore per-task */
         }
       }
-    } catch (err) {
-      logger.warn('[taskDueReminderJob] scan failed', err as any);
+    } catch {
+      /* ignore scan errors */
     }
   };
 
   // fire-and-forget loop
   void tick();
   setInterval(() => void tick(), intervalMs);
-  logger.info('[taskDueReminderJob] started');
 }
-

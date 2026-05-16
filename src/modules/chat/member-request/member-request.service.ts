@@ -36,10 +36,9 @@ async function broadcastGroupMemberInvitedNotice(
     {
       conversationId,
       senderId: inviterUserId,
-      content: buildGroupMemberInvitedContent(
-        { userId: inviterUserId, name: actorName },
-        [{ userId: targetUserId, name: targetName }],
-      ),
+      content: buildGroupMemberInvitedContent({ userId: inviterUserId, name: actorName }, [
+        { userId: targetUserId, name: targetName },
+      ]),
     },
     sysMsgDeps,
   );
@@ -68,7 +67,44 @@ async function broadcastGroupMemberJoinedNotice(
   );
 }
 
+/** Thêm thành viên trực tiếp (link mời / duyệt không cần phê duyệt). */
+async function addMemberDirectlyInternal(
+  conversationId: string,
+  targetUserId: string,
+): Promise<{ memberCount: number; joinedAt: string }> {
+  const trimmedTarget = targetUserId.trim();
+  const now = new Date().toISOString();
+
+  await conversationRepository.removeAllMemberRecordsForUser(conversationId, trimmedTarget);
+  await conversationRepository.addConversationMember({
+    conversationId,
+    userId: trimmedTarget,
+    role: 'member',
+    joinedAt: now,
+    unreadCount: 0,
+    isMuted: false,
+    isPinnedToTop: false,
+  });
+
+  const members = await conversationRepository.getConversationMembers(conversationId);
+  const memberCount = members.length;
+  await conversationRepository.updateConversation(conversationId, { memberCount });
+
+  await memberRequestRepository.removeGroupRequest(conversationId, trimmedTarget);
+  await memberRequestRepository.clearKickedMember(conversationId, trimmedTarget);
+
+  try {
+    await broadcastGroupMemberJoinedNotice(conversationId, trimmedTarget);
+  } catch {
+    /* ignore */
+  }
+
+  return { memberCount, joinedAt: now };
+}
+
 export const memberRequestService = {
+  addMemberDirectly: addMemberDirectlyInternal,
+
   joinRequest: async (userId: string, conversationId: string): Promise<void> => {
     const conv = await conversationRepository.getConversationById(conversationId);
     if (!conv) throw new NotFoundError('Hội thoại');
@@ -139,10 +175,7 @@ export const memberRequestService = {
     }
 
     const trimmedTarget = targetUserId.trim();
-    const wasKicked = await memberRequestRepository.isKickedMember(
-      conversationId,
-      trimmedTarget,
-    );
+    const wasKicked = await memberRequestRepository.isKickedMember(conversationId, trimmedTarget);
     const exists = await conversationRepository.getMember(conversationId, trimmedTarget);
 
     if (exists && !wasKicked) {
@@ -155,43 +188,26 @@ export const memberRequestService = {
       };
     }
 
-    const now = new Date().toISOString();
-    await conversationRepository.removeAllMemberRecordsForUser(conversationId, trimmedTarget);
-    await conversationRepository.addConversationMember({
-      conversationId,
-      userId: trimmedTarget,
-      role: 'member',
-      joinedAt: now,
-      unreadCount: 0,
-      isMuted: false,
-      isPinnedToTop: false,
-    });
-
-    const members = await conversationRepository.getConversationMembers(conversationId);
-    const memberCount = members.length;
-    await conversationRepository.updateConversation(conversationId, {
-      memberCount,
-    });
-
     const pendingRequest = await memberRequestRepository.getGroupRequest(
       conversationId,
       trimmedTarget,
     );
     const inviterId = String(pendingRequest?.invitedBy ?? '').trim();
 
-    await memberRequestRepository.removeGroupRequest(conversationId, trimmedTarget);
-    await memberRequestRepository.clearKickedMember(conversationId, trimmedTarget);
+    const { memberCount, joinedAt } = await addMemberDirectlyInternal(
+      conversationId,
+      trimmedTarget,
+    );
 
     try {
       if (inviterId) {
         await broadcastGroupMemberInvitedNotice(conversationId, inviterId, trimmedTarget);
       }
-      await broadcastGroupMemberJoinedNotice(conversationId, trimmedTarget);
     } catch {
       /* ignore */
     }
 
-    return { memberCount, joinedAt: now };
+    return { memberCount, joinedAt };
   },
 
   rejectRequest: async (

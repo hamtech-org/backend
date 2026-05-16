@@ -39,7 +39,9 @@ const DEFAULT_ADMIN: IGroupSettings['adminSettings'] = {
   allowJoinLink: true,
 };
 
-export function mergeGroupSettings(raw: Partial<IGroupSettings> | undefined | null): IGroupSettings {
+export function mergeGroupSettings(
+  raw: Partial<IGroupSettings> | undefined | null,
+): IGroupSettings {
   return {
     memberPermissions: { ...DEFAULT_MEMBER_PERMS, ...raw?.memberPermissions },
     adminSettings: { ...DEFAULT_ADMIN, ...raw?.adminSettings },
@@ -128,9 +130,9 @@ export const groupService = {
    * Lấy danh sách thành viên nhóm (group)
    */
   getGroupMembers: async (groupId: string): Promise<IConversationMember[]> => {
-    const members = (
-      await conversationRepository.getConversationMembers(groupId)
-    ).filter((m) => Boolean(String(m.userId ?? '').trim()));
+    const members = (await conversationRepository.getConversationMembers(groupId)).filter((m) =>
+      Boolean(String(m.userId ?? '').trim()),
+    );
     if (members.length === 0) return members;
 
     // Enrich để FE hiển thị avatar/name đồng bộ (không phá compatibility: vẫn giữ fields gốc).
@@ -186,10 +188,16 @@ export const groupService = {
       }
       try {
         await createAndBroadcastSystemMessage(
-          { conversationId, senderId: requesterId, content: `${userName} đổi tên nhóm thành '${data.name}'` },
+          {
+            conversationId,
+            senderId: requesterId,
+            content: `${userName} đổi tên nhóm thành '${data.name}'`,
+          },
           sysMsgDeps,
         );
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
 
     // If group avatar changed, create and broadcast a system message
@@ -203,10 +211,18 @@ export const groupService = {
       }
       try {
         await createAndBroadcastSystemMessage(
-          { conversationId, senderId: requesterId, content: `${userName} đã cập nhật ảnh đại diện nhóm`, mediaUrl: data.avatar, mediaType: 'image' },
+          {
+            conversationId,
+            senderId: requesterId,
+            content: `${userName} đã cập nhật ảnh đại diện nhóm`,
+            mediaUrl: data.avatar,
+            mediaType: 'image',
+          },
           sysMsgDeps,
         );
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
 
     return updatedConversation;
@@ -248,7 +264,9 @@ export const groupService = {
       memberCount: 0,
     } as any);
 
-    await Promise.all(members.map((m) => conversationRepository.removeMember(conversationId, m.userId)));
+    await Promise.all(
+      members.map((m) => conversationRepository.removeMember(conversationId, m.userId)),
+    );
   },
 
   leaveGroup: async (
@@ -308,7 +326,9 @@ export const groupService = {
 
     const newOwnerId = options?.newOwnerUserId?.trim();
     if (!newOwnerId) {
-      throw new ValidationError('Trưởng nhóm cần chọn thành viên nhận quyền trưởng nhóm trước khi rời nhóm.');
+      throw new ValidationError(
+        'Trưởng nhóm cần chọn thành viên nhận quyền trưởng nhóm trước khi rời nhóm.',
+      );
     }
     const successor = allMembers.find((m) => m.userId === newOwnerId);
     if (!successor || successor.userId === userId) {
@@ -522,10 +542,7 @@ export const groupService = {
         const users = await userRepository.findByIds([requesterId, deleteUserId]);
         const byId = new Map(users.map((u) => [u.userId, u]));
         requesterName = resolveChatMemberLabel(requesterId, byId.get(requesterId) ?? null);
-        targetName = resolveChatMemberLabel(
-          deleteUserId,
-          byId.get(deleteUserId) ?? targetWithName,
-        );
+        targetName = resolveChatMemberLabel(deleteUserId, byId.get(deleteUserId) ?? targetWithName);
       } catch {
         /* ignore */
       }
@@ -587,7 +604,11 @@ export const groupService = {
     const current = mergeGroupSettings(c.groupSettings);
     let joinLinkSuffix = current.joinLinkSuffix;
     if (patch.regenerateJoinLink) {
+      const previousSuffix = joinLinkSuffix;
       joinLinkSuffix = randomBytes(6).toString('hex');
+      if (previousSuffix) {
+        await conversationRepository.deleteJoinLinkLookup(previousSuffix);
+      }
     }
     const next: IGroupSettings = {
       memberPermissions: { ...current.memberPermissions, ...patch.memberPermissions },
@@ -598,6 +619,11 @@ export const groupService = {
     await conversationRepository.updateConversation(conversationId, {
       groupSettings: next,
     } as any);
+
+    if (joinLinkSuffix) {
+      await conversationRepository.upsertJoinLinkLookup(conversationId, joinLinkSuffix);
+    }
+
     return next;
   },
 
