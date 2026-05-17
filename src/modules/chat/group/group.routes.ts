@@ -6,6 +6,7 @@ import {
   updateGroupSchema,
   addMembersSchema,
   changeRoleSchema,
+  transferOwnerSchema,
   updateGroupSettingsSchema,
   leaveGroupSchema,
 } from './group.validator';
@@ -40,6 +41,12 @@ router.post(
   groupController.addMembers,
 );
 router.delete('/groups/:groupId/members/:userId', authenticate, groupController.removeMember);
+router.post(
+  '/groups/:groupId/transfer-owner',
+  authenticate,
+  validate(transferOwnerSchema),
+  groupController.transferGroupOwner,
+);
 router.put(
   '/groups/:groupId/members/:userId/role',
   authenticate,

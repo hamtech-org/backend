@@ -118,6 +118,7 @@
     "type": "group",
     "name": "Nhóm Dev Zalogram",
     "creatorId": "seed-user-alice",
+    "leaderId": "seed-user-alice",
     "memberCount": 4,
     "isEncrypted": false,
     "lastMessage": {

@@ -1,5 +1,10 @@
 import type { TimestampFields } from '@/shared/types/common.types.js';
-import type { MessageType, ConversationType, MemberRole, MessageStatus } from '@/shared/types/chat.types.js';
+import type {
+  MessageType,
+  ConversationType,
+  MemberRole,
+  MessageStatus,
+} from '@/shared/types/chat.types.js';
 
 /** Cài đặt nhóm (META conversation type group). */
 export interface IGroupMemberPermissions {
@@ -29,7 +34,10 @@ export interface IConversation extends TimestampFields {
   type: ConversationType;
   name?: string;
   avatar?: string;
+  /** Historical creator. Do not update this when group ownership changes. */
   creatorId: string;
+  /** Current group leader. For legacy rows without this field, the owner MEMBER# row is the fallback. */
+  leaderId?: string;
   lastMessage?: ILastMessage;
   lastMessageAt?: string;
   memberCount: number;
@@ -162,5 +170,17 @@ export interface IAddMembersDto {
 }
 
 export interface IChangeRoleDto {
-  role: MemberRole;
+  role: Extract<MemberRole, 'admin' | 'member'>;
+}
+
+export interface IGroupRoleAuditLog {
+  auditId: string;
+  conversationId: string;
+  actorUserId: string;
+  targetUserId: string;
+  previousRole: MemberRole;
+  nextRole: MemberRole;
+  action: 'transfer_owner' | 'change_role' | 'self_demote_admin' | 'owner_leave_transfer';
+  createdAt: string;
+  metadata?: Record<string, unknown>;
 }

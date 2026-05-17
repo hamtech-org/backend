@@ -36,7 +36,10 @@ export function isMessageHiddenFromViewer(m: IMessage, hiddenMessageIds: Set<str
  * Trưởng nhóm / phó nhóm luôn xem được toàn bộ lịch sử.
  */
 export function resolveMessageHistoryMinCreatedAtMs(
-  conversation: Pick<IConversation, 'type' | 'groupSettings' | 'creatorId'> | null | undefined,
+  conversation:
+    | Pick<IConversation, 'type' | 'groupSettings' | 'creatorId' | 'leaderId'>
+    | null
+    | undefined,
   member: Pick<IConversationMember, 'joinedAt' | 'role' | 'userId'>,
 ): number | null {
   if (!conversation || conversation.type !== 'group') return null;
@@ -45,12 +48,19 @@ export function resolveMessageHistoryMinCreatedAtMs(
     .trim()
     .toLowerCase();
   if (role === 'owner' || role === 'admin') return null;
-  if (conversation.creatorId && String(conversation.creatorId).trim() === member.userId) {
+  const leaderId = String(conversation.leaderId ?? '').trim();
+  if (leaderId && leaderId === member.userId) {
+    return null;
+  }
+  if (
+    !leaderId &&
+    conversation.creatorId &&
+    String(conversation.creatorId).trim() === member.userId
+  ) {
     return null;
   }
 
-  const allowPreJoin =
-    conversation.groupSettings?.adminSettings?.newMembersReadRecent !== false;
+  const allowPreJoin = conversation.groupSettings?.adminSettings?.newMembersReadRecent !== false;
   if (allowPreJoin) return null;
 
   const joinedMs = Date.parse(member.joinedAt);
@@ -101,7 +111,9 @@ export async function messageToLastMessageSnapshot(m: IMessage): Promise<ILastMe
   };
 }
 
-export async function lastMessageSnapshotFromNewest(messages: IMessage[]): Promise<ILastMessage | null> {
+export async function lastMessageSnapshotFromNewest(
+  messages: IMessage[],
+): Promise<ILastMessage | null> {
   if (messages.length === 0) return null;
   return messageToLastMessageSnapshot(messages[0]);
 }
@@ -131,7 +143,11 @@ export async function syncConversationLastMessageMeta(
   conversationId: string,
   deps: {
     getMessages: (convId: string, limit: number) => Promise<IMessage[]>;
-    updateConversationLastMessage: (convId: string, snapshot: ILastMessage, createdAt: string) => Promise<void>;
+    updateConversationLastMessage: (
+      convId: string,
+      snapshot: ILastMessage,
+      createdAt: string,
+    ) => Promise<void>;
     clearConversationLastMessage: (convId: string) => Promise<void>;
   },
 ): Promise<void> {
