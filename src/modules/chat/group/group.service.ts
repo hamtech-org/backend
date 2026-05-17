@@ -538,7 +538,7 @@ export const groupService = {
     requesterId: string,
     conversationId: string,
     data: IAddMembersDto,
-  ): Promise<void> => {
+  ): Promise<{ memberCount: number; autoJoinedUserIds: string[] }> => {
     const member = await conversationRepository.getMember(conversationId, requesterId);
     if (!member || !['owner', 'admin', 'member'].includes(member.role)) {
       throw new ForbiddenError('Bạn không có quyền thêm thành viên');
@@ -562,7 +562,12 @@ export const groupService = {
       }
       memberIdsToInvite.push(userId);
     }
-    if (memberIdsToInvite.length === 0) return;
+    const membersBefore = await conversationRepository.getConversationMembers(conversationId);
+    const memberCountBefore = membersBefore.length;
+
+    if (memberIdsToInvite.length === 0) {
+      return { memberCount: memberCountBefore, autoJoinedUserIds: [] };
+    }
 
     const convMeta = await conversationRepository.getConversationById(conversationId);
     const mergedSettings = mergeGroupSettings(convMeta?.groupSettings);
@@ -615,6 +620,8 @@ export const groupService = {
         /* ignore system message errors */
       }
     }
+
+    return { memberCount: memberCountBefore, autoJoinedUserIds: [] };
   },
 
   removeMember: async (
