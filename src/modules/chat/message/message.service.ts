@@ -1,7 +1,12 @@
 import { v4 as uuidv4 } from 'uuid';
 import { conversationRepository } from '../conversation/conversation.repository.js';
 import { messageUserHideRepository } from './message-user-hide.repository.js';
-import type { IConversation, IConversationMember, IMessage, ISendMessageDto } from '../shared/chat.types.js';
+import type {
+  IConversation,
+  IConversationMember,
+  IMessage,
+  ISendMessageDto,
+} from '../shared/chat.types.js';
 import type { MessageStatus } from '@/shared/types/chat.types.js';
 import { NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
 import { MAX_PINNED_MESSAGES_PER_CONVERSATION } from '../shared/chat.constants.js';
@@ -679,7 +684,8 @@ export const messageService = {
       document: null,
     });
     if (wasPinned) {
-      await conversationRepository.adjustPinnedMessageCount(conversationId, -1);
+      const actual = await conversationRepository.countActivePinnedMessages(conversationId);
+      await conversationRepository.setPinnedMessageCount(conversationId, actual);
     }
     await syncConversationLastMessageMeta(conversationId, {
       getMessages: conversationRepository.getMessages,
@@ -734,9 +740,7 @@ export const messageService = {
     const message = await getMessageForMutation(conversationId, messageId, createdAt);
     if (message.isPinned) return;
 
-    const convMeta = await conversationRepository.getConversationById(conversationId);
-    const pinnedCount =
-      typeof convMeta?.pinnedMessageCount === 'number' ? convMeta.pinnedMessageCount : 0;
+    const pinnedCount = await conversationRepository.countActivePinnedMessages(conversationId);
     if (pinnedCount >= MAX_PINNED_MESSAGES_PER_CONVERSATION) {
       throw new ForbiddenError(
         `Tối đa ${MAX_PINNED_MESSAGES_PER_CONVERSATION} tin ghim trong cuộc trò chuyện.`,
@@ -747,7 +751,8 @@ export const messageService = {
     await conversationRepository.updateMessage(conversationId, messageId, sortKey, {
       isPinned: true,
     });
-    await conversationRepository.adjustPinnedMessageCount(conversationId, 1);
+    const afterPin = await conversationRepository.countActivePinnedMessages(conversationId);
+    await conversationRepository.setPinnedMessageCount(conversationId, afterPin);
   },
 
   unpinMessage: async (
@@ -762,7 +767,8 @@ export const messageService = {
     await conversationRepository.updateMessage(conversationId, messageId, sortKey, {
       isPinned: false,
     });
-    await conversationRepository.adjustPinnedMessageCount(conversationId, -1);
+    const actual = await conversationRepository.countActivePinnedMessages(conversationId);
+    await conversationRepository.setPinnedMessageCount(conversationId, actual);
   },
 
   /**
