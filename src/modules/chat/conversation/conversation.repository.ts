@@ -698,6 +698,27 @@ export const conversationRepository = {
     return (result.Items as IMessage[]) ?? [];
   },
 
+  listMessagesInSortKeyRange: async (
+    conversationId: string,
+    opts: { fromSortKey: string; toSortKey: string; limit: number },
+  ): Promise<IMessage[]> => {
+    const limit = Math.min(Math.max(1, opts.limit), 500);
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: MESSAGES_TABLE,
+        KeyConditionExpression: 'PK = :pk AND SK BETWEEN :from AND :to',
+        ExpressionAttributeValues: {
+          ':pk': `CONV#${conversationId}`,
+          ':from': opts.fromSortKey,
+          ':to': opts.toSortKey,
+        },
+        Limit: limit,
+        ScanIndexForward: true,
+      }),
+    );
+    return (result.Items as IMessage[]) ?? [];
+  },
+
   /**
    * Tin gần đây (mới → cũ), phân trang Dynamo.
    * `minCreatedAtMs`: bỏ qua tin cũ hơn mốc (dùng khi tắt đọc tin trước khi vào nhóm).

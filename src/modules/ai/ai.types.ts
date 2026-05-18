@@ -76,10 +76,14 @@ export interface IAiGroupSummaryRequest {
 }
 
 export interface IAiGroupSummaryResponse {
-  /** Tóm tắt ngắn 3-6 bullet */
+  /** Tổng hợp ngắn 3-6 bullet cho các tin nhắn gần đây */
   summary: string;
   /** Các điểm cần làm / quyết định / câu hỏi còn bỏ ngỏ */
   highlights: string[];
+  /** Tóm tắt riêng cho recap session unread gần nhất của user */
+  unreadSummary: string;
+  /** Số tin đã được chụp trong recap session unread gần nhất */
+  unreadMessageCount: number;
   model: string;
   tokensUsed: number;
 }
