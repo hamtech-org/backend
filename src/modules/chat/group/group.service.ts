@@ -57,6 +57,15 @@ export function mergeGroupSettings(
   };
 }
 
+/** Cài đặt nhóm mặc định kèm link tham gia — gọi khi tạo nhóm mới. */
+export function createInitialGroupSettings(): IGroupSettings {
+  return {
+    memberPermissions: { ...DEFAULT_MEMBER_PERMS },
+    adminSettings: { ...DEFAULT_ADMIN },
+    joinLinkSuffix: randomBytes(6).toString('hex'),
+  };
+}
+
 /** Trạng thái yêu cầu khi mời / xin vào nhóm. */
 type MemberPermKey = keyof IGroupSettings['memberPermissions'];
 
