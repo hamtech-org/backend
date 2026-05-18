@@ -42,7 +42,10 @@ export const aiController = {
     next: NextFunction,
   ): Promise<void> => {
     try {
-      const result = await aiService.summarizeGroupMessages(req.body as IAiGroupSummaryRequest);
+      const result = await aiService.summarizeGroupMessages({
+        ...(req.body as IAiGroupSummaryRequest),
+        userId: req.user!.userId,
+      });
       sendSuccess(res, result);
     } catch (error) {
       next(error);
