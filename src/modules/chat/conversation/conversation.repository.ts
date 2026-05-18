@@ -4,10 +4,16 @@ import {
   QueryCommand,
   UpdateCommand,
   DeleteCommand,
+  TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { dynamoClient } from '@/config/database.js';
 import { env } from '@/config/env.js';
-import type { IConversation, IConversationMember, IMessage } from '../shared/chat.types.js';
+import type {
+  IConversation,
+  IConversationMember,
+  IGroupRoleAuditLog,
+  IMessage,
+} from '../shared/chat.types.js';
 import { isConversationNotificationPushMuted } from '../shared/chat.helpers.js';
 import type { MessageStatus } from '@/shared/types/chat.types.js';
 
@@ -410,6 +416,82 @@ export const conversationRepository = {
           ':role': role,
           ':now': new Date().toISOString(),
         },
+      }),
+    );
+  },
+
+  createGroupRoleAuditLog: async (log: IGroupRoleAuditLog): Promise<void> => {
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Item: {
+          PK: `CONV#${log.conversationId}`,
+          SK: `ROLE_AUDIT#${log.createdAt}#${log.auditId}`,
+          entityType: 'GROUP_ROLE_AUDIT',
+          ...log,
+        },
+      }),
+    );
+  },
+
+  applyGroupOwnerTransfer: async (params: {
+    conversationId: string;
+    newOwnerUserId: string;
+    previousOwnerUserId: string;
+    previousOwnerNewRole: string;
+    extraOwnerDemotions?: Array<{ userId: string; nextRole: string }>;
+    auditLogs?: IGroupRoleAuditLog[];
+  }): Promise<void> => {
+    const now = new Date().toISOString();
+    const pk = `CONV#${params.conversationId}`;
+    const memberUpdates = new Map<string, string>();
+    memberUpdates.set(params.newOwnerUserId, 'owner');
+    memberUpdates.set(params.previousOwnerUserId, params.previousOwnerNewRole);
+    for (const demotion of params.extraOwnerDemotions ?? []) {
+      if (!demotion.userId || demotion.userId === params.newOwnerUserId) continue;
+      memberUpdates.set(demotion.userId, demotion.nextRole);
+    }
+
+    await dynamoClient.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          ...[...memberUpdates.entries()].map(([userId, role]) => ({
+            Update: {
+              TableName: CONVERSATIONS_TABLE,
+              Key: { PK: pk, SK: `MEMBER#${userId}` },
+              UpdateExpression: 'SET #r = :role, updatedAt = :now',
+              ConditionExpression: 'attribute_exists(PK) AND attribute_exists(SK)',
+              ExpressionAttributeNames: { '#r': 'role' },
+              ExpressionAttributeValues: {
+                ':role': role,
+                ':now': now,
+              },
+            },
+          })),
+          {
+            Update: {
+              TableName: CONVERSATIONS_TABLE,
+              Key: { PK: pk, SK: 'META' },
+              UpdateExpression: 'SET leaderId = :leaderId, updatedAt = :now',
+              ConditionExpression: 'attribute_exists(PK) AND attribute_exists(SK)',
+              ExpressionAttributeValues: {
+                ':leaderId': params.newOwnerUserId,
+                ':now': now,
+              },
+            },
+          },
+          ...(params.auditLogs ?? []).map((log) => ({
+            Put: {
+              TableName: CONVERSATIONS_TABLE,
+              Item: {
+                PK: pk,
+                SK: `ROLE_AUDIT#${log.createdAt}#${log.auditId}`,
+                entityType: 'GROUP_ROLE_AUDIT',
+                ...log,
+              },
+            },
+          })),
+        ],
       }),
     );
   },

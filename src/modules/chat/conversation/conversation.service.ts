@@ -130,6 +130,7 @@ export const conversationService = {
       ...(data.name != null && data.name !== '' ? { name: data.name } : {}),
       ...(data.avatar != null && data.avatar.trim() !== '' ? { avatar: data.avatar.trim() } : {}),
       creatorId,
+      ...(data.type === 'group' ? { leaderId: creatorId } : {}),
       memberCount: allMemberIds.length,
       isEncrypted: false,
       createdAt: now,

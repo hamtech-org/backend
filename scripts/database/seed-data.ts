@@ -197,6 +197,7 @@ async function seedConversation(conv: ConvDef): Promise<void> {
     conversationId: conv.conversationId,
     type: conv.type,
     creatorId: conv.memberIds[conv.ownerIdx],
+    ...(conv.type === 'group' ? { leaderId: conv.memberIds[conv.ownerIdx] } : {}),
     memberCount: conv.memberIds.length,
     isEncrypted: false,
     createdAt: now,
