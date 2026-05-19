@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   app:
     image: node:20-alpine
@@ -12,14 +14,11 @@ services:
     env_file:
       - .env
     depends_on:
-      dynamodb:
-        condition: service_started
-      redis:
-        condition: service_started
-      kafka:
-        condition: service_started
-      elasticsearch:
-        condition: service_started
+      - dynamodb
+      - redis
+      - kafka
+      - elasticsearch
+      - dynamodb-admin
     environment:
       - DYNAMODB_ENDPOINT=http://dynamodb:8000
       - REDIS_HOST=redis
@@ -37,9 +36,9 @@ services:
     container_name: zalogram-dynamodb
     ports:
       - '8000:8000'
-    command: '-jar DynamoDBLocal.jar -sharedDb -dbPath /home/dynamodblocal/data'
+    command: '-jar DynamoDBLocal.jar -sharedDb'
     volumes:
-      - dynamodb-data:/home/dynamodblocal/data
+      - dynamodb-data:/home/dynamodblocal
     networks:
       - zalogram-network
 
