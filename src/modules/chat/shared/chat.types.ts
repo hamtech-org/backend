@@ -131,6 +131,13 @@ export interface IMessage extends TimestampFields {
   readBy?: { userId: string; displayName?: string | null }[];
 }
 
+/** Cursor-based paginated response for message loading (oldest → newest). */
+export interface IMessagePage {
+  items: IMessage[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
 export interface ICreateConversationDto {
   type: ConversationType;
   name?: string;
