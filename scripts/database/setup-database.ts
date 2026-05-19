@@ -318,7 +318,26 @@ const tableDefinitions: CreateTableCommandInput[] = [
     BillingMode: 'PAY_PER_REQUEST',
   },
 
-  // 17. SavedPosts — PK=USER#{userId}, SK=SAVED#{savedAt}#{postId}
+  // 17. LiveSessions — phiên live: SK=META + JOINREQ; GSI-1 danh sách đang live; GSI-2 lookup theo channelName
+  {
+    TableName: tableName('LiveSessions'),
+    KeySchema: [
+      { AttributeName: 'PK', KeyType: HASH },
+      { AttributeName: 'SK', KeyType: RANGE },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: 'PK', AttributeType: S },
+      { AttributeName: 'SK', AttributeType: S },
+      { AttributeName: 'GSI1PK', AttributeType: S },
+      { AttributeName: 'GSI1SK', AttributeType: S },
+      { AttributeName: 'GSI2PK', AttributeType: S },
+      { AttributeName: 'GSI2SK', AttributeType: S },
+    ],
+    GlobalSecondaryIndexes: [gsi('GSI-1', 'GSI1PK', 'GSI1SK'), gsi('GSI-2', 'GSI2PK', 'GSI2SK')],
+    BillingMode: 'PAY_PER_REQUEST',
+  },
+
+  // 18. SavedPosts — PK=USER#{userId}, SK=SAVED#{savedAt}#{postId}
   //     GSI-PostLookup: PK=USER#{userId}, SK=GSI1SK (SAVED#{postId}) — dùng để check/unsave theo postId
   {
     TableName: tableName('SavedPosts'),
@@ -381,6 +400,15 @@ async function setupDatabase(): Promise<void> {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[err]  ${name} — ${message}`);
     }
+  }
+
+  const { TableNames: afterSetup = [] } = await client.send(new ListTablesCommand({}));
+  const liveSessionsTable = tableName('LiveSessions');
+  if (!afterSetup.includes(liveSessionsTable)) {
+    console.error(
+      `\n[CRITICAL] Thieu bang ${liveSessionsTable} (live stream). Kiem tra log [err] phia tren hoac chay lai: npm run db:setup\n`,
+    );
+    process.exit(1);
   }
 
   console.log(

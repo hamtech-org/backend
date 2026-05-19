@@ -14,9 +14,9 @@ export const userIdToAgoraUid = (userId: string): number => {
 export const generateRtcToken = (
   channelName: string,
   userId: string,
+  role = RtcRole.PUBLISHER,
 ): { token: string; uid: number; channel: string } => {
   const uid = userIdToAgoraUid(userId);
-  const role = RtcRole.PUBLISHER;
   const tokenExpirationInSeconds = 3600;
   const privilegeExpirationInSeconds = 3600;
 
