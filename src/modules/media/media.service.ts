@@ -52,7 +52,12 @@ function parseMediaIdFromObjectUrl(urlStr: string): string | null {
 import { assertValidUploadBuffer, assertValidUploadBufferAuto } from './media.validation.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
 import { env } from '@/config/env.js';
-import { deleteObjectKey, getSignedGetUrl, putObject } from '@/shared/services/s3Media.service.js';
+import {
+  deleteObjectKey,
+  getObjectStream,
+  getSignedGetUrl,
+  putObject,
+} from '@/shared/services/s3Media.service.js';
 import {
   buildPrivateCdnUrl,
   buildPublicCdnUrl,
@@ -450,6 +455,26 @@ export const mediaService = {
     const publicUrl = buildPublicCdnUrl(media.s3Key);
     if (publicUrl) return publicUrl;
     return getSignedGetUrl(media.s3Key);
+  },
+
+  /** Stream S3 object — dùng khi client tải file và cần giữ đúng tên gốc. */
+  streamMediaForDownload: async (
+    mediaId: string,
+  ): Promise<{
+    stream: import('node:stream').Readable;
+    contentType: string;
+    contentLength?: number;
+    originalName: string;
+  }> => {
+    const media = await mediaRepository.findById(mediaId);
+    if (!media) throw new NotFoundError('Media');
+    const { stream, contentType, contentLength } = await getObjectStream(media.s3Key);
+    return {
+      stream,
+      contentType: contentType ?? media.mimeType,
+      contentLength,
+      originalName: media.originalName,
+    };
   },
 
   getThumbnailUrl: async (mediaId: string): Promise<string> => {
