@@ -7,6 +7,12 @@ echo "║   Zalogram Backend — Startup         ║"
 echo "╚══════════════════════════════════════╝"
 echo ""
 
+if ! command -v ffprobe >/dev/null 2>&1; then
+  echo "[0/6] Installing ffmpeg..."
+  apk add --no-cache ffmpeg >/dev/null
+  echo ""
+fi
+
 echo "[1/5] Installing dependencies..."
 npm install --prefer-offline --no-audit 2>&1 | tail -1
 echo ""

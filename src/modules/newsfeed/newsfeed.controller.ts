@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { newsfeedService } from './newsfeed.service.js';
 import { sendSuccess, sendCreated } from '@/shared/utils/response.js';
 import { NotFoundError } from '@/shared/utils/errors.js';
-import type { ReactionType } from './newsfeed.types.js';
+import type { ReactionType, ReelFeedKind } from './newsfeed.types.js';
 
 export const newsfeedController = {
   getFeed: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -110,11 +110,119 @@ export const newsfeedController = {
     }
   },
 
-  getReels: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  getReelsFeed: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const feed = (typeof req.query.feed === 'string' ? req.query.feed : 'foryou') as ReelFeedKind;
+      const limit = req.query.limit ? Number(req.query.limit) : undefined;
+      const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+      const page = await newsfeedService.getReelsFeed(req.user!.userId, feed, limit, cursor);
+      sendSuccess(res, page);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  getReelById: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const reel = await newsfeedService.getReelById(req.params.reelId, req.user!.userId);
+      if (!reel) throw new NotFoundError('Reel');
+      sendSuccess(res, reel);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  deleteReel: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await newsfeedService.deleteReel(req.params.reelId, req.user!.userId);
+      sendSuccess(res, null, 'Đã xóa reel');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  recordReelView: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { watchedMs, completed } = req.body as { watchedMs: number; completed?: boolean };
+      await newsfeedService.recordReelView(
+        req.params.reelId,
+        req.user!.userId,
+        watchedMs,
+        completed,
+      );
+      sendSuccess(res, null);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  toggleSaveReel: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await newsfeedService.toggleSaveReel(req.params.reelId, req.user!.userId);
+      sendSuccess(res, result, result.isSaved ? 'Đã lưu reel' : 'Đã bỏ lưu reel');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  reportReel: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await newsfeedService.reportReel(req.params.reelId, req.user!.userId, req.body);
+      sendSuccess(res, null, 'Đã gửi báo cáo');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  getReelComments: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const limit = req.query.limit ? Number(req.query.limit) : undefined;
-      const reels = await newsfeedService.getReels(limit);
-      sendSuccess(res, reels);
+      const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+      const parentId = typeof req.query.parentId === 'string' ? req.query.parentId : null;
+      const page = await newsfeedService.getReelComments(
+        req.params.reelId,
+        req.user!.userId,
+        limit,
+        cursor,
+        parentId,
+      );
+      sendSuccess(res, page);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  addReelComment: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { content, parentId, mediaUrls } = req.body as {
+        content?: string;
+        parentId?: string;
+        mediaUrls?: string[];
+      };
+      const comment = await newsfeedService.addReelComment(
+        req.params.reelId,
+        req.user!.userId,
+        content,
+        parentId,
+        mediaUrls,
+      );
+      sendCreated(res, comment, 'Thêm bình luận thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  getReelsByAuthor: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const limit = req.query.limit ? Number(req.query.limit) : undefined;
+      const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+      const page = await newsfeedService.getReelsByAuthor(
+        req.params.authorId,
+        req.user!.userId,
+        limit,
+        cursor,
+      );
+      sendSuccess(res, page);
     } catch (error) {
       next(error);
     }
@@ -139,6 +247,21 @@ export const newsfeedController = {
     try {
       const { type } = req.body as { type: ReactionType };
       const summary = await newsfeedService.reactToReel(req.params.reelId, req.user!.userId, type);
+      sendSuccess(res, summary, 'Đã thả cảm xúc');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  reactToReelComment: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { type } = req.body as { type: ReactionType };
+      const summary = await newsfeedService.reactToReelComment(
+        req.params.reelId,
+        req.params.commentId,
+        req.user!.userId,
+        type,
+      );
       sendSuccess(res, summary, 'Đã thả cảm xúc');
     } catch (error) {
       next(error);

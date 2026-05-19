@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH"
+
 DEPLOY_DIR="/opt/hamtech/backend-deploy"
 cd "${DEPLOY_DIR}"
 
@@ -30,5 +32,9 @@ aws ecr get-login-password --region "${AWS_REGION}" \
 export ECR_REPO_WITH_TAG="${ECR_IMAGE}"
 
 docker compose -f docker-compose.prod.yml pull
+
+echo "Running database migrations..."
+docker compose -f docker-compose.prod.yml run --rm app npm run db:migrate
+
 docker compose -f docker-compose.prod.yml up -d --remove-orphans
 docker image prune -f

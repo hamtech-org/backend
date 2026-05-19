@@ -42,6 +42,7 @@ Tat ca file trong `data/`:
 - `Reactions.json`
 - `Comments.json`
 - `Reels.json`
+- `Reports.json`
 - `Notifications.json`
 - `ModerationLogs.json`
 - `Analytics.json`
