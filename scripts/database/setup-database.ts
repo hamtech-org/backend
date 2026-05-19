@@ -243,8 +243,13 @@ const tableDefinitions: CreateTableCommandInput[] = [
       { AttributeName: 'SK', AttributeType: S },
       { AttributeName: 'authorId', AttributeType: S },
       { AttributeName: 'createdAt', AttributeType: S },
+      { AttributeName: 'GSI2PK', AttributeType: S },
+      { AttributeName: 'GSI2SK', AttributeType: S },
     ],
-    GlobalSecondaryIndexes: [gsi('GSI-1', 'authorId', 'createdAt')],
+    GlobalSecondaryIndexes: [
+      gsi('GSI-1', 'authorId', 'createdAt'),
+      gsi('GSI-2', 'GSI2PK', 'GSI2SK'),
+    ],
     BillingMode: 'PAY_PER_REQUEST',
   },
 
@@ -332,6 +337,20 @@ const tableDefinitions: CreateTableCommandInput[] = [
       { AttributeName: 'GSI1SK', AttributeType: S },
     ],
     GlobalSecondaryIndexes: [gsi('GSI-PostLookup', 'PK', 'GSI1SK')],
+    BillingMode: 'PAY_PER_REQUEST',
+  },
+
+  // 18. Reports — PK={entityType}#{entityId}, SK=REPORT#{createdAt}#{reporterId}
+  {
+    TableName: tableName('Reports'),
+    KeySchema: [
+      { AttributeName: 'PK', KeyType: HASH },
+      { AttributeName: 'SK', KeyType: RANGE },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: 'PK', AttributeType: S },
+      { AttributeName: 'SK', AttributeType: S },
+    ],
     BillingMode: 'PAY_PER_REQUEST',
   },
 ];

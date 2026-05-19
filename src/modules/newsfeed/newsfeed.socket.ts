@@ -33,4 +33,17 @@ export const registerNewsfeedHandlers = (_io: Server, socket: Socket): void => {
     void socket.leave(`reel:${reelId}`);
     logger.debug(`Socket ${socket.id} left reel:${reelId}`);
   });
+
+  // Client đăng ký nhận reel_new từ followers
+  socket.on('newsfeed:user_subscribe', ({ userId }: { userId: string }) => {
+    if (!userId) return;
+    void socket.join(`user:${userId}`);
+    logger.debug(`Socket ${socket.id} subscribed to user:${userId}`);
+  });
+
+  socket.on('newsfeed:user_unsubscribe', ({ userId }: { userId: string }) => {
+    if (!userId) return;
+    void socket.leave(`user:${userId}`);
+    logger.debug(`Socket ${socket.id} unsubscribed from user:${userId}`);
+  });
 };
