@@ -26,6 +26,7 @@ import {
   resolveMessageHistoryMinCreatedAtMs,
   filterMessagesByJoinHistoryCutoff,
 } from '../shared/chat.helpers.js';
+import { formatGroupJoinLinkListPreview } from '../shared/group-join-link-message.js';
 
 async function emitMessageSearchIndexEvent(payload: {
   action: 'index' | 'update' | 'delete';
@@ -506,9 +507,12 @@ export const messageService = {
       replyToDetails: await refreshReplyMediaDelivery(messageWithFreshMedia.replyToDetails ?? null),
     };
 
+    const trimmedContent = message.content.trim();
+    const joinLinkPreview =
+      message.type === 'text' ? formatGroupJoinLinkListPreview(trimmedContent) : null;
     const lastPreviewContent =
-      message.content.trim() !== ''
-        ? message.content.trim()
+      trimmedContent !== ''
+        ? (joinLinkPreview ?? trimmedContent)
         : message.type === 'image'
           ? '[Ảnh]'
           : message.type === 'video'
