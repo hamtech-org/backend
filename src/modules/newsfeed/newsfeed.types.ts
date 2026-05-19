@@ -71,7 +71,7 @@ export interface IReel {
   reelId: string;
   authorId: string;
   videoUrl: string;
-  thumbnailUrl: string;
+  thumbnailUrl: string | null;
   caption: string;
   /** @deprecated Use durationMs instead. Kept for backward compatibility. */
   duration?: number;
@@ -109,8 +109,8 @@ export interface ICreatePostDto {
 
 export interface ICreateReelDto {
   videoUrl: string;
-  thumbnailUrl: string;
-  caption: string;
+  thumbnailUrl?: string | null;
+  caption?: string;
   durationMs: number;
   width: number;
   height: number;

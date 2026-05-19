@@ -66,6 +66,35 @@ const computeReelEngagementScore = (reel: IReel, now: number): number => {
   );
 };
 
+const resolveReelAspectRatio = (
+  width: number,
+  height: number,
+  fallback?: ICreateReelDto['aspectRatio'],
+): NonNullable<ICreateReelDto['aspectRatio']> => {
+  if (width > 0 && height > 0) {
+    const ratio = width / height;
+    if (ratio <= 0.7) return '9:16';
+    if (ratio <= 0.9) return '4:5';
+    return '1:1';
+  }
+  return fallback ?? '9:16';
+};
+
+const encodeDynamoCursor = (key: Record<string, unknown>): string =>
+  Buffer.from(JSON.stringify(key), 'utf8').toString('base64url');
+
+const decodeDynamoCursor = (cursor?: string): Record<string, unknown> | undefined => {
+  if (!cursor) return undefined;
+  try {
+    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const emitPostIndexEvent = async (event: ISearchIndexEvent): Promise<void> => {
   try {
     const producer = getKafkaProducer();
@@ -662,8 +691,16 @@ export const newsfeedService = {
       throw new ForbiddenError('Không thể dùng video của người khác');
     }
 
-    const hashtags = extractHashtagsFromText(data.caption);
-    const mentions = extractMentionsFromText(data.caption);
+    const durationMs = media.durationMs ?? data.durationMs;
+    const width = media.width ?? data.width;
+    const height = media.height ?? data.height;
+    if (durationMs > 600000) {
+      throw new ValidationError('Video vượt quá giới hạn 10 phút');
+    }
+
+    const caption = data.caption ?? '';
+    const hashtags = extractHashtagsFromText(caption);
+    const mentions = extractMentionsFromText(caption);
 
     const now = new Date().toISOString();
     const reelId = uuidv4();
@@ -671,12 +708,12 @@ export const newsfeedService = {
       reelId,
       authorId,
       videoUrl: data.videoUrl,
-      thumbnailUrl: data.thumbnailUrl,
-      caption: data.caption,
-      durationMs: data.durationMs,
-      width: data.width,
-      height: data.height,
-      aspectRatio: data.aspectRatio ?? '9:16',
+      thumbnailUrl: media.thumbnailUrl ?? data.thumbnailUrl ?? null,
+      caption,
+      durationMs,
+      width,
+      height,
+      aspectRatio: resolveReelAspectRatio(width, height, data.aspectRatio),
       visibility: data.visibility ?? 'public',
       processingStatus: 'ready',
       hashtags,
@@ -855,7 +892,7 @@ export const newsfeedService = {
     watchedMs: number,
     completed?: boolean,
   ): Promise<void> => {
-    const reel = await newsfeedRepository.getReelById(reelId);
+    const reel = await newsfeedService.getReelById(reelId, viewerUserId);
     if (!reel) throw new NotFoundError('Reel');
 
     // Don't count views from author themselves
@@ -897,7 +934,7 @@ export const newsfeedService = {
   },
 
   reportReel: async (reelId: string, reporterId: string, dto: IReportReelDto): Promise<void> => {
-    const reel = await newsfeedRepository.getReelById(reelId);
+    const reel = await newsfeedService.getReelById(reelId, reporterId);
     if (!reel) throw new NotFoundError('Reel');
     await newsfeedRepository.createReport({
       reportId: uuidv4(),
@@ -1003,9 +1040,14 @@ export const newsfeedService = {
     authorId: string,
     viewerUserId: string,
     limit?: number,
-  ): Promise<IReel[]> => {
+    cursor?: string,
+  ): Promise<IReelFeedPage> => {
     const pageSize = Math.max(1, Math.min(limit ?? 20, 50));
-    const { items } = await newsfeedRepository.listReelsByAuthor(authorId, pageSize);
+    const { items, lastEvaluatedKey } = await newsfeedRepository.listReelsByAuthor(
+      authorId,
+      pageSize,
+      decodeDynamoCursor(cursor),
+    );
     const hasFriendsReels = items.some(
       (r) => (r.visibility ?? 'public') === 'friends' && r.authorId !== viewerUserId,
     );
@@ -1019,7 +1061,13 @@ export const newsfeedService = {
       if (v === 'private') return r.authorId === viewerUserId;
       return r.authorId === viewerUserId || isFriendOfAuthor;
     });
-    return newsfeedService.enrichReels(visible, viewerUserId);
+    const enriched = await newsfeedService.enrichReels(visible, viewerUserId);
+    const hasMore = Boolean(lastEvaluatedKey);
+    return {
+      items: enriched,
+      nextCursor: hasMore && lastEvaluatedKey ? encodeDynamoCursor(lastEvaluatedKey) : null,
+      hasMore,
+    };
   },
 
   reactToComment: async (

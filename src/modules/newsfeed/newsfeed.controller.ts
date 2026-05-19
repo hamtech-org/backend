@@ -215,12 +215,14 @@ export const newsfeedController = {
   getReelsByAuthor: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const limit = req.query.limit ? Number(req.query.limit) : undefined;
-      const reels = await newsfeedService.getReelsByAuthor(
+      const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+      const page = await newsfeedService.getReelsByAuthor(
         req.params.authorId,
         req.user!.userId,
         limit,
+        cursor,
       );
-      sendSuccess(res, reels);
+      sendSuccess(res, page);
     } catch (error) {
       next(error);
     }
