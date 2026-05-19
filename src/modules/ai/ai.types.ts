@@ -112,6 +112,23 @@ export type AiAssistantClientAction =
       };
     }
   | {
+      type: 'show_message_results';
+      payload: {
+        source: 'search_messages';
+        query: string;
+        messages: Array<{
+          resultKey?: string;
+          messageId: string;
+          conversationId: string;
+          conversationName?: string | null;
+          senderId: string;
+          senderDisplayName?: string | null;
+          content: string;
+          createdAt: string;
+        }>;
+      };
+    }
+  | {
       type: 'confirm_tool';
       payload: {
         pendingId: string;
