@@ -339,6 +339,20 @@ const tableDefinitions: CreateTableCommandInput[] = [
     GlobalSecondaryIndexes: [gsi('GSI-PostLookup', 'PK', 'GSI1SK')],
     BillingMode: 'PAY_PER_REQUEST',
   },
+
+  // 18. Reports — PK={entityType}#{entityId}, SK=REPORT#{createdAt}#{reporterId}
+  {
+    TableName: tableName('Reports'),
+    KeySchema: [
+      { AttributeName: 'PK', KeyType: HASH },
+      { AttributeName: 'SK', KeyType: RANGE },
+    ],
+    AttributeDefinitions: [
+      { AttributeName: 'PK', AttributeType: S },
+      { AttributeName: 'SK', AttributeType: S },
+    ],
+    BillingMode: 'PAY_PER_REQUEST',
+  },
 ];
 
 const TTL_TABLES: Record<string, string> = {
