@@ -4,6 +4,7 @@ import { sendSuccess } from '@/shared/utils/response.js';
 import { getIO } from '@/socket/index.js';
 import { emitToConversationAndMembers } from '../shared/chat.broadcast.js';
 import { groupService } from '../group/group.service.js';
+import { syncAssignToAllTasksAndNotify } from '../task/task-membership-sync.js';
 
 export const memberRequestController = {
   joinRequest: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -25,7 +26,10 @@ export const memberRequestController = {
 
   getGroupRequests: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const requests = await memberRequestService.getGroupRequests(req.params.groupId, req.user!.userId);
+      const requests = await memberRequestService.getGroupRequests(
+        req.params.groupId,
+        req.user!.userId,
+      );
       sendSuccess(res, requests);
     } catch (error) {
       console.error('[getGroupRequests]', error);
@@ -40,9 +44,10 @@ export const memberRequestController = {
         req.user!.userId,
         req.params.userId,
       );
+      const gid = req.params.groupId;
+      await syncAssignToAllTasksAndNotify(gid);
       try {
         const io = getIO();
-        const gid = req.params.groupId;
         const uid = req.params.userId;
         const joinedPayload = {
           groupId: gid,
@@ -63,7 +68,9 @@ export const memberRequestController = {
           memberCount,
           joinedAt,
         });
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       sendSuccess(res, null, 'Đã duyệt thành viên');
     } catch (error) {
       console.error('[approveRequest]', error);
@@ -73,13 +80,21 @@ export const memberRequestController = {
 
   rejectRequest: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      await memberRequestService.rejectRequest(req.params.groupId, req.user!.userId, req.params.userId);
+      await memberRequestService.rejectRequest(
+        req.params.groupId,
+        req.user!.userId,
+        req.params.userId,
+      );
       try {
-        getIO().to(`user:${req.params.userId}`).emit('group:request_rejected', { groupId: req.params.groupId });
+        getIO()
+          .to(`user:${req.params.userId}`)
+          .emit('group:request_rejected', { groupId: req.params.groupId });
         await emitToConversationAndMembers(req.params.groupId, 'group:join_request_updated', {
           groupId: req.params.groupId,
         });
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       sendSuccess(res, null, 'Đã từ chối yêu cầu');
     } catch (error) {
       console.error('[rejectRequest]', error);
