@@ -64,7 +64,7 @@ export const searchService = {
         track_total_hits: true,
       });
 
-      const items: ISearchMessageResult[] = result.hits.hits.map((hit) => {
+      const rawItems: ISearchMessageResult[] = result.hits.hits.map((hit) => {
         const source = hit._source as ISearchMessageResult;
         return {
           messageId: source.messageId,
@@ -74,6 +74,17 @@ export const searchService = {
           createdAt: source.createdAt,
         };
       });
+      const senderIds = [...new Set(rawItems.map((item) => item.senderId).filter(Boolean))];
+      const senders = await userRepository.findByIds(senderIds);
+      const senderNameById = new Map(senders.map((user) => [user.userId, user.displayName]));
+      const conversationNameById = new Map(
+        convs.map((conversation) => [conversation.conversationId, conversation.name ?? null]),
+      );
+      const items = rawItems.map((item) => ({
+        ...item,
+        conversationName: conversationNameById.get(item.conversationId) ?? null,
+        senderDisplayName: senderNameById.get(item.senderId) ?? null,
+      }));
 
       const total =
         typeof result.hits.total === 'number' ? result.hits.total : result.hits.total?.value || 0;
