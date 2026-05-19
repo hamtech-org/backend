@@ -6,7 +6,7 @@ dotenv.config();
 
 const NODE = process.env.ELASTICSEARCH_NODE ?? 'http://localhost:9200';
 
-const MAX_RETRIES = 15;
+const MAX_RETRIES = 30;
 const BASE_DELAY_MS = 2_000;
 
 const client = new Client({
@@ -29,9 +29,12 @@ async function waitForElasticsearch(): Promise<void> {
       await client.ping();
       console.log(`Elasticsearch is ready! (attempt ${attempt}/${MAX_RETRIES})\n`);
       process.exit(0);
-    } catch {
+    } catch (err) {
       const delay = Math.min(BASE_DELAY_MS * attempt, 10_000);
-      console.log(`  [${attempt}/${MAX_RETRIES}] Not ready — retrying in ${delay / 1000}s...`);
+      const msg = err instanceof Error ? err.message : String(err);
+      console.log(
+        `  [${attempt}/${MAX_RETRIES}] Not ready (${msg}) — retrying in ${delay / 1000}s...`,
+      );
       await sleep(delay);
     }
   }
