@@ -18,6 +18,7 @@ import aiRoutes from '@/modules/ai/ai.routes.js';
 import adminRoutes from '@/modules/admin/admin.routes.js';
 import searchRoutes from '@/modules/search/search.routes.js';
 import agoraRoutes from '@/modules/agora/agora.routes.js';
+import notificationRoutes from '@/modules/notification/notification.routes.js';
 import liveRoutes from '@/modules/live/live.routes.js';
 
 const app = express();
@@ -65,6 +66,7 @@ app.use(`${API_PREFIX}/ai`, aiRoutes);
 app.use(`${API_PREFIX}/admin`, adminRoutes);
 app.use(`${API_PREFIX}/search`, searchRoutes);
 app.use(`${API_PREFIX}/agora`, agoraRoutes);
+app.use(`${API_PREFIX}/notifications`, notificationRoutes);
 app.use(`${API_PREFIX}/live`, liveRoutes);
 
 // --- Error handler---

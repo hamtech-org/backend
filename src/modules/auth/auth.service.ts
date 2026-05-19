@@ -26,6 +26,7 @@ import {
   emitAuthSessionsChanged,
   emitNewDeviceLogin,
 } from '@/socket/sessionRevoke.notify.js';
+import { notificationService } from '@/modules/notification/notification.service.js';
 import type { ForceLogoutReason } from '@/socket/sessionRevoke.notify.js';
 import type { JwtAccessPayload, JwtRefreshPayload } from '@/shared/types/auth.types.js';
 import type {
@@ -167,6 +168,21 @@ const createNewSession = async (
   await authRepository.createSession(session);
   emitAuthSessionsChanged(user.userId);
   emitNewDeviceLogin(user.userId, { sessionId: session.sessionId, ipAddress: meta.ipAddress });
+  void notificationService
+    .dispatch({
+      type: 'system',
+      userId: user.userId,
+      title: 'Đăng nhập thiết bị mới',
+      body: meta.ipAddress
+        ? `Phát hiện đăng nhập từ IP ${meta.ipAddress}`
+        : 'Phát hiện đăng nhập từ thiết bị mới',
+      data: {
+        route: 'profile',
+        id: user.userId,
+        extra: { sessionId: session.sessionId, kind: 'new_device_login' },
+      },
+    })
+    .catch((err) => logger.error('new_device_login notification failed:', err));
 };
 
 /**

@@ -9,6 +9,7 @@ import { logger } from '@/shared/utils/logger.js';
 import { NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
 import { extractHashtagsFromText, extractMentionsFromText } from '@/shared/utils/hashtags.js';
 import { getIO } from '@/socket/index.js';
+import { notificationService } from '@/modules/notification/notification.service.js';
 import type {
   IPost,
   IComment,
@@ -544,6 +545,34 @@ export const newsfeedService = {
     } catch (err) {
       logger.error('Failed to emit newsfeed:post_reacted', err);
     }
+
+    if (nextUserReaction && post.authorId !== userId) {
+      const reactor = await userRepository.findById(userId);
+      void notificationService
+        .dispatch({
+          type: 'post_reaction',
+          userId: post.authorId,
+          title: 'Tương tác bài viết',
+          body: `${reactor?.displayName ?? 'Ai đó'} đã ${nextUserReaction} bài viết của bạn`,
+          data: {
+            route: 'post',
+            id: postId,
+            entityType: 'post',
+            entityId: postId,
+            deepLink: `/?postId=${postId}`,
+            actorId: userId,
+            actorName: reactor?.displayName ?? undefined,
+            actorAvatar: reactor?.avatar ?? null,
+            extra: {
+              reactionType: nextUserReaction,
+              actorId: userId,
+              actorName: reactor?.displayName,
+            },
+          },
+        })
+        .catch((e) => logger.error('post_reaction notification failed', e));
+    }
+
     return summary;
   },
 
@@ -630,6 +659,30 @@ export const newsfeedService = {
     }
 
     const enriched = await newsfeedService.attachCommentAuthorInfo([comment]);
+
+    if (post.authorId !== authorId) {
+      const commenter = enriched[0]?.author;
+      void notificationService
+        .dispatch({
+          type: 'post_comment',
+          userId: post.authorId,
+          title: 'Bình luận mới',
+          body: `${commenter?.displayName ?? 'Ai đó'} đã bình luận bài viết của bạn`,
+          data: {
+            route: 'post',
+            id: postId,
+            entityType: 'post',
+            entityId: postId,
+            deepLink: `/?postId=${postId}`,
+            actorId: authorId,
+            actorName: commenter?.displayName,
+            actorAvatar: commenter?.avatar ?? null,
+            extra: { commentId, actorId: authorId },
+          },
+        })
+        .catch((e) => logger.error('post_comment notification failed', e));
+    }
+
     return enriched[0];
   },
 
@@ -750,11 +803,31 @@ export const newsfeedService = {
     try {
       const followerIds = await userRepository.getFriendIds(authorId, 200);
       const io = getIO();
+      const author = await userRepository.findById(authorId);
       for (const followerId of followerIds) {
         io.to(`user:${followerId}`).emit('newsfeed:reel_new', {
           reelId,
           authorId,
         });
+        void notificationService
+          .dispatch({
+            type: 'reel_new',
+            userId: followerId,
+            title: 'Reel mới',
+            body: `${author?.displayName ?? 'Ai đó'} vừa đăng reel mới`,
+            data: {
+              route: 'reel',
+              id: reelId,
+              entityType: 'reel',
+              entityId: reelId,
+              deepLink: `/reels/${reelId}`,
+              actorId: authorId,
+              actorName: author?.displayName,
+              actorAvatar: author?.avatar ?? null,
+              extra: { authorId },
+            },
+          })
+          .catch((e) => logger.error('reel_new notification failed', e));
       }
     } catch (err) {
       logger.error('Failed to emit newsfeed:reel_new', err);
@@ -1030,6 +1103,30 @@ export const newsfeedService = {
         });
     } catch (err) {
       logger.error('Failed to emit newsfeed:reel_commented', err);
+    }
+
+    const reel = await newsfeedRepository.getReelById(reelId);
+    if (reel && reel.authorId !== authorId) {
+      const commenter = await userRepository.findById(authorId);
+      void notificationService
+        .dispatch({
+          type: 'reel_comment',
+          userId: reel.authorId,
+          title: 'Bình luận reel',
+          body: `${commenter?.displayName ?? 'Ai đó'} đã bình luận reel của bạn`,
+          data: {
+            route: 'reel',
+            id: reelId,
+            entityType: 'reel',
+            entityId: reelId,
+            deepLink: `/reels/${reelId}`,
+            actorId: authorId,
+            actorName: commenter?.displayName,
+            actorAvatar: commenter?.avatar ?? null,
+            extra: { commentId, actorId: authorId },
+          },
+        })
+        .catch((e) => logger.error('reel_comment notification failed', e));
     }
 
     const [enriched] = await newsfeedService.attachCommentAuthorInfo([comment]);
