@@ -551,13 +551,26 @@ export const messageService = {
         conversationRepository.updateMemberUnreadCount(conversationId, m.userId, 1),
       ),
       kafkaProducer.send(KAFKA_TOPICS.NOTIFICATION_EVENTS, {
-        type: 'NEW_MESSAGE',
-        payload: {
-          conversationId,
-          senderId,
-          messageId,
-          messagePreview: lastPreviewContent.slice(0, 100),
-          recipientIds: pushRecipientIds,
+        type: 'message',
+        recipientIds: pushRecipientIds,
+        title: senderDisplayName ?? 'Tin nhắn mới',
+        body: lastPreviewContent.slice(0, 100) || 'Bạn có tin nhắn mới',
+        data: {
+          route: 'chat',
+          id: conversationId,
+          entityType: 'chat',
+          entityId: conversationId,
+          deepLink: `/chat/${conversationId}`,
+          actorId: senderId,
+          actorName: senderDisplayName ?? undefined,
+          actorAvatar: senders[0]?.avatar ?? null,
+          extra: {
+            messageId,
+            senderId,
+            actorId: senderId,
+            actorName: senderDisplayName,
+            actorAvatar: senders[0]?.avatar ?? null,
+          },
         },
       }),
       emitMessageSearchIndexEvent({
