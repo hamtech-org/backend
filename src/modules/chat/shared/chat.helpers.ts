@@ -6,6 +6,7 @@ import type {
   IConversation,
 } from './chat.types.js';
 import { userRepository } from '@/modules/user/user.repository.js';
+import { formatGroupJoinLinkListPreview } from './group-join-link-message.js';
 
 /**
  * Thành viên đang tắt thông báo **push** (giống Zalo): tin vẫn lưu DB, socket `message:new` vẫn tới app.
@@ -98,6 +99,9 @@ export async function messageToLastMessageSnapshot(m: IMessage): Promise<ILastMe
     const name = m.mediaOriginalName?.trim();
     if (name) content = name;
     else if (!trimmed || trimmed === '[File]') content = 'Tệp tin';
+  } else if (m.type === 'text') {
+    const joinPreview = formatGroupJoinLinkListPreview(content);
+    if (joinPreview) content = joinPreview;
   }
   const senders = await userRepository.findByIds([m.senderId]);
   const senderDisplayName = senders[0]?.displayName?.trim() ?? null;
