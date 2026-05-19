@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH"
+
 DEPLOY_DIR="/opt/hamtech/backend-deploy"
 cd "${DEPLOY_DIR}"
 
