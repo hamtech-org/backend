@@ -544,6 +544,60 @@ export const conversationRepository = {
     );
   },
 
+  setPinnedMessageCount: async (conversationId: string, count: number): Promise<void> => {
+    const safe = Math.max(0, Math.floor(count));
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: 'META' },
+        UpdateExpression: 'SET pinnedMessageCount = :c, updatedAt = :now',
+        ExpressionAttributeValues: {
+          ':c': safe,
+          ':now': new Date().toISOString(),
+        },
+      }),
+    );
+  },
+
+  /**
+   * Đếm tin ghim còn hiệu lực (không thu hồi / không xóa).
+   * Dùng để sửa lệch `pinnedMessageCount` trên META so với thực tế.
+   */
+  countActivePinnedMessages: async (conversationId: string): Promise<number> => {
+    const PIN_FILTER =
+      'isPinned = :pinned AND (attribute_not_exists(isRecalled) OR isRecalled = :false) AND (attribute_not_exists(isDeleted) OR isDeleted = :false)';
+    let count = 0;
+    let exclusiveStartKey: Record<string, unknown> | undefined;
+    const PAGE = 80;
+    let rounds = 0;
+
+    while (rounds < 40) {
+      rounds += 1;
+      const result = await dynamoClient.send(
+        new QueryCommand({
+          TableName: MESSAGES_TABLE,
+          KeyConditionExpression: 'PK = :pk',
+          FilterExpression: PIN_FILTER,
+          ExpressionAttributeValues: {
+            ':pk': `CONV#${conversationId}`,
+            ':pinned': true,
+            ':false': false,
+          },
+          Limit: PAGE,
+          ScanIndexForward: false,
+          ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
+        }),
+      );
+
+      const items = (result.Items as IMessage[]) ?? [];
+      count += items.length;
+      exclusiveStartKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+      if (!exclusiveStartKey) break;
+    }
+
+    return count;
+  },
+
   updateMemberPreferences: async (
     conversationId: string,
     userId: string,

@@ -41,6 +41,14 @@ export type GroupSystemPayload =
       actor: GroupSystemPerson;
       target: GroupSystemPerson;
       selfDemote?: boolean;
+    }
+  | {
+      kind: 'group_profile_updated';
+      actor: GroupSystemPerson;
+      previousName?: string;
+      newName?: string;
+      nameChanged?: boolean;
+      avatarChanged?: boolean;
     };
 
 export function buildGroupMemberInvitedContent(
@@ -125,6 +133,26 @@ export function buildGroupAdminDemotedContent(
     actor,
     target,
     ...(selfDemote ? { selfDemote: true } : {}),
+  };
+  return JSON.stringify(payload);
+}
+
+export function buildGroupProfileUpdatedContent(
+  actor: GroupSystemPerson,
+  opts: {
+    previousName?: string;
+    newName?: string;
+    nameChanged: boolean;
+    avatarChanged: boolean;
+  },
+): string {
+  const payload: GroupSystemPayload = {
+    kind: 'group_profile_updated',
+    actor,
+    ...(opts.previousName ? { previousName: opts.previousName } : {}),
+    ...(opts.newName ? { newName: opts.newName } : {}),
+    nameChanged: opts.nameChanged,
+    avatarChanged: opts.avatarChanged,
   };
   return JSON.stringify(payload);
 }

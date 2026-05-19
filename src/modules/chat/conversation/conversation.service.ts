@@ -14,6 +14,7 @@ import {
   isConversationNotificationPushMuted,
 } from '../shared/chat.helpers.js';
 import { createAndBroadcastSystemMessage } from '../shared/system-message.factory.js';
+import { createInitialGroupSettings } from '../group/group.service.js';
 
 /** Nhóm đã giải tán không hiển thị trong danh sách hội thoại (kể cả khi còn sót bản ghi MEMBER#). */
 function filterDisbandedGroupsFromList(conversations: IConversation[]): IConversation[] {
@@ -124,6 +125,8 @@ export const conversationService = {
     const now = new Date().toISOString();
     const conversationId = uuidv4();
 
+    const initialGroupSettings = data.type === 'group' ? createInitialGroupSettings() : undefined;
+
     const conversation: IConversation = {
       conversationId,
       type: data.type,
@@ -131,6 +134,7 @@ export const conversationService = {
       ...(data.avatar != null && data.avatar.trim() !== '' ? { avatar: data.avatar.trim() } : {}),
       creatorId,
       ...(data.type === 'group' ? { leaderId: creatorId } : {}),
+      ...(initialGroupSettings ? { groupSettings: initialGroupSettings } : {}),
       memberCount: allMemberIds.length,
       isEncrypted: false,
       createdAt: now,
@@ -138,6 +142,13 @@ export const conversationService = {
     };
 
     await conversationRepository.createConversation(conversation);
+
+    if (initialGroupSettings?.joinLinkSuffix) {
+      await conversationRepository.upsertJoinLinkLookup(
+        conversationId,
+        initialGroupSettings.joinLinkSuffix,
+      );
+    }
 
     // Thêm tất cả thành viên
     await Promise.all(
