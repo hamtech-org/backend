@@ -15,6 +15,7 @@ import { logger } from '@/shared/utils/logger.js';
 import { putObject, deleteObjectKey, getSignedGetUrl } from '@/shared/services/s3Media.service.js';
 import { v4 as uuidv4 } from 'uuid';
 import { buildPublicCdnUrl } from '@/shared/services/cloudfrontSigner.service.js';
+import { notificationService } from '@/modules/notification/notification.service.js';
 
 /**
  * Emit search index event to Kafka for Elasticsearch synchronization
@@ -212,11 +213,33 @@ export const userService = {
         senderAvatar: sender?.avatar || null,
         timestamp: new Date(),
       };
-      console.log(`📤 Emitting friendRequest:new to user:${receiverId}`, payload);
       io.to(`user:${receiverId}`).emit('friendRequest:new', payload);
+      void notificationService
+        .dispatch({
+          type: 'friend_request',
+          userId: receiverId,
+          title: 'Lời mời kết bạn',
+          body: `${payload.senderName} đã gửi lời mời kết bạn`,
+          data: {
+            route: 'friends',
+            id: senderId,
+            entityType: 'friends',
+            entityId: senderId,
+            deepLink: '/community',
+            actorId: senderId,
+            actorName: payload.senderName,
+            actorAvatar: payload.senderAvatar,
+            extra: {
+              senderAvatar: payload.senderAvatar,
+              actorId: senderId,
+              actorName: payload.senderName,
+              actorAvatar: payload.senderAvatar,
+            },
+          },
+        })
+        .catch((err) => logger.error('Friend request notification failed:', err));
     } catch (error) {
       logger.error('Failed to emit socket event for friend request:', error);
-      console.error('❌ Socket emit error:', error);
     }
 
     return 'Lời mời kết bạn đã được gửi';
@@ -249,6 +272,31 @@ export const userService = {
         friendId: senderId,
         timestamp: new Date(),
       });
+
+      const accepter = await userRepository.findById(userId);
+      void notificationService
+        .dispatch({
+          type: 'friend_accepted',
+          userId: senderId,
+          title: 'Kết bạn thành công',
+          body: `${accepter?.displayName ?? 'Ai đó'} đã chấp nhận lời mời kết bạn`,
+          data: {
+            route: 'friends',
+            id: userId,
+            entityType: 'friends',
+            entityId: userId,
+            deepLink: '/community',
+            actorId: userId,
+            actorName: accepter?.displayName ?? undefined,
+            actorAvatar: accepter?.avatar ?? null,
+            extra: {
+              actorId: userId,
+              actorName: accepter?.displayName,
+              actorAvatar: accepter?.avatar ?? null,
+            },
+          },
+        })
+        .catch((err) => logger.error('Friend accepted notification failed:', err));
     } catch (error) {
       logger.error('Failed to emit socket events for accept friend request:', error);
     }
