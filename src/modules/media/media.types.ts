@@ -49,6 +49,11 @@ export interface IMedia extends TimestampFields {
   mimeType: AllowedMimeType;
   size: number;
   originalName: string;
+  durationMs?: number;
+  width?: number;
+  height?: number;
+  codec?: string | null;
+  bitrate?: number | null;
 }
 
 export interface IUploadResult {
@@ -60,4 +65,9 @@ export interface IUploadResult {
   type: MediaType;
   size: number;
   mimeType: AllowedMimeType;
+  durationMs?: number;
+  width?: number;
+  height?: number;
+  codec?: string | null;
+  bitrate?: number | null;
 }

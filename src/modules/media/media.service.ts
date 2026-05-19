@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
+﻿import { v4 as uuidv4 } from 'uuid';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -51,6 +51,7 @@ function parseMediaIdFromObjectUrl(urlStr: string): string | null {
 }
 import { assertValidUploadBuffer, assertValidUploadBufferAuto } from './media.validation.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
+import { logger } from '@/shared/utils/logger.js';
 import { env } from '@/config/env.js';
 import {
   deleteObjectKey,
@@ -124,14 +125,18 @@ async function maybeThumbnailBuffer(
   mime: string,
   buffer: Buffer,
 ): Promise<Buffer | null> {
-  if (declaredType !== 'image') return null;
-  if (!mime.startsWith('image/')) return null;
   try {
-    return await sharp(buffer)
-      .rotate()
-      .resize(400, 400, { fit: 'inside' })
-      .jpeg({ quality: 82 })
-      .toBuffer();
+    if (declaredType === 'image' && mime.startsWith('image/')) {
+      return await sharp(buffer)
+        .rotate()
+        .resize(400, 400, { fit: 'inside' })
+        .jpeg({ quality: 82 })
+        .toBuffer();
+    }
+    if (declaredType === 'video' && mime.startsWith('video/')) {
+      return await extractVideoThumbnail(buffer, mime);
+    }
+    return null;
   } catch {
     return null;
   }
@@ -206,6 +211,18 @@ async function processOneFile(
   const origKey = s3OriginalKey(uploaderId, mediaId, ext, scope);
   const thumbKey = s3ThumbKey(uploaderId, mediaId, scope);
   const visibility = inferVisibility(scope);
+  let videoMetadata: VideoProbeResult | null = null;
+  if (mediaType === 'video') {
+    try {
+      videoMetadata = await videoProbe(buffer, mimeType);
+    } catch (error) {
+      logger.warn('Video metadata probe failed; continuing upload without server metadata', {
+        mediaId,
+        mimeType,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 
   await putObject({
     key: origKey,
@@ -254,6 +271,15 @@ async function processOneFile(
     mimeType,
     size,
     originalName: file.originalname,
+    ...(videoMetadata
+      ? {
+          durationMs: videoMetadata.durationMs,
+          width: videoMetadata.width,
+          height: videoMetadata.height,
+          codec: videoMetadata.codec,
+          bitrate: videoMetadata.bitrate,
+        }
+      : {}),
     createdAt: now,
     updatedAt: now,
   };
@@ -270,6 +296,15 @@ async function processOneFile(
     type: mediaType,
     size,
     mimeType,
+    ...(videoMetadata
+      ? {
+          durationMs: videoMetadata.durationMs,
+          width: videoMetadata.width,
+          height: videoMetadata.height,
+          codec: videoMetadata.codec,
+          bitrate: videoMetadata.bitrate,
+        }
+      : {}),
   };
 }
 
@@ -414,6 +449,11 @@ export const mediaService = {
     thumbnailUrl: string | null;
     originalName: string;
     uploaderId: string;
+    durationMs?: number;
+    width?: number;
+    height?: number;
+    codec?: string | null;
+    bitrate?: number | null;
   } | null> => {
     const id = parseMediaIdFromAppDownloadUrl(mediaUrl) ?? parseMediaIdFromObjectUrl(mediaUrl);
     if (!id) return null;
@@ -427,6 +467,11 @@ export const mediaService = {
       thumbnailUrl: delivery.thumbnailUrl,
       originalName: media.originalName,
       uploaderId: media.uploaderId,
+      durationMs: media.durationMs,
+      width: media.width,
+      height: media.height,
+      codec: media.codec,
+      bitrate: media.bitrate,
     };
   },
 
