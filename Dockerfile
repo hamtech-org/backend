@@ -19,10 +19,14 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 
+RUN apk add --no-cache ffmpeg
+RUN npm install -g tsx
+
 COPY package*.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/scripts ./scripts
 
 # Tạo user không phải root để chạy ứng dụng
 RUN addgroup -S appgroup \

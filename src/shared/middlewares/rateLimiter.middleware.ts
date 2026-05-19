@@ -30,3 +30,15 @@ export const uploadLimiter = rateLimit({
     error: { code: 'RATE_LIMIT', message: 'Quá nhiều lần upload' },
   },
 });
+
+export const reelCreateLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  keyGenerator: (req) => req.user?.userId ?? req.ip ?? 'anonymous',
+  message: {
+    success: false,
+    error: { code: 'RATE_LIMIT', message: 'Bạn đã đăng quá nhiều reel, thử lại sau' },
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});

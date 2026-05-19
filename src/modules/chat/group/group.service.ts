@@ -1,11 +1,13 @@
 import { conversationRepository } from '../conversation/conversation.repository.js';
 import { memberRequestRepository } from '../member-request/member-request.repository.js';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import type {
+  IConversation,
   IConversationMember,
   IUpdateGroupDto,
   IAddMembersDto,
   IGroupSettings,
+  IGroupRoleAuditLog,
 } from '../shared/chat.types.js';
 import { NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
 import { userRepository } from '@/modules/user/user.repository.js';
@@ -13,11 +15,17 @@ import { createAndBroadcastSystemMessage } from '../shared/system-message.factor
 import { resolveChatMemberLabel } from '../shared/chat.helpers.js';
 import {
   buildGroupMemberInvitedContent,
+  buildGroupMemberLeftContent,
   buildGroupMemberRemovedContent,
+  buildGroupOwnerAssignedContent,
+  buildGroupOwnerTransferredContent,
+  buildGroupAdminPromotedContent,
+  buildGroupAdminDemotedContent,
+  buildGroupProfileUpdatedContent,
   type GroupSystemPerson,
 } from '../shared/group-system-message.js';
 import type { MemberRole } from '@/shared/types/chat.types.js';
-import { MIN_GROUP_MEMBERS } from './group.constants.js';
+import { MAX_GROUP_ADMINS, MIN_GROUP_MEMBERS } from './group.constants.js';
 
 const sysMsgDeps = {
   createMessage: conversationRepository.createMessage,
@@ -39,11 +47,22 @@ const DEFAULT_ADMIN: IGroupSettings['adminSettings'] = {
   allowJoinLink: true,
 };
 
-export function mergeGroupSettings(raw: Partial<IGroupSettings> | undefined | null): IGroupSettings {
+export function mergeGroupSettings(
+  raw: Partial<IGroupSettings> | undefined | null,
+): IGroupSettings {
   return {
     memberPermissions: { ...DEFAULT_MEMBER_PERMS, ...raw?.memberPermissions },
     adminSettings: { ...DEFAULT_ADMIN, ...raw?.adminSettings },
     joinLinkSuffix: raw?.joinLinkSuffix,
+  };
+}
+
+/** Cài đặt nhóm mặc định kèm link tham gia — gọi khi tạo nhóm mới. */
+export function createInitialGroupSettings(): IGroupSettings {
+  return {
+    memberPermissions: { ...DEFAULT_MEMBER_PERMS },
+    adminSettings: { ...DEFAULT_ADMIN },
+    joinLinkSuffix: randomBytes(6).toString('hex'),
   };
 }
 
@@ -62,14 +81,109 @@ const MEMBER_PERM_MESSAGES: Record<MemberPermKey, string> = {
 function normalizeMemberRole(
   role: unknown,
   userId: string,
+  conversationLeaderId?: string | null,
   conversationCreatorId?: string | null,
 ): MemberRole | null {
   const r = String(role ?? '')
     .trim()
     .toLowerCase();
   if (r === 'owner' || r === 'admin' || r === 'member') return r;
-  if (conversationCreatorId && String(conversationCreatorId).trim() === userId) return 'owner';
+  const leaderId = String(conversationLeaderId ?? '').trim();
+  if (leaderId && leaderId === userId) return 'owner';
+  if (!leaderId && conversationCreatorId && String(conversationCreatorId).trim() === userId) {
+    return 'owner';
+  }
   return null;
+}
+
+function resolveMemberRole(
+  member: Pick<IConversationMember, 'role' | 'userId'> | null | undefined,
+  conversation: Pick<IConversation, 'leaderId' | 'creatorId'>,
+): MemberRole | null {
+  if (!member) return null;
+  return normalizeMemberRole(
+    member.role,
+    member.userId,
+    conversation.leaderId,
+    conversation.creatorId,
+  );
+}
+
+const GROUP_ADMIN_LIMIT_MESSAGE = `Nhóm chỉ có tối đa ${MAX_GROUP_ADMINS} phó nhóm. Hãy hạ một phó nhóm trước khi bổ nhiệm thêm.`;
+
+function countGroupAdmins(
+  members: IConversationMember[],
+  conversation: Pick<IConversation, 'leaderId' | 'creatorId'>,
+): number {
+  return members.filter((m) => resolveMemberRole(m, conversation) === 'admin').length;
+}
+
+function assertGroupAdminCapacity(
+  members: IConversationMember[],
+  conversation: Pick<IConversation, 'leaderId' | 'creatorId'>,
+  additionalAdmins = 1,
+): void {
+  if (countGroupAdmins(members, conversation) + additionalAdmins > MAX_GROUP_ADMINS) {
+    throw new ValidationError(GROUP_ADMIN_LIMIT_MESSAGE);
+  }
+}
+
+async function broadcastAdminRoleChangeMessage(
+  conversationId: string,
+  actorUserId: string,
+  targetUserId: string,
+  change: 'promoted' | 'demoted',
+  options?: { selfDemote?: boolean },
+): Promise<void> {
+  try {
+    let actorName = resolveChatMemberLabel(actorUserId, null);
+    let targetName = resolveChatMemberLabel(targetUserId, null);
+    try {
+      const users = await userRepository.findByIds([actorUserId, targetUserId]);
+      const byId = new Map(users.map((u) => [u.userId, u]));
+      actorName = resolveChatMemberLabel(actorUserId, byId.get(actorUserId) ?? null);
+      targetName = resolveChatMemberLabel(targetUserId, byId.get(targetUserId) ?? null);
+    } catch {
+      /* ignore */
+    }
+
+    const actor: GroupSystemPerson = { userId: actorUserId, name: actorName };
+    const target: GroupSystemPerson = { userId: targetUserId, name: targetName };
+    const content =
+      change === 'promoted'
+        ? buildGroupAdminPromotedContent(actor, target)
+        : buildGroupAdminDemotedContent(actor, target, Boolean(options?.selfDemote));
+
+    await createAndBroadcastSystemMessage(
+      { conversationId, senderId: actorUserId, content },
+      sysMsgDeps,
+    );
+  } catch {
+    /* ignore system message errors */
+  }
+}
+
+function buildRoleAuditLog(input: {
+  conversationId: string;
+  actorUserId: string;
+  targetUserId: string;
+  previousRole: MemberRole;
+  nextRole: MemberRole;
+  action: IGroupRoleAuditLog['action'];
+  metadata?: Record<string, unknown>;
+  createdAt?: string;
+}): IGroupRoleAuditLog {
+  return {
+    auditId: randomUUID(),
+    conversationId: input.conversationId,
+    actorUserId: input.actorUserId,
+    targetUserId: input.targetUserId,
+    previousRole: input.previousRole,
+    nextRole: input.nextRole,
+    action: input.action,
+    createdAt: input.createdAt ?? new Date().toISOString(),
+    ...(input.metadata ? { metadata: input.metadata } : {}),
+  };
 }
 
 /** owner/admin bỏ qua; member phải có quyền trong groupSettings. */
@@ -84,11 +198,11 @@ async function assertMemberGroupPermission(
   const member = await conversationRepository.getMember(conversationId, userId);
   if (!member) throw new ForbiddenError('Bạn không phải thành viên nhóm');
 
-  let role = normalizeMemberRole(member.role, userId, c.creatorId);
+  let role = resolveMemberRole(member, c);
   if (!role) {
     const members = await conversationRepository.getConversationMembers(conversationId);
     const fromList = members.find((m) => String(m.userId ?? '').trim() === userId);
-    role = normalizeMemberRole(fromList?.role, userId, c.creatorId);
+    role = resolveMemberRole(fromList, c);
   }
   const mayBypass =
     permission === 'changeNameAvatar' ? role === 'owner' : role === 'owner' || role === 'admin';
@@ -128,9 +242,9 @@ export const groupService = {
    * Lấy danh sách thành viên nhóm (group)
    */
   getGroupMembers: async (groupId: string): Promise<IConversationMember[]> => {
-    const members = (
-      await conversationRepository.getConversationMembers(groupId)
-    ).filter((m) => Boolean(String(m.userId ?? '').trim()));
+    const members = (await conversationRepository.getConversationMembers(groupId)).filter((m) =>
+      Boolean(String(m.userId ?? '').trim()),
+    );
     if (members.length === 0) return members;
 
     // Enrich để FE hiển thị avatar/name đồng bộ (không phá compatibility: vẫn giữ fields gốc).
@@ -171,42 +285,51 @@ export const groupService = {
 
     const oldName = conversation.name || '';
     const oldAvatar = conversation.avatar || '';
-
-    await conversationRepository.updateConversation(conversationId, data);
-    const updatedConversation = { ...conversation, ...data, updatedAt: new Date().toISOString() };
-
-    // If group name changed, create and broadcast a system message
-    if (data.name && data.name !== oldName) {
-      let userName = '';
-      try {
-        const users = await userRepository.findByIds([requesterId]);
-        userName = users[0]?.displayName || 'Ai đó';
-      } catch {
-        userName = 'Ai đó';
-      }
-      try {
-        await createAndBroadcastSystemMessage(
-          { conversationId, senderId: requesterId, content: `${userName} đổi tên nhóm thành '${data.name}'` },
-          sysMsgDeps,
-        );
-      } catch { /* ignore */ }
+    const nameChanged = Boolean(data.name && data.name !== oldName);
+    const avatarChanged = Boolean(data.avatar && data.avatar !== oldAvatar);
+    let requesterName = '';
+    try {
+      const users = await userRepository.findByIds([requesterId]);
+      requesterName = users[0]?.displayName?.trim() || 'Ai đó';
+    } catch {
+      requesterName = 'Ai đó';
     }
 
-    // If group avatar changed, create and broadcast a system message
-    if (data.avatar && data.avatar !== oldAvatar) {
-      let userName = '';
-      try {
-        const users = await userRepository.findByIds([requesterId]);
-        userName = users[0]?.displayName || 'Ai đó';
-      } catch {
-        userName = 'Ai đó';
-      }
+    await conversationRepository.updateConversation(conversationId, data);
+    const updatedConversation = {
+      ...conversation,
+      ...data,
+      updatedAt: new Date().toISOString(),
+      actorId: requesterId,
+      actorName: requesterName,
+      changed: {
+        name: nameChanged,
+        avatar: avatarChanged,
+      },
+    };
+
+    if (nameChanged || avatarChanged) {
+      const actor: GroupSystemPerson = { userId: requesterId, name: requesterName };
       try {
         await createAndBroadcastSystemMessage(
-          { conversationId, senderId: requesterId, content: `${userName} đã cập nhật ảnh đại diện nhóm`, mediaUrl: data.avatar, mediaType: 'image' },
+          {
+            conversationId,
+            senderId: requesterId,
+            content: buildGroupProfileUpdatedContent(actor, {
+              previousName: nameChanged ? oldName : undefined,
+              newName: nameChanged ? data.name : undefined,
+              nameChanged,
+              avatarChanged,
+            }),
+            ...(avatarChanged && data.avatar
+              ? { mediaUrl: data.avatar, mediaType: 'image' as const }
+              : {}),
+          },
           sysMsgDeps,
         );
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
 
     return updatedConversation;
@@ -218,11 +341,7 @@ export const groupService = {
     if (conversation.type !== 'group') throw new ForbiddenError('Đây không phải nhóm chat');
     const requesterMember = await conversationRepository.getMember(conversationId, requesterId);
     if (!requesterMember) throw new ForbiddenError('Bạn không phải thành viên nhóm');
-    const disbandRole = normalizeMemberRole(
-      requesterMember.role,
-      requesterId,
-      conversation.creatorId,
-    );
+    const disbandRole = resolveMemberRole(requesterMember, conversation);
     if (disbandRole !== 'owner') {
       throw new ForbiddenError('Chỉ trưởng nhóm mới có quyền giải tán nhóm');
     }
@@ -248,7 +367,9 @@ export const groupService = {
       memberCount: 0,
     } as any);
 
-    await Promise.all(members.map((m) => conversationRepository.removeMember(conversationId, m.userId)));
+    await Promise.all(
+      members.map((m) => conversationRepository.removeMember(conversationId, m.userId)),
+    );
   },
 
   leaveGroup: async (
@@ -271,11 +392,13 @@ export const groupService = {
       );
     }
 
-    if (member.role !== 'owner') {
-      let leaverName = 'Ai đó';
+    const leaverRole = resolveMemberRole(member, conv);
+    if (leaverRole !== 'owner') {
+      let leaverLabel = resolveChatMemberLabel(userId, null);
       try {
         const users = await userRepository.findByIds([userId]);
-        leaverName = users[0]?.displayName?.trim() || leaverName;
+        const byId = new Map(users.map((u) => [u.userId, u]));
+        leaverLabel = resolveChatMemberLabel(userId, byId.get(userId) ?? null);
       } catch {
         /* ignore */
       }
@@ -284,7 +407,7 @@ export const groupService = {
           {
             conversationId,
             senderId: userId,
-            content: `${leaverName} đã rời nhóm`,
+            content: buildGroupMemberLeftContent({ userId, name: leaverLabel }),
           },
           sysMsgDeps,
         );
@@ -308,7 +431,9 @@ export const groupService = {
 
     const newOwnerId = options?.newOwnerUserId?.trim();
     if (!newOwnerId) {
-      throw new ValidationError('Trưởng nhóm cần chọn thành viên nhận quyền trưởng nhóm trước khi rời nhóm.');
+      throw new ValidationError(
+        'Trưởng nhóm cần chọn thành viên nhận quyền trưởng nhóm trước khi rời nhóm.',
+      );
     }
     const successor = allMembers.find((m) => m.userId === newOwnerId);
     if (!successor || successor.userId === userId) {
@@ -316,31 +441,94 @@ export const groupService = {
     }
 
     const newMemberCount = Math.max(0, afterLeave);
+    const now = new Date().toISOString();
+    const successorPreviousRole = resolveMemberRole(successor, conv) ?? 'member';
+    const extraOwnerDemotions = allMembers
+      .filter((m) => {
+        if (m.userId === userId || m.userId === successor.userId) return false;
+        return resolveMemberRole(m, conv) === 'owner';
+      })
+      .map((m) => ({ userId: m.userId, nextRole: 'member' }));
 
-    await conversationRepository.updateMemberRole(conversationId, successor.userId, 'owner');
+    await conversationRepository.applyGroupOwnerTransfer({
+      conversationId,
+      newOwnerUserId: successor.userId,
+      previousOwnerUserId: userId,
+      previousOwnerNewRole: 'member',
+      extraOwnerDemotions,
+      auditLogs: [
+        buildRoleAuditLog({
+          conversationId,
+          actorUserId: userId,
+          targetUserId: successor.userId,
+          previousRole: successorPreviousRole,
+          nextRole: 'owner',
+          action: 'owner_leave_transfer',
+          createdAt: now,
+        }),
+        buildRoleAuditLog({
+          conversationId,
+          actorUserId: userId,
+          targetUserId: userId,
+          previousRole: 'owner',
+          nextRole: 'member',
+          action: 'owner_leave_transfer',
+          metadata: { leftGroup: true },
+          createdAt: now,
+        }),
+        ...extraOwnerDemotions.map((m) =>
+          buildRoleAuditLog({
+            conversationId,
+            actorUserId: userId,
+            targetUserId: m.userId,
+            previousRole: 'owner',
+            nextRole: 'member',
+            action: 'owner_leave_transfer',
+            metadata: { repairedExtraOwner: true },
+            createdAt: now,
+          }),
+        ),
+      ],
+    });
     await conversationRepository.updateConversation(conversationId, {
-      creatorId: successor.userId,
       memberCount: newMemberCount,
     });
     await conversationRepository.removeMember(conversationId, userId);
 
     try {
-      let leaverName = 'Ai đó';
-      let successorName = successor.userId;
+      let leaverLabel = resolveChatMemberLabel(userId, null);
+      let successorLabel = resolveChatMemberLabel(successor.userId, null);
       try {
         const users = await userRepository.findByIds([userId, successor.userId]);
         const byId = new Map(users.map((u) => [u.userId, u]));
-        leaverName = byId.get(userId)?.displayName ?? leaverName;
-        successorName = byId.get(successor.userId)?.displayName ?? successorName;
+        leaverLabel = resolveChatMemberLabel(userId, byId.get(userId) ?? null);
+        successorLabel = resolveChatMemberLabel(
+          successor.userId,
+          byId.get(successor.userId) ?? null,
+        );
       } catch {
         /* ignore */
       }
+
+      const leaverPerson: GroupSystemPerson = { userId, name: leaverLabel };
+      const successorPerson: GroupSystemPerson = {
+        userId: successor.userId,
+        name: successorLabel,
+      };
 
       await createAndBroadcastSystemMessage(
         {
           conversationId,
           senderId: userId,
-          content: `${leaverName} đã rời nhóm. ${successorName} là trưởng nhóm mới.`,
+          content: buildGroupMemberLeftContent(leaverPerson),
+        },
+        sysMsgDeps,
+      );
+      await createAndBroadcastSystemMessage(
+        {
+          conversationId,
+          senderId: userId,
+          content: buildGroupOwnerAssignedContent(successorPerson),
         },
         sysMsgDeps,
       );
@@ -355,7 +543,7 @@ export const groupService = {
     requesterId: string,
     conversationId: string,
     data: IAddMembersDto,
-  ): Promise<void> => {
+  ): Promise<{ memberCount: number; autoJoinedUserIds: string[] }> => {
     const member = await conversationRepository.getMember(conversationId, requesterId);
     if (!member || !['owner', 'admin', 'member'].includes(member.role)) {
       throw new ForbiddenError('Bạn không có quyền thêm thành viên');
@@ -379,7 +567,12 @@ export const groupService = {
       }
       memberIdsToInvite.push(userId);
     }
-    if (memberIdsToInvite.length === 0) return;
+    const membersBefore = await conversationRepository.getConversationMembers(conversationId);
+    const memberCountBefore = membersBefore.length;
+
+    if (memberIdsToInvite.length === 0) {
+      return { memberCount: memberCountBefore, autoJoinedUserIds: [] };
+    }
 
     const convMeta = await conversationRepository.getConversationById(conversationId);
     const mergedSettings = mergeGroupSettings(convMeta?.groupSettings);
@@ -432,6 +625,8 @@ export const groupService = {
         /* ignore system message errors */
       }
     }
+
+    return { memberCount: memberCountBefore, autoJoinedUserIds: [] };
   },
 
   removeMember: async (
@@ -451,13 +646,16 @@ export const groupService = {
       );
     }
 
+    const conversation = await conversationRepository.getConversationById(conversationId);
+    if (!conversation || conversation.type !== 'group') throw new NotFoundError('Nhóm');
+
     const trimmedTarget = targetUserId.trim();
     const resolved = await conversationRepository.resolveMemberForRemoval(
       conversationId,
       trimmedTarget,
     );
 
-    if (resolved?.member.role === 'owner') {
+    if (resolveMemberRole(resolved?.member, conversation) === 'owner') {
       throw new ForbiddenError('Không thể xóa chủ nhóm');
     }
 
@@ -522,10 +720,7 @@ export const groupService = {
         const users = await userRepository.findByIds([requesterId, deleteUserId]);
         const byId = new Map(users.map((u) => [u.userId, u]));
         requesterName = resolveChatMemberLabel(requesterId, byId.get(requesterId) ?? null);
-        targetName = resolveChatMemberLabel(
-          deleteUserId,
-          byId.get(deleteUserId) ?? targetWithName,
-        );
+        targetName = resolveChatMemberLabel(deleteUserId, byId.get(deleteUserId) ?? targetWithName);
       } catch {
         /* ignore */
       }
@@ -554,12 +749,210 @@ export const groupService = {
     targetUserId: string,
     role: MemberRole,
   ): Promise<void> => {
-    const requester = await conversationRepository.getMember(conversationId, requesterId);
-    if (!requester || requester.role !== 'owner') {
-      throw new ForbiddenError('Chỉ Owner mới có quyền thay đổi vai trò Admin');
+    const trimmedTarget = targetUserId.trim();
+    if (!trimmedTarget) throw new ValidationError('Thành viên không hợp lệ');
+    if (role === 'owner') {
+      throw new ValidationError('Vui lòng dùng chức năng chuyển quyền trưởng nhóm');
     }
 
-    await conversationRepository.updateMemberRole(conversationId, targetUserId, role);
+    const conversation = await conversationRepository.getConversationById(conversationId);
+    if (!conversation) throw new NotFoundError('Nhóm');
+    if (conversation.type !== 'group') throw new ForbiddenError('Đây không phải nhóm chat');
+
+    const requesterMember = await conversationRepository.getMember(conversationId, requesterId);
+    const requesterRole = resolveMemberRole(requesterMember, conversation);
+    if (!requesterMember || !requesterRole) {
+      throw new ForbiddenError('Bạn không phải thành viên nhóm');
+    }
+
+    const target = await conversationRepository.getMember(conversationId, trimmedTarget);
+    if (!target) {
+      throw new ValidationError('Thành viên được chọn không hợp lệ hoặc không thuộc nhóm.');
+    }
+    const targetRole = resolveMemberRole(target, conversation) ?? 'member';
+    if (targetRole === 'owner') {
+      throw new ForbiddenError(
+        'Không thể hạ trưởng nhóm bằng đổi vai trò. Hãy chuyển quyền trước.',
+      );
+    }
+
+    if (requesterId === trimmedTarget && requesterRole === 'admin' && role === 'member') {
+      await conversationRepository.updateMemberRole(conversationId, trimmedTarget, 'member');
+      await conversationRepository.createGroupRoleAuditLog(
+        buildRoleAuditLog({
+          conversationId,
+          actorUserId: requesterId,
+          targetUserId: trimmedTarget,
+          previousRole: 'admin',
+          nextRole: 'member',
+          action: 'self_demote_admin',
+        }),
+      );
+      await broadcastAdminRoleChangeMessage(conversationId, requesterId, trimmedTarget, 'demoted', {
+        selfDemote: true,
+      });
+      return;
+    }
+
+    if (requesterRole !== 'owner') {
+      throw new ForbiddenError('Chỉ trưởng nhóm mới có quyền thay đổi vai trò phó nhóm');
+    }
+
+    if (requesterId === trimmedTarget) {
+      throw new ForbiddenError(
+        'Trưởng nhóm cần chuyển quyền cho người khác trước khi tự hạ vai trò',
+      );
+    }
+
+    if (targetRole === role) return;
+
+    if (role === 'admin' && targetRole !== 'admin') {
+      const allMembers = await conversationRepository.getConversationMembers(conversationId);
+      assertGroupAdminCapacity(allMembers, conversation);
+    }
+
+    await conversationRepository.updateMemberRole(conversationId, trimmedTarget, role);
+    await conversationRepository.createGroupRoleAuditLog(
+      buildRoleAuditLog({
+        conversationId,
+        actorUserId: requesterId,
+        targetUserId: trimmedTarget,
+        previousRole: targetRole,
+        nextRole: role,
+        action: 'change_role',
+      }),
+    );
+
+    if (role === 'admin' && targetRole !== 'admin') {
+      await broadcastAdminRoleChangeMessage(conversationId, requesterId, trimmedTarget, 'promoted');
+    } else if (role === 'member' && targetRole === 'admin') {
+      await broadcastAdminRoleChangeMessage(conversationId, requesterId, trimmedTarget, 'demoted');
+    }
+    return;
+  },
+
+  transferGroupOwner: async (
+    requesterId: string,
+    conversationId: string,
+    newOwnerUserId: string,
+    currentOwnerNewRole: Extract<MemberRole, 'admin' | 'member'>,
+  ): Promise<{
+    previousOwnerUserId: string;
+    newOwnerUserId: string;
+    previousOwnerNewRole: Extract<MemberRole, 'admin' | 'member'>;
+    roleChanges: Array<{ userId: string; role: MemberRole }>;
+  }> => {
+    const trimmedTarget = newOwnerUserId.trim();
+    if (!trimmedTarget || trimmedTarget === requesterId) {
+      throw new ValidationError('Vui lòng chọn một thành viên khác làm trưởng nhóm mới.');
+    }
+
+    const conversation = await conversationRepository.getConversationById(conversationId);
+    if (!conversation) throw new NotFoundError('Nhóm');
+    if (conversation.type !== 'group') throw new ForbiddenError('Đây không phải nhóm chat');
+    if (conversation.isDeleted) throw new ForbiddenError('Nhóm đã được giải tán');
+
+    const requester = await conversationRepository.getMember(conversationId, requesterId);
+    if (!requester || resolveMemberRole(requester, conversation) !== 'owner') {
+      throw new ForbiddenError('Chỉ trưởng nhóm mới có thể chuyển quyền');
+    }
+
+    const members = await conversationRepository.getConversationMembers(conversationId);
+    const successor = members.find((m) => m.userId === trimmedTarget);
+    if (!successor) {
+      throw new ValidationError('Thành viên được chọn không hợp lệ hoặc không thuộc nhóm.');
+    }
+
+    if (currentOwnerNewRole === 'admin') {
+      assertGroupAdminCapacity(members, conversation);
+    }
+
+    const now = new Date().toISOString();
+    const successorPreviousRole = resolveMemberRole(successor, conversation) ?? 'member';
+    const extraOwnerDemotions = members
+      .filter((m) => {
+        if (m.userId === requesterId || m.userId === trimmedTarget) return false;
+        return resolveMemberRole(m, conversation) === 'owner';
+      })
+      .map((m) => ({ userId: m.userId, nextRole: 'member' }));
+
+    await conversationRepository.applyGroupOwnerTransfer({
+      conversationId,
+      newOwnerUserId: trimmedTarget,
+      previousOwnerUserId: requesterId,
+      previousOwnerNewRole: currentOwnerNewRole,
+      extraOwnerDemotions,
+      auditLogs: [
+        buildRoleAuditLog({
+          conversationId,
+          actorUserId: requesterId,
+          targetUserId: trimmedTarget,
+          previousRole: successorPreviousRole,
+          nextRole: 'owner',
+          action: 'transfer_owner',
+          createdAt: now,
+        }),
+        buildRoleAuditLog({
+          conversationId,
+          actorUserId: requesterId,
+          targetUserId: requesterId,
+          previousRole: 'owner',
+          nextRole: currentOwnerNewRole,
+          action: 'transfer_owner',
+          createdAt: now,
+        }),
+        ...extraOwnerDemotions.map((m) =>
+          buildRoleAuditLog({
+            conversationId,
+            actorUserId: requesterId,
+            targetUserId: m.userId,
+            previousRole: 'owner',
+            nextRole: 'member',
+            action: 'transfer_owner',
+            metadata: { repairedExtraOwner: true },
+            createdAt: now,
+          }),
+        ),
+      ],
+    });
+
+    try {
+      let actorName = resolveChatMemberLabel(requesterId, null);
+      let successorName = resolveChatMemberLabel(trimmedTarget, null);
+      try {
+        const users = await userRepository.findByIds([requesterId, trimmedTarget]);
+        const byId = new Map(users.map((u) => [u.userId, u]));
+        actorName = resolveChatMemberLabel(requesterId, byId.get(requesterId) ?? null);
+        successorName = resolveChatMemberLabel(trimmedTarget, byId.get(trimmedTarget) ?? null);
+      } catch {
+        /* ignore */
+      }
+
+      await createAndBroadcastSystemMessage(
+        {
+          conversationId,
+          senderId: requesterId,
+          content: buildGroupOwnerTransferredContent(
+            { userId: requesterId, name: actorName },
+            { userId: trimmedTarget, name: successorName },
+          ),
+        },
+        sysMsgDeps,
+      );
+    } catch {
+      /* ignore system message errors */
+    }
+
+    return {
+      previousOwnerUserId: requesterId,
+      newOwnerUserId: trimmedTarget,
+      previousOwnerNewRole: currentOwnerNewRole,
+      roleChanges: [
+        { userId: trimmedTarget, role: 'owner' },
+        { userId: requesterId, role: currentOwnerNewRole },
+        ...extraOwnerDemotions.map((m) => ({ userId: m.userId, role: 'member' as const })),
+      ],
+    };
   },
 
   getGroupSettings: async (conversationId: string): Promise<IGroupSettings> => {
@@ -578,7 +971,7 @@ export const groupService = {
     if (!member) throw new ForbiddenError('Bạn không phải thành viên nhóm');
     const c = await conversationRepository.getConversationById(conversationId);
     if (!c) throw new NotFoundError('Hội thoại');
-    const settingsRole = normalizeMemberRole(member.role, requesterId, c.creatorId);
+    const settingsRole = resolveMemberRole(member, c);
     if (settingsRole !== 'owner') {
       throw new ForbiddenError('Chỉ trưởng nhóm mới chỉnh được cài đặt');
     }
@@ -587,7 +980,11 @@ export const groupService = {
     const current = mergeGroupSettings(c.groupSettings);
     let joinLinkSuffix = current.joinLinkSuffix;
     if (patch.regenerateJoinLink) {
+      const previousSuffix = joinLinkSuffix;
       joinLinkSuffix = randomBytes(6).toString('hex');
+      if (previousSuffix) {
+        await conversationRepository.deleteJoinLinkLookup(previousSuffix);
+      }
     }
     const next: IGroupSettings = {
       memberPermissions: { ...current.memberPermissions, ...patch.memberPermissions },
@@ -598,6 +995,11 @@ export const groupService = {
     await conversationRepository.updateConversation(conversationId, {
       groupSettings: next,
     } as any);
+
+    if (joinLinkSuffix) {
+      await conversationRepository.upsertJoinLinkLookup(conversationId, joinLinkSuffix);
+    }
+
     return next;
   },
 

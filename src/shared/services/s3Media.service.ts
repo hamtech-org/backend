@@ -6,6 +6,7 @@ import {
   type PutObjectCommandInput,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import type { Readable } from 'node:stream';
 import { env } from '@/config/env.js';
 
 const s3Client = new S3Client({
@@ -43,4 +44,20 @@ export async function deleteObjectKey(key: string): Promise<void> {
 export async function getSignedGetUrl(key: string, expiresInSeconds = 900): Promise<string> {
   const cmd = new GetObjectCommand({ Bucket: bucket, Key: key });
   return getSignedUrl(s3Client, cmd, { expiresIn: expiresInSeconds });
+}
+
+export async function getObjectStream(key: string): Promise<{
+  stream: Readable;
+  contentType?: string;
+  contentLength?: number;
+}> {
+  const res = await s3Client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!res.Body) {
+    throw new Error('S3 object body empty');
+  }
+  return {
+    stream: res.Body as Readable,
+    contentType: res.ContentType,
+    contentLength: res.ContentLength,
+  };
 }

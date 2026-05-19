@@ -9,7 +9,9 @@ export const pollController = {
       /** `pollService.createPoll` → `createAndBroadcastSystemMessage` đã `broadcastMessageNew` — không gọi lại (tránh message:new + banner đúp trên client). */
       await pollService.createPoll(req.user!.userId, req.params.groupId, req.body);
       try {
-        await emitToConversationAndMembers(req.params.groupId, 'group:poll_new', { groupId: req.params.groupId });
+        await emitToConversationAndMembers(req.params.groupId, 'group:poll_new', {
+          groupId: req.params.groupId,
+        });
       } catch {
         /* ignore socket */
       }
@@ -33,7 +35,12 @@ export const pollController = {
   votePoll: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { optionIndex } = req.body;
-      await pollService.votePoll(req.user!.userId, req.params.groupId, req.params.pollId, optionIndex);
+      await pollService.votePoll(
+        req.user!.userId,
+        req.params.groupId,
+        req.params.pollId,
+        optionIndex,
+      );
       try {
         await emitToConversationAndMembers(req.params.groupId, 'group:poll_updated', {
           groupId: req.params.groupId,
@@ -52,7 +59,12 @@ export const pollController = {
   unvotePoll: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { optionIndex } = req.body;
-      await pollService.unvotePoll(req.user!.userId, req.params.groupId, req.params.pollId, optionIndex);
+      await pollService.unvotePoll(
+        req.user!.userId,
+        req.params.groupId,
+        req.params.pollId,
+        optionIndex,
+      );
       try {
         await emitToConversationAndMembers(req.params.groupId, 'group:poll_updated', {
           groupId: req.params.groupId,
@@ -71,7 +83,12 @@ export const pollController = {
   addPollOption: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { text } = req.body;
-      await pollService.addPollOption(req.user!.userId, req.params.groupId, req.params.pollId, text);
+      await pollService.addPollOption(
+        req.user!.userId,
+        req.params.groupId,
+        req.params.pollId,
+        text,
+      );
       try {
         await emitToConversationAndMembers(req.params.groupId, 'group:poll_updated', {
           groupId: req.params.groupId,

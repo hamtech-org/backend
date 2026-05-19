@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { newsfeedController } from './newsfeed.controller.js';
 import { authenticate } from '@/shared/middlewares/auth.middleware.js';
-import { validate } from '@/shared/middlewares/validate.middleware.js';
+import { validate, validateQuery } from '@/shared/middlewares/validate.middleware.js';
+import { reelCreateLimiter } from '@/shared/middlewares/rateLimiter.middleware.js';
 import {
   createPostSchema,
   updatePostSchema,
@@ -11,6 +12,9 @@ import {
   reactCommentSchema,
   reactReelSchema,
   sharePostSchema,
+  reelsFeedQuerySchema,
+  reelViewSchema,
+  reportReelSchema,
 } from './newsfeed.validator.js';
 
 const router = Router();
@@ -38,8 +42,48 @@ router.post(
   validate(addCommentSchema),
   newsfeedController.addComment,
 );
-router.get('/reels', authenticate, newsfeedController.getReels);
-router.post('/reels', authenticate, validate(createReelSchema), newsfeedController.createReel);
+router.get(
+  '/reels',
+  authenticate,
+  validateQuery(reelsFeedQuerySchema),
+  newsfeedController.getReelsFeed,
+);
+router.post(
+  '/reels',
+  authenticate,
+  reelCreateLimiter,
+  validate(createReelSchema),
+  newsfeedController.createReel,
+);
+router.get('/reels/by-author/:authorId', authenticate, newsfeedController.getReelsByAuthor);
+router.get('/reels/:reelId', authenticate, newsfeedController.getReelById);
+router.delete('/reels/:reelId', authenticate, newsfeedController.deleteReel);
+router.post(
+  '/reels/:reelId/view',
+  authenticate,
+  validate(reelViewSchema),
+  newsfeedController.recordReelView,
+);
+router.post('/reels/:reelId/save', authenticate, newsfeedController.toggleSaveReel);
+router.post(
+  '/reels/:reelId/report',
+  authenticate,
+  validate(reportReelSchema),
+  newsfeedController.reportReel,
+);
+router.get('/reels/:reelId/comments', authenticate, newsfeedController.getReelComments);
+router.post(
+  '/reels/:reelId/comments',
+  authenticate,
+  validate(addCommentSchema),
+  newsfeedController.addReelComment,
+);
+router.post(
+  '/reels/:reelId/comments/:commentId/react',
+  authenticate,
+  validate(reactReelSchema),
+  newsfeedController.reactToReelComment,
+);
 router.post(
   '/comments/:commentId/react',
   authenticate,

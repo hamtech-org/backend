@@ -6,13 +6,16 @@ import {
   emitToConversationAndMembers,
   forceUserLeaveConversationRoom,
 } from '../shared/chat.broadcast.js';
+import { syncAssignToAllTasksAndNotify } from '../task/task-membership-sync.js';
 
 export const groupController = {
   getGroupMembers: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const members = await groupService.getGroupMembers(req.params.groupId);
       sendSuccess(res, members);
-    } catch (error) { next(error); }
+    } catch (error) {
+      next(error);
+    }
   },
 
   updateGroup: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -25,7 +28,9 @@ export const groupController = {
         for (const m of members) {
           io.to(`user:${m.userId}`).emit('group:updated', group);
         }
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       sendSuccess(res, group, 'Cập nhật nhóm thành công');
     } catch (error) {
       console.error('[updateGroup]', error);
@@ -65,16 +70,21 @@ export const groupController = {
       const { memberCount } = await groupService.leaveGroup(userId, groupId, {
         newOwnerUserId: body.newOwnerUserId?.trim(),
       });
+      await syncAssignToAllTasksAndNotify(groupId);
       try {
         const io = getIO();
         const leftAt = new Date().toISOString();
         const payload = { groupId, conversationId: groupId, userId, leftAt, memberCount };
+        const profilePayload = { groupId, conversationId: groupId, memberCount };
         io.to(`conv:${groupId}`).emit('group:member_left', payload);
+        io.to(`conv:${groupId}`).emit('group:updated', profilePayload);
         const members = await groupService.getGroupMembers(groupId);
         for (const m of members) {
           io.to(`user:${m.userId}`).emit('group:member_left', payload);
+          io.to(`user:${m.userId}`).emit('group:updated', profilePayload);
         }
         io.to(`user:${userId}`).emit('group:member_left', payload);
+        io.to(`user:${userId}`).emit('group:updated', profilePayload);
 
         if (body.newOwnerUserId) {
           const rolePayload = {
@@ -92,7 +102,7 @@ export const groupController = {
       } catch {
         /* ignore */
       }
-      sendSuccess(res, null, 'Rời nhóm thành công');
+      sendSuccess(res, { memberCount }, 'Rời nhóm thành công');
     } catch (error) {
       console.error('[leaveGroup]', error);
       next(error);
@@ -101,16 +111,50 @@ export const groupController = {
 
   addMembers: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      await groupService.addMembers(req.user!.userId, req.params.groupId, req.body);
+      const gid = req.params.groupId;
+      const { memberCount, autoJoinedUserIds } = await groupService.addMembers(
+        req.user!.userId,
+        gid,
+        req.body,
+      );
       try {
-        await emitToConversationAndMembers(req.params.groupId, 'group:join_request_new', {
-          groupId: req.params.groupId,
-          memberIds: req.body.memberIds,
-        });
+        const io = getIO();
+        if (autoJoinedUserIds.length > 0) {
+          const joinedAt = new Date().toISOString();
+          for (const uid of autoJoinedUserIds) {
+            const joinedPayload = {
+              groupId: gid,
+              conversationId: gid,
+              userId: uid,
+              memberCount,
+              joinedAt,
+            };
+            io.to(`conv:${gid}`).emit('group:member_joined', joinedPayload);
+            const members = await groupService.getGroupMembers(gid);
+            for (const m of members) {
+              io.to(`user:${m.userId}`).emit('group:member_joined', joinedPayload);
+            }
+            io.to(`user:${uid}`).emit('group:member_joined', joinedPayload);
+          }
+          await emitToConversationAndMembers(gid, 'group:members_added', {
+            groupId: gid,
+            conversationId: gid,
+            memberIds: autoJoinedUserIds,
+            memberCount,
+          });
+        } else {
+          await emitToConversationAndMembers(gid, 'group:join_request_new', {
+            groupId: gid,
+            memberIds: req.body.memberIds,
+            memberCount,
+          });
+        }
       } catch {
         /* ignore */
       }
-      sendSuccess(res, null, 'Đã gửi lời mời vào nhóm');
+      const message =
+        autoJoinedUserIds.length > 0 ? 'Đã thêm thành viên vào nhóm' : 'Đã gửi lời mời vào nhóm';
+      sendSuccess(res, null, message);
     } catch (error) {
       console.error('[addMembers]', error);
       next(error);
@@ -124,21 +168,28 @@ export const groupController = {
         req.params.groupId,
         req.params.userId,
       );
+      const gid = req.params.groupId;
+      await syncAssignToAllTasksAndNotify(gid);
       try {
         const io = getIO();
-        const gid = req.params.groupId;
         const uid = req.params.userId;
         const payload = { groupId: gid, conversationId: gid, userId: uid, memberCount };
+        const profilePayload = { groupId: gid, conversationId: gid, memberCount };
         await forceUserLeaveConversationRoom(gid, uid);
         io.to(`conv:${gid}`).emit('group:member_removed', payload);
+        io.to(`conv:${gid}`).emit('group:updated', profilePayload);
         const members = await groupService.getGroupMembers(gid);
         for (const m of members) {
           io.to(`user:${m.userId}`).emit('group:member_removed', payload);
+          io.to(`user:${m.userId}`).emit('group:updated', profilePayload);
         }
         io.to(`user:${uid}`).emit('group:member_removed', payload);
+        io.to(`user:${uid}`).emit('group:updated', profilePayload);
         io.to(`user:${uid}`).emit('group:membership_revoked', payload);
-      } catch { /* ignore */ }
-      sendSuccess(res, null, 'Xóa thành viên thành công');
+      } catch {
+        /* ignore */
+      }
+      sendSuccess(res, { memberCount }, 'Xóa thành viên thành công');
     } catch (error) {
       console.error('[removeMember]', error);
       next(error);
@@ -147,7 +198,12 @@ export const groupController = {
 
   changeMemberRole: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      await groupService.changeMemberRole(req.user!.userId, req.params.groupId, req.params.userId, req.body.role);
+      await groupService.changeMemberRole(
+        req.user!.userId,
+        req.params.groupId,
+        req.params.userId,
+        req.body.role,
+      );
       try {
         const rolePayload = {
           groupId: req.params.groupId,
@@ -167,6 +223,49 @@ export const groupController = {
       sendSuccess(res, null, 'Thay đổi quyền thành công');
     } catch (error) {
       console.error('[changeMemberRole]', error);
+      next(error);
+    }
+  },
+
+  transferGroupOwner: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await groupService.transferGroupOwner(
+        req.user!.userId,
+        req.params.groupId,
+        req.body.newOwnerUserId,
+        req.body.currentOwnerNewRole,
+      );
+      try {
+        const io = getIO();
+        const members = await groupService.getGroupMembers(req.params.groupId);
+        const gid = req.params.groupId;
+        const profilePayload = {
+          groupId: gid,
+          conversationId: gid,
+          leaderId: result.newOwnerUserId,
+        };
+        io.to(`conv:${gid}`).emit('group:updated', profilePayload);
+        for (const change of result.roleChanges) {
+          const rolePayload = {
+            groupId: gid,
+            conversationId: gid,
+            userId: change.userId,
+            role: change.role,
+          };
+          io.to(`conv:${gid}`).emit('group:role_changed', rolePayload);
+          for (const m of members) {
+            io.to(`user:${m.userId}`).emit('group:role_changed', rolePayload);
+          }
+        }
+        for (const m of members) {
+          io.to(`user:${m.userId}`).emit('group:updated', profilePayload);
+        }
+      } catch {
+        /* ignore */
+      }
+      sendSuccess(res, result, 'Chuyển quyền trưởng nhóm thành công');
+    } catch (error) {
+      console.error('[transferGroupOwner]', error);
       next(error);
     }
   },

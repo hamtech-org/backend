@@ -4,10 +4,16 @@ import {
   QueryCommand,
   UpdateCommand,
   DeleteCommand,
+  TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 import { dynamoClient } from '@/config/database.js';
 import { env } from '@/config/env.js';
-import type { IConversation, IConversationMember, IMessage } from '../shared/chat.types.js';
+import type {
+  IConversation,
+  IConversationMember,
+  IGroupRoleAuditLog,
+  IMessage,
+} from '../shared/chat.types.js';
 import { isConversationNotificationPushMuted } from '../shared/chat.helpers.js';
 import type { MessageStatus } from '@/shared/types/chat.types.js';
 
@@ -414,6 +420,82 @@ export const conversationRepository = {
     );
   },
 
+  createGroupRoleAuditLog: async (log: IGroupRoleAuditLog): Promise<void> => {
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Item: {
+          PK: `CONV#${log.conversationId}`,
+          SK: `ROLE_AUDIT#${log.createdAt}#${log.auditId}`,
+          entityType: 'GROUP_ROLE_AUDIT',
+          ...log,
+        },
+      }),
+    );
+  },
+
+  applyGroupOwnerTransfer: async (params: {
+    conversationId: string;
+    newOwnerUserId: string;
+    previousOwnerUserId: string;
+    previousOwnerNewRole: string;
+    extraOwnerDemotions?: Array<{ userId: string; nextRole: string }>;
+    auditLogs?: IGroupRoleAuditLog[];
+  }): Promise<void> => {
+    const now = new Date().toISOString();
+    const pk = `CONV#${params.conversationId}`;
+    const memberUpdates = new Map<string, string>();
+    memberUpdates.set(params.newOwnerUserId, 'owner');
+    memberUpdates.set(params.previousOwnerUserId, params.previousOwnerNewRole);
+    for (const demotion of params.extraOwnerDemotions ?? []) {
+      if (!demotion.userId || demotion.userId === params.newOwnerUserId) continue;
+      memberUpdates.set(demotion.userId, demotion.nextRole);
+    }
+
+    await dynamoClient.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          ...[...memberUpdates.entries()].map(([userId, role]) => ({
+            Update: {
+              TableName: CONVERSATIONS_TABLE,
+              Key: { PK: pk, SK: `MEMBER#${userId}` },
+              UpdateExpression: 'SET #r = :role, updatedAt = :now',
+              ConditionExpression: 'attribute_exists(PK) AND attribute_exists(SK)',
+              ExpressionAttributeNames: { '#r': 'role' },
+              ExpressionAttributeValues: {
+                ':role': role,
+                ':now': now,
+              },
+            },
+          })),
+          {
+            Update: {
+              TableName: CONVERSATIONS_TABLE,
+              Key: { PK: pk, SK: 'META' },
+              UpdateExpression: 'SET leaderId = :leaderId, updatedAt = :now',
+              ConditionExpression: 'attribute_exists(PK) AND attribute_exists(SK)',
+              ExpressionAttributeValues: {
+                ':leaderId': params.newOwnerUserId,
+                ':now': now,
+              },
+            },
+          },
+          ...(params.auditLogs ?? []).map((log) => ({
+            Put: {
+              TableName: CONVERSATIONS_TABLE,
+              Item: {
+                PK: pk,
+                SK: `ROLE_AUDIT#${log.createdAt}#${log.auditId}`,
+                entityType: 'GROUP_ROLE_AUDIT',
+                ...log,
+              },
+            },
+          })),
+        ],
+      }),
+    );
+  },
+
   /**
    * Cập nhật unreadCount cho member trong conversation
    */
@@ -460,6 +542,60 @@ export const conversationRepository = {
         },
       }),
     );
+  },
+
+  setPinnedMessageCount: async (conversationId: string, count: number): Promise<void> => {
+    const safe = Math.max(0, Math.floor(count));
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: 'META' },
+        UpdateExpression: 'SET pinnedMessageCount = :c, updatedAt = :now',
+        ExpressionAttributeValues: {
+          ':c': safe,
+          ':now': new Date().toISOString(),
+        },
+      }),
+    );
+  },
+
+  /**
+   * Đếm tin ghim còn hiệu lực (không thu hồi / không xóa).
+   * Dùng để sửa lệch `pinnedMessageCount` trên META so với thực tế.
+   */
+  countActivePinnedMessages: async (conversationId: string): Promise<number> => {
+    const PIN_FILTER =
+      'isPinned = :pinned AND (attribute_not_exists(isRecalled) OR isRecalled = :false) AND (attribute_not_exists(isDeleted) OR isDeleted = :false)';
+    let count = 0;
+    let exclusiveStartKey: Record<string, unknown> | undefined;
+    const PAGE = 80;
+    let rounds = 0;
+
+    while (rounds < 40) {
+      rounds += 1;
+      const result = await dynamoClient.send(
+        new QueryCommand({
+          TableName: MESSAGES_TABLE,
+          KeyConditionExpression: 'PK = :pk',
+          FilterExpression: PIN_FILTER,
+          ExpressionAttributeValues: {
+            ':pk': `CONV#${conversationId}`,
+            ':pinned': true,
+            ':false': false,
+          },
+          Limit: PAGE,
+          ScanIndexForward: false,
+          ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
+        }),
+      );
+
+      const items = (result.Items as IMessage[]) ?? [];
+      count += items.length;
+      exclusiveStartKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+      if (!exclusiveStartKey) break;
+    }
+
+    return count;
   },
 
   updateMemberPreferences: async (
@@ -835,5 +971,49 @@ export const conversationRepository = {
         },
       }),
     );
+  },
+
+  /** PK=JOIN#{suffix}, SK=META — tra cứu nhóm theo link mời (O(1)). */
+  upsertJoinLinkLookup: async (conversationId: string, suffix: string): Promise<void> => {
+    const normalized = suffix.trim().toLowerCase();
+    if (!normalized) return;
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Item: {
+          PK: `JOIN#${normalized}`,
+          SK: 'META',
+          conversationId,
+          joinLinkSuffix: normalized,
+          updatedAt: new Date().toISOString(),
+        },
+      }),
+    );
+  },
+
+  deleteJoinLinkLookup: async (suffix: string): Promise<void> => {
+    const normalized = suffix.trim().toLowerCase();
+    if (!normalized) return;
+    await dynamoClient.send(
+      new DeleteCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `JOIN#${normalized}`, SK: 'META' },
+      }),
+    );
+  },
+
+  findConversationIdByJoinLinkSuffix: async (suffix: string): Promise<string | null> => {
+    const normalized = suffix.trim().toLowerCase();
+    if (!normalized) return null;
+    const result = await dynamoClient.send(
+      new GetCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `JOIN#${normalized}`, SK: 'META' },
+      }),
+    );
+    const conversationId = String(
+      (result.Item as { conversationId?: string })?.conversationId ?? '',
+    ).trim();
+    return conversationId || null;
   },
 };
