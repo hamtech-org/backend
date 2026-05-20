@@ -1,1 +1,71 @@
-[]
+[
+  {
+    "PK": "POST#20000000-0000-4000-8000-000000000001",
+    "SK": "META",
+    "postId": "20000000-0000-4000-8000-000000000001",
+    "authorId": "seed-user-alice",
+    "content": "Demo seed — bài viết có ảnh bìa cho báo cáo tài nguyên admin.",
+    "mediaUrls": [
+      "http://localhost:3000/api/v1/media/10000000-0000-4000-8000-000000000004/download"
+    ],
+    "type": "image",
+    "visibility": "public",
+    "publicationStatus": "published",
+    "categories": ["demo"],
+    "tags": ["admin-seed"],
+    "reactionsCount": { "like": 12 },
+    "commentsCount": 3,
+    "sharesCount": 1,
+    "viewsCount": 120,
+    "isModerated": true,
+    "moderationStatus": "approved",
+    "createdAt": "2026-05-19T08:00:00.000Z",
+    "updatedAt": "2026-05-19T08:00:00.000Z"
+  },
+  {
+    "PK": "POST#20000000-0000-4000-8000-000000000002",
+    "SK": "META",
+    "postId": "20000000-0000-4000-8000-000000000002",
+    "authorId": "seed-user-bob",
+    "content": "Sơ đồ kiến trúc Hamtech — seed cho dashboard thống kê & tài nguyên.",
+    "mediaUrls": [
+      "http://localhost:3000/api/v1/media/10000000-0000-4000-8000-000000000005/download"
+    ],
+    "type": "image",
+    "visibility": "public",
+    "publicationStatus": "published",
+    "categories": ["demo"],
+    "tags": ["admin-seed"],
+    "reactionsCount": { "like": 5, "love": 2 },
+    "commentsCount": 1,
+    "sharesCount": 0,
+    "viewsCount": 64,
+    "isModerated": true,
+    "moderationStatus": "approved",
+    "createdAt": "2026-05-19T09:30:00.000Z",
+    "updatedAt": "2026-05-19T09:30:00.000Z"
+  },
+  {
+    "PK": "POST#20000000-0000-4000-8000-000000000003",
+    "SK": "META",
+    "postId": "20000000-0000-4000-8000-000000000003",
+    "authorId": "seed-user-charlie",
+    "content": "Đính kèm tài liệu API — seed stacked (tệp khác).",
+    "mediaUrls": [
+      "http://localhost:3000/api/v1/media/10000000-0000-4000-8000-000000000013/download"
+    ],
+    "type": "file",
+    "visibility": "public",
+    "publicationStatus": "published",
+    "categories": ["demo"],
+    "tags": ["admin-seed"],
+    "reactionsCount": { "like": 3 },
+    "commentsCount": 0,
+    "sharesCount": 0,
+    "viewsCount": 28,
+    "isModerated": true,
+    "moderationStatus": "approved",
+    "createdAt": "2026-05-19T10:00:00.000Z",
+    "updatedAt": "2026-05-19T10:00:00.000Z"
+  }
+]

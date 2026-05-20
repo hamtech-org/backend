@@ -14,41 +14,7 @@ import type {
   MediaVisibility,
 } from './media.types.js';
 
-/** Trích mediaId từ URL download app: `.../api/v{n}/media/{uuid}/download` (origin tùy). */
-function parseMediaIdFromAppDownloadUrl(urlStr: string): string | null {
-  const trimmed = (urlStr ?? '').trim();
-  if (!trimmed) return null;
-  try {
-    const u = /^https?:\/\//i.test(trimmed)
-      ? new URL(trimmed)
-      : new URL(trimmed, 'http://local.invalid');
-    const path = u.pathname.replace(/\/+$/, '');
-    const m = path.match(
-      /\/media\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/download$/i,
-    );
-    return m?.[1] ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/** Trích mediaId từ URL object CloudFront/S3 theo key pattern `<scope>/<uploaderId>/<mediaId>/original.ext`. */
-function parseMediaIdFromObjectUrl(urlStr: string): string | null {
-  const trimmed = (urlStr ?? '').trim();
-  if (!trimmed) return null;
-  try {
-    const u = /^https?:\/\//i.test(trimmed)
-      ? new URL(trimmed)
-      : new URL(trimmed, 'http://local.invalid');
-    const path = u.pathname.replace(/\/+$/, '');
-    const m = path.match(
-      /\/(?:chat|public)\/[^/]+\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(?:original|thumb)\b/i,
-    );
-    return m?.[1] ?? null;
-  } catch {
-    return null;
-  }
-}
+import { extractMediaIdFromUrl } from './mediaUrl.util.js';
 import { assertValidUploadBuffer, assertValidUploadBufferAuto } from './media.validation.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
 import { logger } from '@/shared/utils/logger.js';
@@ -455,7 +421,7 @@ export const mediaService = {
     codec?: string | null;
     bitrate?: number | null;
   } | null> => {
-    const id = parseMediaIdFromAppDownloadUrl(mediaUrl) ?? parseMediaIdFromObjectUrl(mediaUrl);
+    const id = extractMediaIdFromUrl(mediaUrl);
     if (!id) return null;
     const media = await mediaRepository.findById(id);
     if (!media) return null;

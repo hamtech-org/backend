@@ -54,6 +54,7 @@ export function mergeGroupSettings(
     memberPermissions: { ...DEFAULT_MEMBER_PERMS, ...raw?.memberPermissions },
     adminSettings: { ...DEFAULT_ADMIN, ...raw?.adminSettings },
     joinLinkSuffix: raw?.joinLinkSuffix,
+    adminStatus: raw?.adminStatus ?? 'active',
   };
 }
 

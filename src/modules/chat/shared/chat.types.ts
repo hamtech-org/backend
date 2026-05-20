@@ -22,17 +22,23 @@ export interface IGroupAdminSettings {
   allowJoinLink: boolean;
 }
 
+export type GroupAdminStatus = 'active' | 'locked' | 'archived';
+
 export interface IGroupSettings {
   memberPermissions: IGroupMemberPermissions;
   adminSettings: IGroupAdminSettings;
   /** Hậu tố link tham gia (demo / refresh). */
   joinLinkSuffix?: string;
+  /** Trạng thái quản trị (admin console). */
+  adminStatus?: GroupAdminStatus;
 }
 
 export interface IConversation extends TimestampFields {
   conversationId: string;
   type: ConversationType;
   name?: string;
+  /** Mô tả nhóm (admin / hiển thị). */
+  description?: string;
   avatar?: string;
   /** Historical creator. Do not update this when group ownership changes. */
   creatorId: string;
@@ -45,6 +51,8 @@ export interface IConversation extends TimestampFields {
   isDeleted?: boolean;
   /** Chỉ nhóm; đồng bộ realtime qua socket `group:settings_updated`. */
   groupSettings?: IGroupSettings;
+  /** Trạng thái nhóm (admin) — mirror của groupSettings.adminStatus. */
+  groupStatus?: GroupAdminStatus;
   /** META: số tin đang ghim trong hội thoại (đồng bộ khi ghim/bỏ ghim/thu hồi tin). */
   pinnedMessageCount?: number;
   /**
