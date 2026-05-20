@@ -31,6 +31,8 @@ export interface IAuthorInfo {
 export interface IPost extends TimestampFields {
   postId: string;
   authorId: string;
+  groupId?: string;
+  communityId?: string;
   content: string;
   mediaUrls: string[];
   type: PostType;
@@ -99,6 +101,8 @@ export interface IReel {
 
 export interface ICreatePostDto {
   content: string;
+  groupId?: string;
+  communityId?: string;
   type: PostType;
   visibility: PostVisibility;
   publicationStatus: PostPublicationStatus;

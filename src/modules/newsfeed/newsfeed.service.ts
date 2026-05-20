@@ -10,6 +10,7 @@ import { NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/e
 import { extractHashtagsFromText, extractMentionsFromText } from '@/shared/utils/hashtags.js';
 import { getIO } from '@/socket/index.js';
 import { notificationService } from '@/modules/notification/notification.service.js';
+import { communityService } from '@/modules/community/community.service.js';
 import type {
   IPost,
   IComment,
@@ -302,12 +303,17 @@ export const newsfeedService = {
   },
 
   createPost: async (authorId: string, data: ICreatePostDto): Promise<IPost> => {
-    const now = new Date().toISOString();
+    const groupId = data.groupId ?? data.communityId;
+    if (groupId) await communityService.assertActiveMember(authorId, groupId);
+
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
     const postId = uuidv4();
 
     const post: IPost = {
       postId,
       authorId,
+      ...(groupId ? { groupId, communityId: groupId } : {}),
       content: data.content,
       mediaUrls: data.mediaUrls ?? [],
       type: data.type,
@@ -326,6 +332,16 @@ export const newsfeedService = {
     };
 
     await newsfeedRepository.createPost(post);
+    if (groupId) {
+      await communityService.addContentIndex(
+        groupId,
+        'post',
+        postId,
+        authorId,
+        now,
+        nowDate.getTime(),
+      );
+    }
 
     // Chỉ index bài publish để search public hoạt động
     if (post.publicationStatus === 'published') {
@@ -339,6 +355,8 @@ export const newsfeedService = {
         publicationStatus: post.publicationStatus,
         tags: post.tags,
         categories: post.categories,
+        groupId: post.groupId,
+        communityId: post.communityId,
       };
 
       await emitPostIndexEvent({
@@ -755,7 +773,8 @@ export const newsfeedService = {
     const hashtags = extractHashtagsFromText(caption);
     const mentions = extractMentionsFromText(caption);
 
-    const now = new Date().toISOString();
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
     const reelId = uuidv4();
     const reel: IReel = {
       reelId,
