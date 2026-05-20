@@ -12,6 +12,23 @@ import type {
   ISearchAllChatResult,
 } from './search.types.js';
 
+function normalizeSearchText(value: unknown): string {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function textMatchesQuery(text: string, query: string): boolean {
+  const haystack = normalizeSearchText(text);
+  const needle = normalizeSearchText(query);
+  if (!needle || needle === '*') return true;
+  if (haystack.includes(needle)) return true;
+  const terms = needle.split(/\s+/).filter(Boolean);
+  return terms.length > 0 && terms.every((term) => haystack.includes(term));
+}
+
 export const searchService = {
   searchMessages: async (
     _userId: string,
@@ -255,6 +272,17 @@ export const searchService = {
     const from = (page - 1) * pageSize;
 
     try {
+      const visibleGroupConversations = options.userId
+        ? (await conversationRepository.getConversations(options.userId)).filter(
+            (conversation) => conversation.type === 'group' && !conversation.isDeleted,
+          )
+        : [];
+      const visibleGroupById = new Map(
+        visibleGroupConversations.map((conversation) => [
+          conversation.conversationId,
+          conversation,
+        ]),
+      );
       const result = await esClient.search({
         index: 'groups',
         from,
@@ -293,30 +321,98 @@ export const searchService = {
         track_total_hits: true,
       });
 
-      const items: ISearchGroupResult[] = result.hits.hits.map((hit) => {
-        const source = hit._source as ISearchGroupResult;
-        return {
-          groupId: source.groupId,
-          name: source.name,
-          description: source.description || null,
-          memberCount: source.memberCount,
-          type: source.type,
-        };
-      });
+      let items: ISearchGroupResult[] = result.hits.hits
+        .map((hit) => {
+          const source = hit._source as ISearchGroupResult;
+          if (options.userId && !visibleGroupById.has(source.groupId)) return null;
+          const visible = visibleGroupById.get(source.groupId);
+          return {
+            groupId: source.groupId,
+            name: visible?.name ?? source.name,
+            description:
+              typeof (visible as { description?: unknown } | undefined)?.description === 'string'
+                ? ((visible as { description?: string }).description ?? null)
+                : source.description || null,
+            memberCount: visible?.memberCount ?? source.memberCount,
+            type: visible?.type ?? source.type,
+          };
+        })
+        .filter((item): item is ISearchGroupResult => item !== null);
+
+      if (options.userId) {
+        const existingIds = new Set(items.map((item) => item.groupId));
+        const fallbackGroups = visibleGroupConversations
+          .filter((conversation) => {
+            const description = String(
+              (conversation as { description?: unknown }).description ?? '',
+            );
+            return (
+              textMatchesQuery(conversation.name ?? '', options.query) ||
+              textMatchesQuery(description, options.query)
+            );
+          })
+          .filter((conversation) => !existingIds.has(conversation.conversationId))
+          .map(
+            (conversation): ISearchGroupResult => ({
+              groupId: conversation.conversationId,
+              name: conversation.name ?? 'Nhóm',
+              description:
+                typeof (conversation as { description?: unknown }).description === 'string'
+                  ? ((conversation as { description?: string }).description ?? null)
+                  : null,
+              memberCount: conversation.memberCount,
+              type: conversation.type,
+            }),
+          );
+        items = [...items, ...fallbackGroups].slice(0, pageSize);
+      }
 
       const total =
         typeof result.hits.total === 'number' ? result.hits.total : result.hits.total?.value || 0;
-      const hasMore = from + pageSize < total;
+      const totalWithFallback = options.userId ? items.length : Math.max(total, items.length);
+      const hasMore = from + pageSize < totalWithFallback;
 
       return {
         items,
-        total,
+        total: totalWithFallback,
         page,
         pageSize,
         hasMore,
       };
     } catch (error) {
       console.error('Search groups error:', error);
+      if (options.userId) {
+        try {
+          const conversations = await conversationRepository.getConversations(options.userId);
+          const items = conversations
+            .filter((conversation) => conversation.type === 'group' && !conversation.isDeleted)
+            .filter((conversation) => {
+              const description = String(
+                (conversation as { description?: unknown }).description ?? '',
+              );
+              return (
+                textMatchesQuery(conversation.name ?? '', options.query) ||
+                textMatchesQuery(description, options.query)
+              );
+            })
+            .slice(from, from + pageSize)
+            .map(
+              (conversation): ISearchGroupResult => ({
+                groupId: conversation.conversationId,
+                name: conversation.name ?? 'Nhóm',
+                description:
+                  typeof (conversation as { description?: unknown }).description === 'string'
+                    ? ((conversation as { description?: string }).description ?? null)
+                    : null,
+                memberCount: conversation.memberCount,
+                type: conversation.type,
+              }),
+            );
+          return { items, total: items.length, page, pageSize, hasMore: false };
+        } catch (fallbackError) {
+          console.error('Search groups fallback error:', fallbackError);
+        }
+      }
       return { items: [], total: 0, page, pageSize, hasMore: false };
     }
   },

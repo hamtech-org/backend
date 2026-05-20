@@ -131,7 +131,14 @@ export async function executeAiToolCalls(
           query: q || '*',
           page: 1,
           pageSize: 8,
+          userId,
         });
+        if (r.items.length > 0) {
+          clientActions.push({
+            type: 'show_group_results',
+            payload: { source: 'search_groups', query: q, groups: r.items.slice(0, 8) },
+          });
+        }
         parts.push(
           `[search_groups query="${q}"]\n${JSON.stringify(r.items, null, 2).slice(0, 4000)}`,
         );

@@ -129,6 +129,20 @@ export type AiAssistantClientAction =
       };
     }
   | {
+      type: 'show_group_results';
+      payload: {
+        source: 'search_groups';
+        query: string;
+        groups: Array<{
+          groupId: string;
+          name: string;
+          description: string | null;
+          memberCount: number;
+          type: string;
+        }>;
+      };
+    }
+  | {
       type: 'confirm_tool';
       payload: {
         pendingId: string;
