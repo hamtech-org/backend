@@ -52,6 +52,7 @@ type LlmJsonShape = {
 const MAX_HISTORY_MESSAGE_CHARS = 1200;
 const MAX_HISTORY_TRANSCRIPT_CHARS = 16000;
 const MAX_RAG_CHUNK_CHARS = 900;
+const SENSITIVE_PLACEHOLDER = '[Nội dung nhạy cảm đã được chặn]';
 
 function normalizePipelineOptions(
   optionsOrReporter?: StageReporter | AiAssistantPipelineOptions,
@@ -220,6 +221,51 @@ function looksLikeMessageSearchRequest(message: string): boolean {
   );
 }
 
+function detectSensitiveUserInput(text: string): string[] {
+  const normalized = text.normalize('NFKC');
+  const lower = normalized.toLowerCase();
+  const findings = new Set<string>();
+
+  const checks: Array<[string, RegExp]> = [
+    [
+      'OTP/mã xác thực',
+      /\b(?:otp|mã\s*(?:otp|xác\s*thực|xac\s*thuc|2fa|mfa|code)|verification\s*code|auth(?:entication)?\s*code)\b.{0,40}\b\d{4,8}\b/i,
+    ],
+    ['mật khẩu', /\b(?:password|pass|passwd|pwd|mật\s*khẩu|mat\s*khau)\b\s*[:=：-]?\s*\S{4,}/i],
+    ['private key', /-----BEGIN (?:RSA |EC |OPENSSH |DSA |)?PRIVATE KEY-----/i],
+    [
+      'API key/token/secret',
+      /\b(?:api[_-]?key|secret[_-]?key|access[_-]?token|refresh[_-]?token|bearer\s+token|client[_-]?secret|github[_-]?token|slack[_-]?token)\b\s*[:=：-]?\s*['"]?[A-Za-z0-9._~+/=-]{12,}/i,
+    ],
+    ['AWS access key', /\bAKIA[0-9A-Z]{16}\b/],
+    ['JWT/token', /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/],
+    ['SSH key', /\bssh-(?:rsa|ed25519)\s+[A-Za-z0-9+/=]{80,}/i],
+  ];
+
+  for (const [label, pattern] of checks) {
+    if (pattern.test(normalized)) findings.add(label);
+  }
+
+  if (
+    /\b\d{4,8}\b/.test(normalized) &&
+    /\b(?:otp|2fa|mfa|xác\s*thực|xac\s*thuc|verify|verification|đăng\s*nhập|dang\s*nhap)\b/i.test(
+      lower,
+    )
+  ) {
+    findings.add('OTP/mã xác thực');
+  }
+
+  return [...findings];
+}
+
+function buildSensitiveInputRefusal(findings: string[]): string {
+  const labels = findings.length ? findings.join(', ') : 'thông tin nhạy cảm';
+  return [
+    `Mình không thể xử lý nội dung có ${labels}.`,
+    'Bạn hãy xóa hoặc che các thông tin nhạy cảm như OTP, mật khẩu, private key, API key/token rồi gửi lại.',
+  ].join('\n');
+}
+
 export async function runAiAssistantPipeline(
   req: IAiAssistantRequest,
   optionsOrReporter?: StageReporter | AiAssistantPipelineOptions,
@@ -244,6 +290,30 @@ export async function runAiAssistantPipeline(
     await aiAssistantRepository.assertThreadOwnedByUser(userId, threadId);
   }
   throwIfAborted(signal);
+
+  const sensitiveFindings = tokenDecision ? [] : detectSensitiveUserInput(message);
+  if (sensitiveFindings.length > 0) {
+    onStage?.('persist_user_message');
+    const userRow = await aiAssistantRepository.appendMessage(
+      threadId,
+      'user',
+      SENSITIVE_PLACEHOLDER,
+    );
+    await aiAssistantRepository.touchDefaultThread(userId);
+    const reply = buildSensitiveInputRefusal(sensitiveFindings);
+    onStage?.('persist_assistant_message');
+    const assistantRow = await aiAssistantRepository.appendMessage(threadId, 'assistant', reply);
+    await aiAssistantRepository.touchDefaultThread(userId);
+    onStage?.('completed');
+    return {
+      reply,
+      model: aiConfig.modelId,
+      tokensUsed: 0,
+      threadId,
+      userMessageId: userRow.messageId,
+      assistantMessageId: assistantRow.messageId,
+    };
+  }
 
   onStage?.('persist_user_message');
   const userVisibleMessage =
