@@ -21,6 +21,7 @@
     "es:sync:users": "tsx scripts/database/sync-users-to-es.ts",
     "db:setup": "tsx scripts/database/setup-database.ts",
     "db:migrate": "tsx scripts/database/run-migrations.ts",
+    "db:migrate:dist": "node dist/scripts/database/run-migrations.js",
     "db:seed": "tsx scripts/database/insert-data.ts",
     "db:seed:file": "tsx scripts/database/insert-data.ts --file",
     "db:seed:media": "tsx scripts/database/insert-data.ts --file Media",
