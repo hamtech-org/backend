@@ -10,6 +10,8 @@
  *
  * Chạy:
  *   npx tsx scripts/database/insert-data.ts
+ *   npx tsx scripts/database/insert-data.ts --file Media
+ *   npm run db:seed:admin-demo
  */
 
 import fs from 'node:fs';
@@ -36,6 +38,23 @@ const db = DynamoDBDocumentClient.from(client);
 
 const DATA_DIR = path.join(__dirname, 'data');
 const BATCH_SIZE = 25;
+
+/** --file Media.json hoặc --file=Media — chỉ seed một bảng. */
+function parseOnlyTableArg(): string | null {
+  const flagIdx = process.argv.indexOf('--file');
+  if (flagIdx >= 0) {
+    const next = process.argv[flagIdx + 1];
+    if (next && !next.startsWith('-')) {
+      return path.basename(next, '.json');
+    }
+  }
+  const eq = process.argv.find((a) => a.startsWith('--file='));
+  if (eq) {
+    const raw = eq.slice('--file='.length).trim();
+    return raw ? path.basename(raw, '.json') : null;
+  }
+  return null;
+}
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
   const chunks: T[][] = [];
@@ -88,17 +107,26 @@ async function insertData(): Promise<void> {
   console.log('╚══════════════════════════════════════╝');
   console.log(`Endpoint : ${ENDPOINT}`);
   console.log(`Prefix   : ${PREFIX}`);
-  console.log(`Data dir : ${DATA_DIR}\n`);
+  console.log(`Data dir : ${DATA_DIR}`);
 
   if (!fs.existsSync(DATA_DIR)) {
     console.warn('[warn] Data directory not found. Nothing to seed.');
     return;
   }
 
+  const onlyTable = parseOnlyTableArg();
+  if (onlyTable) console.log(`Filter   : chỉ bảng ${onlyTable}`);
+  console.log('');
   const files = fs
     .readdirSync(DATA_DIR)
     .filter((f) => f.endsWith('.json'))
+    .filter((f) => !onlyTable || path.basename(f, '.json') === onlyTable)
     .sort();
+
+  if (onlyTable && files.length === 0) {
+    console.error(`[err]  Không tìm thấy data/${onlyTable}.json`);
+    process.exit(1);
+  }
 
   if (files.length === 0) {
     console.warn('[warn] No .json files found in data/. Nothing to seed.');

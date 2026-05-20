@@ -19,7 +19,7 @@ export interface IUser extends TimestampFields {
   isVerified: boolean;
   lastSeen: string | null;
 
-  tokenVersion: number; 
+  tokenVersion: number;
 
   faceLoginEnabled: boolean;
   rekognitionFaceId: string | null;
@@ -28,6 +28,9 @@ export interface IUser extends TimestampFields {
   oauthId?: string | null;
 
   settings: Record<string, unknown>;
+
+  /** Soft-delete (admin). */
+  isDeleted?: boolean;
 
   GSI1PK?: string;
   GSI1SK?: string;

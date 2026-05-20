@@ -6,6 +6,7 @@ import {
   emitToConversationAndMembers,
   forceUserLeaveConversationRoom,
 } from '../shared/chat.broadcast.js';
+import { syncAssignToAllTasksAndNotify } from '../task/task-membership-sync.js';
 
 export const groupController = {
   getGroupMembers: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -69,6 +70,7 @@ export const groupController = {
       const { memberCount } = await groupService.leaveGroup(userId, groupId, {
         newOwnerUserId: body.newOwnerUserId?.trim(),
       });
+      await syncAssignToAllTasksAndNotify(groupId);
       try {
         const io = getIO();
         const leftAt = new Date().toISOString();
@@ -166,9 +168,10 @@ export const groupController = {
         req.params.groupId,
         req.params.userId,
       );
+      const gid = req.params.groupId;
+      await syncAssignToAllTasksAndNotify(gid);
       try {
         const io = getIO();
-        const gid = req.params.groupId;
         const uid = req.params.userId;
         const payload = { groupId: gid, conversationId: gid, userId: uid, memberCount };
         const profilePayload = { groupId: gid, conversationId: gid, memberCount };

@@ -7,6 +7,7 @@ import { connectRedis } from '@/config/redis.js';
 import { connectKafka } from '@/config/kafka.js';
 import { ensureCollectionExists } from '@/shared/utils/rekognition.js';
 import { startSearchConsumer } from './modules/search/search.consumer.js';
+import { startNotificationConsumer } from './modules/notification/notification.consumer.js';
 import { startTaskDueReminderJob } from '@/modules/chat/task/task.reminder.job.js';
 
 import { elasticsearchUtils } from '@/shared/utils/elasticsearch.js';
@@ -19,6 +20,7 @@ const startServer = async (): Promise<void> => {
     await connectKafka();
     await elasticsearchUtils.initializeAllIndices();
     await startSearchConsumer();
+    await startNotificationConsumer();
     await ensureCollectionExists();
     initializeSocket(server);
     startTaskDueReminderJob();

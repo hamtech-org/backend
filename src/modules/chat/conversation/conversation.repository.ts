@@ -827,6 +827,71 @@ export const conversationRepository = {
   },
 
   /**
+   * Cursor-based paginated message listing (mới → cũ from DynamoDB, reversed to oldest→newest by service).
+   * Returns items + raw DynamoDB ExclusiveStartKey for cursor construction.
+   */
+  listRecentMessagesPaginated: async (
+    conversationId: string,
+    opts: {
+      limit: number;
+      minCreatedAtMs?: number | null;
+      exclusiveStartKey?: Record<string, unknown>;
+    },
+  ): Promise<{ items: IMessage[]; lastEvaluatedKey?: Record<string, unknown> }> => {
+    const limit = Math.min(Math.max(1, opts.limit), 100);
+    const minMs = opts.minCreatedAtMs;
+    const hasCutoff = minMs != null && Number.isFinite(minMs);
+    const collected: IMessage[] = [];
+    let exclusiveStartKey = opts.exclusiveStartKey;
+    const PAGE = Math.min(limit + 10, 100);
+    let rounds = 0;
+    let lastEvaluatedKey: Record<string, unknown> | undefined;
+
+    while (collected.length < limit && rounds < 12) {
+      rounds += 1;
+      const result = await dynamoClient.send(
+        new QueryCommand({
+          TableName: MESSAGES_TABLE,
+          KeyConditionExpression: 'PK = :pk',
+          ExpressionAttributeValues: { ':pk': `CONV#${conversationId}` },
+          Limit: PAGE,
+          ScanIndexForward: false,
+          ...(exclusiveStartKey ? { ExclusiveStartKey: exclusiveStartKey } : {}),
+        }),
+      );
+
+      const items = (result.Items as IMessage[]) ?? [];
+      if (items.length === 0) {
+        lastEvaluatedKey = undefined;
+        break;
+      }
+
+      let reachedHistoryCutoff = false;
+      for (const m of items) {
+        if (hasCutoff) {
+          const t = Date.parse(m.createdAt);
+          if (Number.isFinite(t) && t < minMs!) {
+            reachedHistoryCutoff = true;
+            continue;
+          }
+        }
+        collected.push(m);
+        if (collected.length >= limit) break;
+      }
+
+      lastEvaluatedKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+      if (!lastEvaluatedKey) break;
+      if (reachedHistoryCutoff) {
+        lastEvaluatedKey = undefined;
+        break;
+      }
+      exclusiveStartKey = lastEvaluatedKey;
+    }
+
+    return { items: collected, lastEvaluatedKey };
+  },
+
+  /**
    * Lấy tin theo người gửi và/hoặc khoảng createdAt (ISO), phân trang Query + FilterExpression.
    * Cần ít nhất một trong: senderId hoặc (dateFrom + dateTo).
    */

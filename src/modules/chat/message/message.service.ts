@@ -5,6 +5,7 @@ import type {
   IConversation,
   IConversationMember,
   IMessage,
+  IMessagePage,
   ISendMessageDto,
 } from '../shared/chat.types.js';
 import type { MessageStatus } from '@/shared/types/chat.types.js';
@@ -27,6 +28,7 @@ import {
   resolveMessageHistoryMinCreatedAtMs,
   filterMessagesByJoinHistoryCutoff,
 } from '../shared/chat.helpers.js';
+import { formatGroupJoinLinkListPreview } from '../shared/group-join-link-message.js';
 
 async function emitMessageSearchIndexEvent(payload: {
   action: 'index' | 'update' | 'delete';
@@ -256,6 +258,80 @@ export const messageService = {
       hidden,
       minCreatedAtMs,
     );
+  },
+
+  /**
+   * Cursor-based paginated message loading.
+   * Returns IMessagePage { items (oldest→newest), nextCursor, hasMore }.
+   */
+  getMessagesPaginated: async (
+    conversationId: string,
+    viewerUserId: string,
+    limit: number,
+    cursor?: string,
+  ): Promise<IMessagePage> => {
+    const { conv, minCreatedAtMs, hidden } = await getViewerMessageAccess(
+      conversationId,
+      viewerUserId,
+    );
+
+    // Decode cursor → DynamoDB ExclusiveStartKey
+    let exclusiveStartKey: Record<string, unknown> | undefined;
+    if (cursor) {
+      try {
+        const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf-8')) as Record<
+          string,
+          unknown
+        >;
+        // Validate cursor PK matches the requested conversation
+        if (decoded.PK !== `CONV#${conversationId}`) {
+          throw new ValidationError('Invalid cursor: conversation mismatch');
+        }
+        exclusiveStartKey = decoded;
+      } catch (e) {
+        if (e instanceof ValidationError) throw e;
+        throw new ValidationError('Invalid cursor format');
+      }
+    }
+
+    const effectiveLimit = Math.min(Math.max(1, limit), 100);
+    // Overfetch slightly to account for hidden messages being filtered out
+    const fetchLimit = Math.min(effectiveLimit + 10, 100);
+
+    const { items: raw, lastEvaluatedKey } =
+      await conversationRepository.listRecentMessagesPaginated(conversationId, {
+        limit: fetchLimit,
+        minCreatedAtMs,
+        exclusiveStartKey,
+      });
+
+    const filtered = raw
+      .filter((m) => !isMessageHiddenFromViewer(m, hidden))
+      .slice(0, effectiveLimit);
+
+    const enriched = await enrichMessagesForViewer(
+      conversationId,
+      viewerUserId,
+      filtered,
+      conv,
+      hidden,
+      minCreatedAtMs,
+    );
+
+    // DynamoDB returns newest→oldest; reverse to oldest→newest for client
+    enriched.reverse();
+
+    // Build nextCursor from DynamoDB LastEvaluatedKey
+    let nextCursor: string | null = null;
+    if (lastEvaluatedKey) {
+      nextCursor = Buffer.from(JSON.stringify(lastEvaluatedKey), 'utf-8').toString('base64url');
+    }
+
+    return {
+      items: enriched,
+      nextCursor,
+      hasMore: nextCursor !== null,
+    };
   },
 
   /**
@@ -515,9 +591,12 @@ export const messageService = {
       replyToDetails: await refreshReplyMediaDelivery(messageWithFreshMedia.replyToDetails ?? null),
     };
 
+    const trimmedContent = message.content.trim();
+    const joinLinkPreview =
+      message.type === 'text' ? formatGroupJoinLinkListPreview(trimmedContent) : null;
     const lastPreviewContent =
-      message.content.trim() !== ''
-        ? message.content.trim()
+      trimmedContent !== ''
+        ? (joinLinkPreview ?? trimmedContent)
         : message.type === 'image'
           ? '[Ảnh]'
           : message.type === 'video'
@@ -556,13 +635,26 @@ export const messageService = {
         conversationRepository.updateMemberUnreadCount(conversationId, m.userId, 1),
       ),
       kafkaProducer.send(KAFKA_TOPICS.NOTIFICATION_EVENTS, {
-        type: 'NEW_MESSAGE',
-        payload: {
-          conversationId,
-          senderId,
-          messageId,
-          messagePreview: lastPreviewContent.slice(0, 100),
-          recipientIds: pushRecipientIds,
+        type: 'message',
+        recipientIds: pushRecipientIds,
+        title: senderDisplayName ?? 'Tin nhắn mới',
+        body: lastPreviewContent.slice(0, 100) || 'Bạn có tin nhắn mới',
+        data: {
+          route: 'chat',
+          id: conversationId,
+          entityType: 'chat',
+          entityId: conversationId,
+          deepLink: `/chat/${conversationId}`,
+          actorId: senderId,
+          actorName: senderDisplayName ?? undefined,
+          actorAvatar: senders[0]?.avatar ?? null,
+          extra: {
+            messageId,
+            senderId,
+            actorId: senderId,
+            actorName: senderDisplayName,
+            actorAvatar: senders[0]?.avatar ?? null,
+          },
         },
       }),
       emitMessageSearchIndexEvent({

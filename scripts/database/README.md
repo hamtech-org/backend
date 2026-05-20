@@ -4,9 +4,11 @@ Folder nay chua cac script khoi tao va seed du lieu cho DynamoDB local trong Zal
 
 ## Muc tieu
 
-- Tu dong khoi tao bang va seed data khi chay `docker-compose up`
+- Tu dong khoi tao bang khi chay `docker-compose up` (seed JSON **khong** tu chay)
 - Dam bao idempotent: co the chay lai nhieu lan ma khong loi
 - Tach du lieu seed ra JSON de team de bao tri
+
+**Demo admin dashboards:** xem [SEED_ADMIN_DASHBOARDS.md](./SEED_ADMIN_DASHBOARDS.md).
 
 ## Cau truc folder
 
@@ -42,6 +44,8 @@ Tat ca file trong `data/`:
 - `Reactions.json`
 - `Comments.json`
 - `Reels.json`
+- `Media.json`
+- `Reports.json`
 - `Notifications.json`
 - `ModerationLogs.json`
 - `Analytics.json`
@@ -61,8 +65,9 @@ Duoc goi tu `scripts/entrypoint.sh`:
 1. `npm install`
 2. `npx tsx scripts/database/wait-for-dynamodb.ts`
 3. `npx tsx scripts/database/setup-database.ts`
-4. `npx tsx scripts/database/insert-data.ts`
-5. `npm run dev`
+4. ~~`insert-data.ts`~~ (comment — seed thu cong, xem SEED_ADMIN_DASHBOARDS.md)
+5. Wait ES, sync users/messages len ES
+6. `npm run dev`
 
 ## Lenh thu cong (manual)
 
@@ -70,7 +75,10 @@ Co the chay rieng tung buoc qua `package.json` scripts:
 
 - `npm run db:wait`
 - `npm run db:setup`
-- `npm run db:seed`
+- `npm run db:seed` (tat ca file JSON)
+- `npm run db:seed -- --file Media` (mot bang)
+- `npm run db:seed:admin-demo` (Media + Users + Messages + Posts + Reels)
+- `npm run es:seed:analytics` (Elasticsearch — trang Thong ke)
 - `npm run db:reset`
 - `npm run db:seed:legacy` (chi dung khi can)
 

@@ -1,44 +1,80 @@
 import { adminRepository } from './admin.repository.js';
+import { adminCrudService } from './admin.crud.service.js';
+import type { IAnalyticsMetric, IModerationLog, MetricType } from './admin.types.js';
+import { adminResourcesService } from './admin.resources.service.js';
+import type { IAdminResourceSummary } from './admin.resources.types.js';
 import type {
-  IAnalyticsMetric, IModerateAction, IModerationLog,
-  IResourceSummary, MetricType,
-} from './admin.types.js';
+  AdminListQuery,
+  AdminListResult,
+  AdminUserListItem,
+  AdminGroupListItem,
+  AdminPostListItem,
+  CreateAdminUserDto,
+  UpdateAdminUserDto,
+  CreateAdminGroupDto,
+  UpdateAdminGroupDto,
+  CreateAdminPostDto,
+  UpdateAdminPostDto,
+} from './admin.crud.types.js';
 
 export const adminService = {
-  getGroups: async (_limit?: number): Promise<unknown[]> => {
-    // TODO: Lấy danh sách tất cả groups cho admin
-    return [];
-  },
+  // Users
+  listUsers: (query: AdminListQuery): Promise<AdminListResult<AdminUserListItem>> =>
+    adminCrudService.listUsers(query),
+  getUser: (userId: string): Promise<AdminUserListItem> => adminCrudService.getUser(userId),
+  createUser: (adminId: string, data: CreateAdminUserDto): Promise<AdminUserListItem> =>
+    adminCrudService.createUser(adminId, data),
+  updateUser: (
+    adminId: string,
+    userId: string,
+    data: UpdateAdminUserDto,
+  ): Promise<AdminUserListItem> => adminCrudService.updateUser(adminId, userId, data),
+  updateUserRole: (
+    adminId: string,
+    userId: string,
+    role: 'admin' | 'user',
+  ): Promise<AdminUserListItem> => adminCrudService.updateUserRole(adminId, userId, role),
+  deleteUser: (adminId: string, userId: string): Promise<void> =>
+    adminCrudService.deleteUser(adminId, userId),
 
-  moderateGroup: async (_adminId: string, _groupId: string, _action: IModerateAction): Promise<void> => {
-    // TODO: Thực hiện hành động moderate group + ghi log
-    void adminRepository;
-    throw new Error('Chưa triển khai');
-  },
+  // Groups
+  listGroups: (query: AdminListQuery): Promise<AdminListResult<AdminGroupListItem>> =>
+    adminCrudService.listGroups(query),
+  getGroup: (groupId: string): Promise<AdminGroupListItem> => adminCrudService.getGroup(groupId),
+  createGroup: (adminId: string, data: CreateAdminGroupDto): Promise<AdminGroupListItem> =>
+    adminCrudService.createGroup(adminId, data),
+  updateGroup: (
+    adminId: string,
+    groupId: string,
+    data: UpdateAdminGroupDto,
+  ): Promise<AdminGroupListItem> => adminCrudService.updateGroup(adminId, groupId, data),
+  deleteGroup: (adminId: string, groupId: string): Promise<void> =>
+    adminCrudService.deleteGroup(adminId, groupId),
 
-  getPosts: async (_limit?: number): Promise<unknown[]> => {
-    // TODO: Lấy danh sách bài viết cần moderate
-    return [];
-  },
+  // Posts
+  listPosts: (query: AdminListQuery): Promise<AdminListResult<AdminPostListItem>> =>
+    adminCrudService.listPosts(query),
+  getPost: (postId: string): Promise<AdminPostListItem> => adminCrudService.getPost(postId),
+  createPost: (adminId: string, data: CreateAdminPostDto): Promise<AdminPostListItem> =>
+    adminCrudService.createPost(adminId, data),
+  updatePost: (
+    adminId: string,
+    postId: string,
+    data: UpdateAdminPostDto,
+  ): Promise<AdminPostListItem> => adminCrudService.updatePost(adminId, postId, data),
+  deletePost: (adminId: string, postId: string): Promise<void> =>
+    adminCrudService.deletePost(adminId, postId),
 
-  moderatePost: async (_adminId: string, _postId: string, _action: IModerateAction): Promise<void> => {
-    // TODO: Thực hiện hành động moderate post + ghi log
-    throw new Error('Chưa triển khai');
-  },
-
-  deletePost: async (_adminId: string, _postId: string, _reason: string): Promise<void> => {
-    // TODO: Xóa bài viết vi phạm + ghi log
-    throw new Error('Chưa triển khai');
-  },
-
-  getAnalytics: async (metricType: MetricType, from?: string, to?: string): Promise<IAnalyticsMetric[]> => {
+  getAnalytics: async (
+    metricType: MetricType,
+    from?: string,
+    to?: string,
+  ): Promise<IAnalyticsMetric[]> => {
     return adminRepository.getAnalytics(metricType, from, to);
   },
 
-  getResourceSummary: async (): Promise<IResourceSummary> => {
-    // TODO: Tổng hợp resource summary từ nhiều bảng
-    throw new Error('Chưa triển khai');
-  },
+  getResourceSummary: async (forceRefresh = false): Promise<IAdminResourceSummary> =>
+    adminResourcesService.getSummary(forceRefresh),
 
   getModerationLogs: async (adminId?: string): Promise<IModerationLog[]> => {
     return adminRepository.getModerationLogs(adminId);
