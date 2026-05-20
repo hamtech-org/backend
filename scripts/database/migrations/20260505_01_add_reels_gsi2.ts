@@ -4,6 +4,8 @@ import {
   UpdateTableCommand,
   ScanCommand,
   UpdateItemCommand,
+  type AttributeValue,
+  type ScanCommandOutput,
 } from '@aws-sdk/client-dynamodb';
 
 export async function up(client: DynamoDBClient, prefix: string): Promise<void> {
@@ -52,11 +54,11 @@ export async function up(client: DynamoDBClient, prefix: string): Promise<void> 
   // 2. Backfill dữ liệu
   console.log(`[Migration] Đang quét các bản ghi cũ để bổ sung GSI2PK và GSI2SK...`);
 
-  let lastEvaluatedKey: Record<string, any> | undefined = undefined;
+  let lastEvaluatedKey: Record<string, AttributeValue> | undefined = undefined;
   let backfilledCount = 0;
 
   do {
-    const scanResult = await client.send(
+    const scanResult: ScanCommandOutput = await client.send(
       new ScanCommand({
         TableName: tableName,
         FilterExpression: 'attribute_not_exists(GSI2PK)',
