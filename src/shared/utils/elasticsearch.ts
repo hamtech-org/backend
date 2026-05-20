@@ -90,8 +90,15 @@ export const elasticsearchUtils = {
               fields: { keyword: { type: 'keyword' } },
             },
             description: { type: 'text', analyzer: 'standard' },
+            slug: { type: 'keyword' },
+            category: { type: 'keyword' },
+            avatar: { type: 'keyword', index: false },
+            coverUrl: { type: 'keyword', index: false },
             memberCount: { type: 'integer' },
             type: { type: 'keyword' },
+            status: { type: 'keyword' },
+            isActive: { type: 'boolean' },
+            createdAt: { type: 'date' },
           },
         },
         settings: {
@@ -102,6 +109,26 @@ export const elasticsearchUtils = {
       logger.info(`Elasticsearch index '${indexName}' created successfully`);
     } catch (error) {
       logger.error(`Failed to initialize '${indexName}' index:`, error);
+    }
+  },
+
+  indexGroup: async (groupId: string, document: Record<string, unknown>): Promise<void> => {
+    try {
+      await esClient.index({
+        index: 'groups',
+        id: groupId,
+        document,
+      });
+    } catch (error) {
+      logger.error(`Failed to index group ${groupId}:`, error);
+    }
+  },
+
+  deleteGroup: async (groupId: string): Promise<void> => {
+    try {
+      await esClient.delete({ index: 'groups', id: groupId });
+    } catch (error) {
+      logger.error(`Failed to delete group ${groupId}:`, error);
     }
   },
 

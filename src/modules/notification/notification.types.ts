@@ -20,6 +20,7 @@ export type NotificationRoute =
   | 'reel'
   | 'friends'
   | 'profile'
+  | 'community'
   | 'notifications'
   | 'live'
   | 'ai';

@@ -4,7 +4,7 @@ import { elasticsearchUtils } from '@/shared/utils/elasticsearch.js';
 
 interface ISearchIndexEvent {
   action: 'index' | 'update' | 'delete';
-  indexName: 'users' | 'posts' | 'messages';
+  indexName: 'users' | 'posts' | 'messages' | 'groups';
   documentId: string;
   document: Record<string, unknown> | null;
 }
@@ -31,6 +31,8 @@ export const startSearchConsumer = async (): Promise<void> => {
               await elasticsearchUtils.indexUser(event.documentId, event.document || {});
             } else if (event.indexName === 'messages') {
               await elasticsearchUtils.indexMessage(event.documentId, event.document || {});
+            } else if (event.indexName === 'groups') {
+              await elasticsearchUtils.indexGroup(event.documentId, event.document || {});
             }
             if (event.indexName === 'posts') {
               if (event.action === 'index') {
@@ -48,6 +50,8 @@ export const startSearchConsumer = async (): Promise<void> => {
               await elasticsearchUtils.deleteUser(event.documentId);
             } else if (event.indexName === 'messages') {
               await elasticsearchUtils.deleteMessage(event.documentId);
+            } else if (event.indexName === 'groups') {
+              await elasticsearchUtils.deleteGroup(event.documentId);
             }
             if (event.indexName === 'posts') {
               await elasticsearchUtils.deletePost(event.documentId);

@@ -276,9 +276,21 @@ export const searchService = {
               },
             ],
             minimum_should_match: 1,
+            filter: [{ term: { isActive: true } }, { term: { status: 'active' } }],
           },
         },
-        _source: ['groupId', 'name', 'description', 'memberCount', 'type'],
+        _source: [
+          'groupId',
+          'communityId',
+          'name',
+          'description',
+          'slug',
+          'avatar',
+          'coverUrl',
+          'category',
+          'memberCount',
+          'type',
+        ],
         track_total_hits: true,
       });
 
@@ -286,8 +298,13 @@ export const searchService = {
         const source = hit._source as ISearchGroupResult;
         return {
           groupId: source.groupId,
+          communityId: source.communityId,
           name: source.name,
           description: source.description || null,
+          slug: source.slug,
+          avatar: source.avatar,
+          coverUrl: source.coverUrl,
+          category: source.category,
           memberCount: source.memberCount,
           type: source.type,
         };

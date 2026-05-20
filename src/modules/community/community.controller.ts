@@ -1,0 +1,176 @@
+import { Request, Response, NextFunction } from 'express';
+import { sendCreated, sendSuccess } from '@/shared/utils/response.js';
+import { communityService } from './community.service.js';
+import type {
+  ICreateCommunityDto,
+  IJoinCommunityDto,
+  IListCommunitiesQuery,
+  IResolveJoinRequestDto,
+  ITransferOwnerDto,
+  IUpdateCommunityDto,
+  IUpdateMemberRoleDto,
+} from './community.types.js';
+
+export const communityController = {
+  list: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const page = await communityService.listCommunities(
+        req.user!.userId,
+        req.query as unknown as IListCommunitiesQuery,
+      );
+      sendSuccess(res, page);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  create: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const community = await communityService.createCommunity(
+        req.user!.userId,
+        req.body as ICreateCommunityDto,
+      );
+      sendCreated(res, community, 'Tạo cộng đồng thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  get: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const community = await communityService.getCommunity(req.user!.userId, req.params.groupId);
+      sendSuccess(res, community);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  update: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const community = await communityService.updateCommunity(
+        req.user!.userId,
+        req.params.groupId,
+        req.body as IUpdateCommunityDto,
+      );
+      sendSuccess(res, community, 'Cập nhật cộng đồng thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  archive: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await communityService.archiveCommunity(req.user!.userId, req.params.groupId);
+      sendSuccess(res, null, 'Archive cộng đồng thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  join: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await communityService.joinCommunity(
+        req.user!.userId,
+        req.params.groupId,
+        req.body as IJoinCommunityDto,
+      );
+      sendSuccess(res, result);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  leave: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await communityService.leaveCommunity(req.user!.userId, req.params.groupId);
+      sendSuccess(res, null, 'Rời cộng đồng thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  members: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const members = await communityService.listMembers(req.user!.userId, req.params.groupId);
+      sendSuccess(res, members);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  requests: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const requests = await communityService.listPendingRequests(
+        req.user!.userId,
+        req.params.groupId,
+      );
+      sendSuccess(res, requests);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  resolveRequest: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await communityService.resolveJoinRequest(
+        req.user!.userId,
+        req.params.groupId,
+        req.params.userId,
+        req.body as IResolveJoinRequestDto,
+      );
+      sendSuccess(res, null, 'Xử lý yêu cầu thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  removeMember: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await communityService.removeMember(req.user!.userId, req.params.groupId, req.params.userId);
+      sendSuccess(res, null, 'Xóa thành viên thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  updateMemberRole: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await communityService.updateMemberRole(
+        req.user!.userId,
+        req.params.groupId,
+        req.params.userId,
+        req.body as IUpdateMemberRoleDto,
+      );
+      sendSuccess(res, null, 'Cập nhật vai trò thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  transferOwner: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await communityService.transferOwner(
+        req.user!.userId,
+        req.params.groupId,
+        req.body as ITransferOwnerDto,
+      );
+      sendSuccess(res, null, 'Chuyển quyền owner thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  posts: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const page = await communityService.listCommunityPosts(
+        req.user!.userId,
+        req.params.groupId,
+        req.query.limit ? Number(req.query.limit) : undefined,
+        typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
+      );
+      sendSuccess(res, page);
+    } catch (error) {
+      next(error);
+    }
+  },
+};
