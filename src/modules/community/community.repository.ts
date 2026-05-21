@@ -4,6 +4,7 @@ import {
   GetCommand,
   PutCommand,
   QueryCommand,
+  ScanCommand,
   TransactWriteCommand,
   UpdateCommand,
   type QueryCommandOutput,
@@ -190,16 +191,42 @@ export const communityRepository = {
         TableName: GROUPS_TABLE,
         IndexName: GSI2,
         KeyConditionExpression: 'GSI2PK = :pk AND begins_with(GSI2SK, :prefix)',
-        FilterExpression: 'isActive = :active AND #status = :status',
-        ExpressionAttributeNames: { '#status': 'status' },
+        FilterExpression: 'isActive = :active AND #status = :status AND #type = :type',
+        ExpressionAttributeNames: { '#status': 'status', '#type': 'type' },
         ExpressionAttributeValues: {
           ':pk': `CATEGORY#${category}`,
           ':prefix': 'CREATED#',
           ':active': true,
           ':status': 'active',
+          ':type': 'public',
         },
         Limit: limit,
         ScanIndexForward: false,
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+    return {
+      items: (result.Items as ICommunity[]) ?? [],
+      lastEvaluatedKey: result.LastEvaluatedKey as Record<string, unknown> | undefined,
+    };
+  },
+
+  listAll: async (
+    limit: number,
+    exclusiveStartKey?: Record<string, unknown>,
+  ): Promise<PageResult<ICommunity>> => {
+    const result = await dynamoClient.send(
+      new ScanCommand({
+        TableName: GROUPS_TABLE,
+        FilterExpression: 'SK = :sk AND isActive = :active AND #status = :status AND #type = :type',
+        ExpressionAttributeNames: { '#status': 'status', '#type': 'type' },
+        ExpressionAttributeValues: {
+          ':sk': 'META',
+          ':active': true,
+          ':status': 'active',
+          ':type': 'public',
+        },
+        Limit: limit,
         ExclusiveStartKey: exclusiveStartKey,
       }),
     );

@@ -253,11 +253,9 @@ export const communityService = {
       };
     }
 
-    const page = await communityRepository.listByCategory(
-      query.category ?? 'general',
-      limit,
-      cursor,
-    );
+    const page = query.category
+      ? await communityRepository.listByCategory(query.category, limit, cursor)
+      : await communityRepository.listAll(limit, cursor);
     return {
       items: await Promise.all(page.items.map((item) => attachViewerState(item, userId))),
       nextCursor: page.lastEvaluatedKey ? encodeCursor(page.lastEvaluatedKey) : null,
