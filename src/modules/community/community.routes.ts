@@ -11,6 +11,7 @@ import {
   updateCommunitySchema,
   updateMemberRoleSchema,
   reportCommunitySchema,
+  resolvePendingPostSchema,
 } from './community.validator.js';
 
 const router = Router();
@@ -56,6 +57,14 @@ router.post(
   authenticate,
   validate(reportCommunitySchema),
   communityController.report,
+);
+
+router.get('/:groupId/moderation/posts', authenticate, communityController.listPendingPosts);
+router.post(
+  '/:groupId/moderation/posts/:postId/resolve',
+  authenticate,
+  validate(resolvePendingPostSchema),
+  communityController.resolvePendingPost,
 );
 
 export default router;

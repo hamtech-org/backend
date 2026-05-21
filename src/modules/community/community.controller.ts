@@ -200,4 +200,41 @@ export const communityController = {
       next(error);
     }
   },
+
+  listPendingPosts: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const page = await communityService.listPendingPosts(
+        req.user!.userId,
+        req.params.groupId,
+        req.query.limit ? Number(req.query.limit) : undefined,
+        typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
+      );
+      sendSuccess(res, page);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  resolvePendingPost: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { action, rejectReason } = req.body as {
+        action: 'approve' | 'reject';
+        rejectReason?: string;
+      };
+      await communityService.resolvePendingPost(
+        req.user!.userId,
+        req.params.groupId,
+        req.params.postId,
+        action,
+        rejectReason,
+      );
+      sendSuccess(
+        res,
+        null,
+        action === 'approve' ? 'Duyệt bài viết thành công' : 'Từ chối bài viết thành công',
+      );
+    } catch (error) {
+      next(error);
+    }
+  },
 };

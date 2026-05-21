@@ -43,6 +43,7 @@ export interface ICommunity {
   postCount: number;
   popularityScore: number;
   isApprovalRequired: boolean;
+  isPostApprovalRequired: boolean;
   conversationId: string | null;
   isActive: boolean;
   status: CommunityStatus;
@@ -110,6 +111,7 @@ export interface ICreateCommunityDto {
   rules?: ICommunityRule[];
   type: CommunityType;
   joinPolicy?: CommunityJoinPolicy;
+  isPostApprovalRequired?: boolean;
 }
 
 export interface IUpdateCommunityDto {
@@ -122,6 +124,7 @@ export interface IUpdateCommunityDto {
   rules?: ICommunityRule[];
   type?: CommunityType;
   joinPolicy?: CommunityJoinPolicy;
+  isPostApprovalRequired?: boolean;
 }
 
 export interface IListCommunitiesQuery {

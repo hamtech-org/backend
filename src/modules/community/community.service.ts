@@ -281,6 +281,7 @@ export const communityService = {
       postCount: 0,
       popularityScore: 0,
       isApprovalRequired: joinPolicy === 'approval',
+      isPostApprovalRequired: data.isPostApprovalRequired ?? false,
       conversationId: null,
       isActive: true,
       status: 'active',
@@ -376,6 +377,9 @@ export const communityService = {
     if (data.joinPolicy !== undefined) {
       updates.joinPolicy = joinPolicy;
       updates.isApprovalRequired = joinPolicy === 'approval';
+    }
+    if (data.isPostApprovalRequired !== undefined) {
+      updates.isPostApprovalRequired = data.isPostApprovalRequired;
     }
 
     try {
@@ -737,5 +741,152 @@ export const communityService = {
       details: data.details,
       createdAt,
     });
+  },
+
+  listPendingPosts: async (
+    actorId: string,
+    groupId: string,
+    limit?: number,
+    cursor?: string,
+  ): Promise<ICommunityPostsPage> => {
+    await communityService.assertCommunityRole(actorId, groupId, ['owner', 'admin', 'moderator']);
+    const page = await communityRepository.listPendingContentIndex(
+      groupId,
+      'post',
+      Math.min(limit ?? 20, 50),
+      decodeCursor(cursor),
+    );
+    const rawPosts = await Promise.all(
+      page.items.map((item: ICommunityContentIndex) =>
+        newsfeedRepository.getPostById(item.contentId),
+      ),
+    );
+    const validPosts = rawPosts.filter((item): item is IPost => !!item);
+    const enriched = await enrichPosts(validPosts, actorId);
+    return {
+      items: enriched,
+      nextCursor: page.lastEvaluatedKey ? encodeCursor(page.lastEvaluatedKey) : null,
+      hasMore: Boolean(page.lastEvaluatedKey),
+    };
+  },
+
+  resolvePendingPost: async (
+    actorId: string,
+    groupId: string,
+    postId: string,
+    action: 'approve' | 'reject',
+    rejectReason?: string,
+  ): Promise<void> => {
+    await communityService.assertCommunityRole(actorId, groupId, ['owner', 'admin', 'moderator']);
+    const post = await newsfeedRepository.getPostById(postId);
+    if (!post || post.groupId !== groupId) {
+      throw new NotFoundError('Bài viết không tồn tại trong cộng đồng này');
+    }
+
+    const createdAtMs = new Date(post.createdAt).getTime();
+
+    if (action === 'approve') {
+      await communityRepository.deletePendingContentIndex(groupId, 'post', postId, createdAtMs);
+      await communityService.addContentIndex(
+        groupId,
+        'post',
+        postId,
+        post.authorId,
+        post.createdAt,
+        createdAtMs,
+      );
+
+      await newsfeedRepository.updatePost(postId, {
+        moderationStatus: 'approved',
+        isModerated: true,
+      });
+
+      const doc = {
+        postId: post.postId,
+        authorId: post.authorId,
+        content: post.content,
+        type: post.type,
+        createdAt: post.createdAt,
+        visibility: post.visibility,
+        publicationStatus: post.publicationStatus,
+        tags: post.tags,
+        categories: post.categories,
+        groupId: post.groupId,
+        communityId: post.communityId,
+      };
+
+      try {
+        const producer = getKafkaProducer();
+        await producer.send({
+          topic: KAFKA_TOPICS.SEARCH_INDEX,
+          messages: [
+            {
+              key: post.postId,
+              value: JSON.stringify({
+                action: 'index',
+                indexName: 'posts',
+                documentId: post.postId,
+                document: doc,
+              }),
+            },
+          ],
+        });
+      } catch (error) {
+        logger.error(`Emit search.index event failed for post ${post.postId} on approve:`, error);
+      }
+
+      const resolver = await userRepository.findById(actorId);
+      const community = await communityRepository.getCommunityById(groupId);
+      void notificationService
+        .dispatch({
+          type: 'post_approved',
+          userId: post.authorId,
+          title: 'Bài viết được duyệt',
+          body: `Bài viết của bạn trong cộng đồng "${community?.name || 'Cộng đồng'}" đã được phê duyệt`,
+          data: {
+            route: 'post',
+            id: postId,
+            entityType: 'post',
+            entityId: postId,
+            deepLink: `/?postId=${postId}`,
+            actorId,
+            actorName: resolver?.displayName || undefined,
+            actorAvatar: resolver?.avatar ?? null,
+            extra: { groupId, postId },
+          },
+        })
+        .catch((e) => logger.error('post_approved notification failed', e));
+    } else {
+      await communityRepository.deletePendingContentIndex(groupId, 'post', postId, createdAtMs);
+
+      await newsfeedRepository.updatePost(postId, {
+        moderationStatus: 'rejected',
+        isModerated: true,
+      });
+
+      const resolver = await userRepository.findById(actorId);
+      const community = await communityRepository.getCommunityById(groupId);
+      void notificationService
+        .dispatch({
+          type: 'post_rejected',
+          userId: post.authorId,
+          title: 'Bài viết bị từ chối',
+          body: `Bài viết của bạn trong cộng đồng "${community?.name || 'Cộng đồng'}" đã bị từ chối.${
+            rejectReason ? ` Lý do: ${rejectReason}` : ''
+          }`,
+          data: {
+            route: 'post',
+            id: postId,
+            entityType: 'post',
+            entityId: postId,
+            deepLink: `/?postId=${postId}`,
+            actorId,
+            actorName: resolver?.displayName || undefined,
+            actorAvatar: resolver?.avatar ?? null,
+            extra: { groupId, postId, rejectReason },
+          },
+        })
+        .catch((e) => logger.error('post_rejected notification failed', e));
+    }
   },
 };

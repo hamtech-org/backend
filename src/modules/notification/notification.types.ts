@@ -12,7 +12,9 @@ export type NotificationType =
   | 'live_started'
   | 'comment_reply'
   | 'ai_job_done'
-  | 'stats_milestone';
+  | 'stats_milestone'
+  | 'post_approved'
+  | 'post_rejected';
 
 export type NotificationRoute =
   | 'chat'

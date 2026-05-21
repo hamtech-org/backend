@@ -11,6 +11,7 @@ import { extractHashtagsFromText, extractMentionsFromText } from '@/shared/utils
 import { getIO } from '@/socket/index.js';
 import { notificationService } from '@/modules/notification/notification.service.js';
 import { communityService } from '@/modules/community/community.service.js';
+import { communityRepository } from '@/modules/community/community.repository.js';
 import type {
   IPost,
   IComment,
@@ -304,11 +305,31 @@ export const newsfeedService = {
 
   createPost: async (authorId: string, data: ICreatePostDto): Promise<IPost> => {
     const groupId = data.groupId ?? data.communityId;
-    if (groupId) await communityService.assertActiveMember(authorId, groupId);
+    let isPendingApproval = false;
+    let memberRole: string = 'member';
+
+    if (groupId) {
+      const member = await communityService.assertActiveMember(authorId, groupId);
+      memberRole = member.role;
+      const community = await communityService.getCommunity(authorId, groupId);
+      if (
+        community.isPostApprovalRequired &&
+        data.publicationStatus === 'published' &&
+        !['owner', 'admin', 'moderator'].includes(memberRole)
+      ) {
+        isPendingApproval = true;
+      }
+    }
 
     const nowDate = new Date();
     const now = nowDate.toISOString();
     const postId = uuidv4();
+
+    const moderationStatus = isPendingApproval
+      ? 'pending'
+      : data.publicationStatus === 'published'
+        ? 'approved'
+        : 'pending';
 
     const post: IPost = {
       postId,
@@ -325,26 +346,40 @@ export const newsfeedService = {
       commentsCount: 0,
       sharesCount: 0,
       viewsCount: 0,
-      isModerated: data.publicationStatus === 'published',
-      moderationStatus: data.publicationStatus === 'published' ? 'approved' : 'pending',
+      isModerated: !isPendingApproval && data.publicationStatus === 'published',
+      moderationStatus,
       createdAt: now,
       updatedAt: now,
     };
 
     await newsfeedRepository.createPost(post);
+
     if (groupId) {
-      await communityService.addContentIndex(
-        groupId,
-        'post',
-        postId,
-        authorId,
-        now,
-        nowDate.getTime(),
-      );
+      if (isPendingApproval) {
+        // Chỉ lưu vào pending index của group, không cộng postCount của group
+        await communityRepository.addPendingContentIndex({
+          groupId,
+          communityId: groupId,
+          contentType: 'post',
+          contentId: postId,
+          authorId,
+          createdAt: now,
+          createdAtMs: nowDate.getTime(),
+        });
+      } else {
+        await communityService.addContentIndex(
+          groupId,
+          'post',
+          postId,
+          authorId,
+          now,
+          nowDate.getTime(),
+        );
+      }
     }
 
-    // Chỉ index bài publish để search public hoạt động
-    if (post.publicationStatus === 'published') {
+    // Chỉ index bài publish đã approved để search public hoạt động
+    if (post.publicationStatus === 'published' && !isPendingApproval) {
       const doc = {
         postId: post.postId,
         authorId: post.authorId,

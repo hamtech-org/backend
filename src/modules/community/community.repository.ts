@@ -613,6 +613,65 @@ export const communityRepository = {
     );
   },
 
+  addPendingContentIndex: async (content: ICommunityContentIndex): Promise<void> => {
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: GROUPS_TABLE,
+        Item: {
+          PK: `GROUP#${content.groupId}`,
+          SK: `PENDING_CONTENT#${padMs(content.createdAtMs)}#${content.contentType}#${content.contentId}`,
+          ...content,
+        },
+        ConditionExpression: 'attribute_not_exists(PK) AND attribute_not_exists(SK)',
+      }),
+    );
+  },
+
+  deletePendingContentIndex: async (
+    groupId: string,
+    contentType: CommunityContentType,
+    contentId: string,
+    createdAtMs: number,
+  ): Promise<void> => {
+    await dynamoClient.send(
+      new DeleteCommand({
+        TableName: GROUPS_TABLE,
+        Key: {
+          PK: `GROUP#${groupId}`,
+          SK: `PENDING_CONTENT#${padMs(createdAtMs)}#${contentType}#${contentId}`,
+        },
+      }),
+    );
+  },
+
+  listPendingContentIndex: async (
+    groupId: string,
+    contentType: CommunityContentType,
+    limit: number,
+    exclusiveStartKey?: Record<string, unknown>,
+  ): Promise<PageResult<ICommunityContentIndex>> => {
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: GROUPS_TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        ExpressionAttributeValues: {
+          ':pk': `GROUP#${groupId}`,
+          ':prefix': 'PENDING_CONTENT#',
+        },
+        Limit: limit,
+        ScanIndexForward: false,
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+    const items = ((result.Items as ICommunityContentIndex[]) ?? []).filter(
+      (item) => item.contentType === contentType,
+    );
+    return {
+      items,
+      lastEvaluatedKey: result.LastEvaluatedKey as Record<string, unknown> | undefined,
+    };
+  },
+
   listContentIndex: async (
     groupId: string,
     contentType: CommunityContentType,

@@ -19,6 +19,7 @@ export const createCommunitySchema = z.object({
   rules: z.array(communityRuleSchema).max(10).optional(),
   type: z.enum(['public', 'private']),
   joinPolicy: z.enum(['open', 'approval']).optional(),
+  isPostApprovalRequired: z.boolean().optional(),
 });
 
 export const updateCommunitySchema = createCommunitySchema.partial();
@@ -49,4 +50,9 @@ export const transferOwnerSchema = z.object({
 export const reportCommunitySchema = z.object({
   reason: z.enum(['spam', 'nudity', 'hate', 'violence', 'other']),
   details: z.string().max(500).optional(),
+});
+
+export const resolvePendingPostSchema = z.object({
+  action: z.enum(['approve', 'reject']),
+  rejectReason: z.string().max(500).optional(),
 });
