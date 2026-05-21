@@ -50,6 +50,8 @@ export interface IPost extends TimestampFields {
   currentUserReaction?: ReactionType | null; // Enrich ở service
   isSaved?: boolean; // Enrich ở service
   sharedFrom?: ISharedPostInfo; // Bài gốc nếu đây là shared post
+  isPinned?: boolean;
+  pinnedAt?: string | null;
 }
 
 export interface IComment extends TimestampFields {

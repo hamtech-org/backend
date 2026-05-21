@@ -23,6 +23,7 @@
     "db:migrate": "tsx scripts/database/run-migrations.ts",
     "db:migrate:dist": "node dist/scripts/database/run-migrations.js",
     "db:seed": "tsx scripts/database/insert-data.ts",
+    "job:popularity": "tsx scripts/jobs/calculate-popularity.ts",
     "db:seed:file": "tsx scripts/database/insert-data.ts --file",
     "db:seed:media": "tsx scripts/database/insert-data.ts --file Media",
     "db:seed:users": "tsx scripts/database/insert-data.ts --file Users",

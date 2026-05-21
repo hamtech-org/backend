@@ -97,7 +97,7 @@ export const communityRepository = {
                 PK: `GROUP#${community.groupId}`,
                 SK: 'META',
                 GSI2PK: `CATEGORY#${community.category}`,
-                GSI2SK: `CREATED#${padMs(community.createdAtMs)}#${community.groupId}`,
+                GSI2SK: `POPULAR#0000000000#${community.groupId}`,
                 ...community,
               },
               ConditionExpression: 'attribute_not_exists(PK) AND attribute_not_exists(SK)',
@@ -195,7 +195,7 @@ export const communityRepository = {
         ExpressionAttributeNames: { '#status': 'status', '#type': 'type' },
         ExpressionAttributeValues: {
           ':pk': `CATEGORY#${category}`,
-          ':prefix': 'CREATED#',
+          ':prefix': 'POPULAR#',
           ':active': true,
           ':status': 'active',
           ':type': 'public',

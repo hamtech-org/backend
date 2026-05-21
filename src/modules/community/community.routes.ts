@@ -10,6 +10,7 @@ import {
   transferOwnerSchema,
   updateCommunitySchema,
   updateMemberRoleSchema,
+  reportCommunitySchema,
 } from './community.validator.js';
 
 const router = Router();
@@ -48,5 +49,13 @@ router.patch(
   communityController.resolveRequest,
 );
 router.get('/:groupId/posts', authenticate, communityController.posts);
+router.put('/:groupId/posts/:postId/pin', authenticate, communityController.pinPost);
+router.put('/:groupId/posts/:postId/unpin', authenticate, communityController.unpinPost);
+router.post(
+  '/:groupId/reports',
+  authenticate,
+  validate(reportCommunitySchema),
+  communityController.report,
+);
 
 export default router;

@@ -173,4 +173,31 @@ export const communityController = {
       next(error);
     }
   },
+
+  pinPost: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await communityService.pinPost(req.user!.userId, req.params.groupId, req.params.postId);
+      sendSuccess(res, null, 'Ghim bài viết thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  unpinPost: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await communityService.unpinPost(req.user!.userId, req.params.groupId, req.params.postId);
+      sendSuccess(res, null, 'Bỏ ghim bài viết thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  report: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await communityService.reportCommunity(req.user!.userId, req.params.groupId, req.body);
+      sendSuccess(res, null, 'Báo cáo cộng đồng thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
 };

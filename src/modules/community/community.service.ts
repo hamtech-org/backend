@@ -150,6 +150,80 @@ const attachViewerState = async (community: ICommunity, userId: string): Promise
   };
 };
 
+const enrichPosts = async (validPosts: IPost[], actorId: string): Promise<IPost[]> => {
+  if (validPosts.length === 0) return [];
+
+  // 1. Enrich Author Info
+  const authorIds = Array.from(new Set(validPosts.map((p) => p.authorId)));
+  const users = authorIds.length > 0 ? await userRepository.findMultipleById(authorIds) : [];
+  const userMap = new Map(users.map((u) => [u.userId, u]));
+
+  let enriched = validPosts.map((p) => {
+    const u = userMap.get(p.authorId);
+    return {
+      ...p,
+      author: u
+        ? {
+            userId: p.authorId,
+            displayName: u.displayName ?? p.authorId,
+            avatar: u.avatar ?? null,
+          }
+        : { userId: p.authorId, displayName: p.authorId, avatar: null },
+    };
+  });
+
+  // 2. Enrich Current User Reaction
+  enriched = await Promise.all(
+    enriched.map(async (p) => {
+      const reaction = await newsfeedRepository.getReaction(p.postId, actorId);
+      return {
+        ...p,
+        currentUserReaction: (reaction?.type as ReactionType) ?? null,
+      };
+    }),
+  );
+
+  // 3. Enrich Saved Status
+  const postIds = enriched.map((p) => p.postId);
+  const savedIds =
+    postIds.length > 0
+      ? await newsfeedRepository.getSavedPostIds(actorId, postIds)
+      : new Set<string>();
+  enriched = enriched.map((p) => ({
+    ...p,
+    isSaved: savedIds.has(p.postId),
+  }));
+
+  // 4. Enrich Shared Post Author Info
+  const needEnrichShared = enriched.filter((p) => p.sharedFrom && !p.sharedFrom.author);
+  if (needEnrichShared.length > 0) {
+    const sharedAuthorIds = Array.from(
+      new Set(needEnrichShared.map((p) => p.sharedFrom!.authorId)),
+    );
+    const sharedUsers = await userRepository.findMultipleById(sharedAuthorIds);
+    const sharedUserMap = new Map(sharedUsers.map((u) => [u.userId, u]));
+    enriched = enriched.map((p) => {
+      if (!p.sharedFrom || p.sharedFrom.author) return p;
+      const u = sharedUserMap.get(p.sharedFrom.authorId);
+      return {
+        ...p,
+        sharedFrom: {
+          ...p.sharedFrom,
+          author: u
+            ? {
+                userId: u.userId,
+                displayName: u.displayName ?? u.userId,
+                avatar: u.avatar ?? null,
+              }
+            : { userId: p.sharedFrom.authorId, displayName: p.sharedFrom.authorId, avatar: null },
+        },
+      };
+    });
+  }
+
+  return enriched;
+};
+
 export const communityService = {
   normalizeSlug,
 
@@ -281,10 +355,14 @@ export const communityService = {
     const nextSlug = data.slug ? normalizeSlug(data.slug) : undefined;
     const joinPolicy = data.joinPolicy ?? existing.joinPolicy;
     const nextCategory = data.category ?? existing.category;
+    const popularityScore = existing.popularityScore ?? 0;
+    const paddedScore = Math.round(popularityScore * 1000)
+      .toString()
+      .padStart(10, '0');
     const updates: Record<string, unknown> = {
       updatedAt: now,
       GSI2PK: `CATEGORY#${nextCategory}`,
-      GSI2SK: `CREATED#${padMs(existing.createdAtMs)}#${groupId}`,
+      GSI2SK: `POPULAR#${paddedScore}#${groupId}`,
     };
 
     if (data.name !== undefined) updates.name = data.name.trim();
@@ -548,6 +626,19 @@ export const communityService = {
   ): Promise<ICommunityPostsPage> => {
     const community = await communityService.getCommunity(actorId, groupId);
     if (!community.isActive) throw new NotFoundError('Cộng đồng');
+
+    const pinnedIds = community.pinnedPostIds || [];
+    let pinnedPosts: IPost[] = [];
+
+    // Only load pinned posts on the first page
+    if (!cursor && pinnedIds.length > 0) {
+      const rawPinned = await Promise.all(
+        pinnedIds.map((id) => newsfeedRepository.getPostById(id)),
+      );
+      const validPinned = rawPinned.filter((item): item is IPost => !!item);
+      pinnedPosts = await enrichPosts(validPinned, actorId);
+    }
+
     const page = await communityRepository.listContentIndex(
       groupId,
       'post',
@@ -559,80 +650,92 @@ export const communityService = {
         newsfeedRepository.getPostById(item.contentId),
       ),
     );
-    const validPosts = rawPosts.filter((item): item is IPost => !!item);
+    let validPosts = rawPosts.filter((item): item is IPost => !!item);
 
-    // 1. Enrich Author Info
-    const authorIds = Array.from(new Set(validPosts.map((p) => p.authorId)));
-    const users = authorIds.length > 0 ? await userRepository.findMultipleById(authorIds) : [];
-    const userMap = new Map(users.map((u) => [u.userId, u]));
-
-    let enriched = validPosts.map((p) => {
-      const u = userMap.get(p.authorId);
-      return {
-        ...p,
-        author: u
-          ? {
-              userId: p.authorId,
-              displayName: u.displayName ?? p.authorId,
-              avatar: u.avatar ?? null,
-            }
-          : { userId: p.authorId, displayName: p.authorId, avatar: null },
-      };
-    });
-
-    // 2. Enrich Current User Reaction
-    enriched = await Promise.all(
-      enriched.map(async (p) => {
-        const reaction = await newsfeedRepository.getReaction(p.postId, actorId);
-        return {
-          ...p,
-          currentUserReaction: (reaction?.type as ReactionType) ?? null,
-        };
-      }),
-    );
-
-    // 3. Enrich Saved Status
-    const postIds = enriched.map((p) => p.postId);
-    const savedIds =
-      postIds.length > 0
-        ? await newsfeedRepository.getSavedPostIds(actorId, postIds)
-        : new Set<string>();
-    enriched = enriched.map((p) => ({
-      ...p,
-      isSaved: savedIds.has(p.postId),
-    }));
-
-    // 4. Enrich Shared Post Author Info
-    const needEnrichShared = enriched.filter((p) => p.sharedFrom && !p.sharedFrom.author);
-    if (needEnrichShared.length > 0) {
-      const sharedAuthorIds = Array.from(
-        new Set(needEnrichShared.map((p) => p.sharedFrom!.authorId)),
-      );
-      const sharedUsers = await userRepository.findMultipleById(sharedAuthorIds);
-      const sharedUserMap = new Map(sharedUsers.map((u) => [u.userId, u]));
-      enriched = enriched.map((p) => {
-        if (!p.sharedFrom || p.sharedFrom.author) return p;
-        const u = sharedUserMap.get(p.sharedFrom.authorId);
-        return {
-          ...p,
-          sharedFrom: {
-            ...p.sharedFrom,
-            author: u
-              ? {
-                  userId: u.userId,
-                  displayName: u.displayName ?? u.userId,
-                  avatar: u.avatar ?? null,
-                }
-              : { userId: p.sharedFrom.authorId, displayName: p.sharedFrom.authorId, avatar: null },
-          },
-        };
-      });
+    // Filter out pinned posts from the regular list to avoid duplicates
+    if (pinnedIds.length > 0) {
+      validPosts = validPosts.filter((p) => !pinnedIds.includes(p.postId));
     }
 
+    const enrichedPosts = await enrichPosts(validPosts, actorId);
+
     return {
-      items: enriched,
+      items: [...pinnedPosts, ...enrichedPosts],
       nextCursor: page.lastEvaluatedKey ? encodeCursor(page.lastEvaluatedKey) : null,
       hasMore: Boolean(page.lastEvaluatedKey),
     };
+  },
+
+  pinPost: async (actorId: string, groupId: string, postId: string): Promise<void> => {
+    await communityService.assertCommunityRole(actorId, groupId, ['owner', 'admin', 'moderator']);
+    const community = await requireActiveCommunity(groupId);
+
+    const post = await newsfeedRepository.getPostById(postId);
+    if (!post || post.groupId !== groupId) {
+      throw new NotFoundError('Bài viết không tồn tại trong cộng đồng này');
+    }
+
+    const pinnedPostIds = community.pinnedPostIds || [];
+    if (pinnedPostIds.includes(postId)) {
+      return;
+    }
+
+    if (pinnedPostIds.length >= 3) {
+      throw new ValidationError('Cộng đồng chỉ được ghim tối đa 3 bài viết');
+    }
+
+    const nextPinnedPostIds = [...pinnedPostIds, postId];
+    await communityRepository.updateCommunity(groupId, {
+      pinnedPostIds: nextPinnedPostIds,
+    } as any);
+
+    await newsfeedRepository.updatePost(postId, {
+      isPinned: true,
+      pinnedAt: new Date().toISOString(),
+    });
+  },
+
+  unpinPost: async (actorId: string, groupId: string, postId: string): Promise<void> => {
+    await communityService.assertCommunityRole(actorId, groupId, ['owner', 'admin', 'moderator']);
+    const community = await requireActiveCommunity(groupId);
+
+    const pinnedPostIds = community.pinnedPostIds || [];
+    if (!pinnedPostIds.includes(postId)) {
+      return;
+    }
+
+    const nextPinnedPostIds = pinnedPostIds.filter((id) => id !== postId);
+    await communityRepository.updateCommunity(groupId, {
+      pinnedPostIds: nextPinnedPostIds,
+    } as any);
+
+    await newsfeedRepository.updatePost(postId, {
+      isPinned: false,
+      pinnedAt: null,
+    });
+  },
+
+  reportCommunity: async (
+    actorId: string,
+    groupId: string,
+    data: { reason: string; details?: string },
+  ): Promise<void> => {
+    await requireActiveCommunity(groupId);
+    if (!data.reason) {
+      throw new ValidationError('Lý do báo cáo không được để trống');
+    }
+
+    const reportId = uuidv4();
+    const createdAt = new Date().toISOString();
+
+    await newsfeedRepository.createReport({
+      reportId,
+      entityType: 'GROUP',
+      entityId: groupId,
+      reporterId: actorId,
+      reason: data.reason,
+      details: data.details,
+      createdAt,
+    });
   },
 };

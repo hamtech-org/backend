@@ -45,3 +45,8 @@ export const updateMemberRoleSchema = z.object({
 export const transferOwnerSchema = z.object({
   targetUserId: z.string().uuid(),
 });
+
+export const reportCommunitySchema = z.object({
+  reason: z.enum(['spam', 'nudity', 'hate', 'violence', 'other']),
+  details: z.string().max(500).optional(),
+});

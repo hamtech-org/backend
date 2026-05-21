@@ -54,6 +54,7 @@ export interface ICommunity {
   viewerRole?: CommunityMemberRole | null;
   viewerStatus?: CommunityMemberStatus | null;
   joinRequestStatus?: CommunityRequestStatus | null;
+  pinnedPostIds?: string[];
 }
 
 export interface ICommunityMember {
