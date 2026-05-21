@@ -12,6 +12,7 @@ import {
   updateMemberRoleSchema,
   reportCommunitySchema,
   resolvePendingPostSchema,
+  listModerationLogsQuerySchema,
 } from './community.validator.js';
 
 const router = Router();
@@ -65,6 +66,13 @@ router.post(
   authenticate,
   validate(resolvePendingPostSchema),
   communityController.resolvePendingPost,
+);
+
+router.get(
+  '/:groupId/moderation/logs',
+  authenticate,
+  validateQuery(listModerationLogsQuerySchema),
+  communityController.listModerationLogs,
 );
 
 export default router;

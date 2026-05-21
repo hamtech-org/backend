@@ -30,6 +30,10 @@ import type {
   ITransferOwnerDto,
   IUpdateCommunityDto,
   IUpdateMemberRoleDto,
+  CommunityModerationAction,
+  CommunityModerationTargetType,
+  ICommunityModerationLog,
+  ICommunityModerationLogsPage,
 } from './community.types.js';
 
 type ISearchIndexEvent = {
@@ -227,6 +231,112 @@ const enrichPosts = async (validPosts: IPost[], actorId: string): Promise<IPost[
 export const communityService = {
   normalizeSlug,
 
+  writeModerationLog: async (
+    actorId: string,
+    groupId: string,
+    action: CommunityModerationAction,
+    targetId: string,
+    targetType: CommunityModerationTargetType,
+    targetName?: string,
+    reason?: string,
+    metadata?: Record<string, any>,
+  ): Promise<void> => {
+    const logId = uuidv4();
+    const now = new Date();
+    const log: ICommunityModerationLog = {
+      groupId,
+      communityId: groupId,
+      logId,
+      actorId,
+      action,
+      targetId,
+      targetType,
+      targetName,
+      reason,
+      metadata,
+      createdAt: now.toISOString(),
+      createdAtMs: now.getTime(),
+    };
+    try {
+      await communityRepository.createModerationLog(log);
+    } catch (err) {
+      logger.error(`Write moderation log failed for group ${groupId}, action ${action}:`, err);
+    }
+  },
+
+  listModerationLogs: async (
+    actorId: string,
+    groupId: string,
+    limit?: number,
+    cursor?: string,
+  ): Promise<ICommunityModerationLogsPage> => {
+    await communityService.assertCommunityRole(actorId, groupId, ['owner', 'admin', 'moderator']);
+    const resolvedLimit = Math.min(limit ?? 20, 100);
+    const decoded = decodeCursor(cursor);
+    const page = await communityRepository.listModerationLogs(groupId, resolvedLimit, decoded);
+
+    if (page.items.length === 0) {
+      return {
+        items: [],
+        nextCursor: null,
+        hasMore: false,
+      };
+    }
+
+    const userIds = new Set<string>();
+    for (const log of page.items) {
+      if (log.actorId) userIds.add(log.actorId);
+      if (log.targetType === 'member' && log.targetId) {
+        userIds.add(log.targetId);
+      }
+    }
+
+    const uniqueUserIds = Array.from(userIds);
+    const users =
+      uniqueUserIds.length > 0 ? await userRepository.findMultipleById(uniqueUserIds) : [];
+    const userMap = new Map(users.map((u) => [u.userId, u]));
+
+    const items = page.items.map((log) => {
+      const actorUser = userMap.get(log.actorId);
+      const targetUser = log.targetType === 'member' ? userMap.get(log.targetId) : undefined;
+
+      return {
+        ...log,
+        actorInfo: actorUser
+          ? {
+              userId: log.actorId,
+              displayName: actorUser.displayName ?? log.actorId,
+              avatar: actorUser.avatar ?? null,
+            }
+          : { userId: log.actorId, displayName: log.actorId, avatar: null },
+        targetUserInfo:
+          log.targetType === 'member'
+            ? targetUser
+              ? {
+                  userId: log.targetId,
+                  displayName: targetUser.displayName ?? log.targetId,
+                  avatar: targetUser.avatar ?? null,
+                }
+              : { userId: log.targetId, displayName: log.targetId, avatar: null }
+            : undefined,
+      };
+    });
+
+    return {
+      items,
+      nextCursor: page.lastEvaluatedKey ? encodeCursor(page.lastEvaluatedKey) : null,
+      hasMore: Boolean(page.lastEvaluatedKey),
+    };
+  },
+
+  deleteCommunityPost: async (
+    groupId: string,
+    postId: string,
+    createdAtMs: number,
+  ): Promise<void> => {
+    await communityRepository.deleteContentIndex(groupId, 'post', postId, createdAtMs);
+  },
+
   assertActiveMember: async (userId: string, groupId: string): Promise<ICommunityMember> => {
     const community = await requireActiveCommunity(groupId);
     const member = await communityRepository.getMember(community.groupId, userId);
@@ -366,19 +476,52 @@ export const communityService = {
       GSI2SK: `POPULAR#${paddedScore}#${groupId}`,
     };
 
-    if (data.name !== undefined) updates.name = data.name.trim();
-    if (nextSlug) updates.slug = nextSlug;
-    if (data.description !== undefined) updates.description = data.description;
-    if (data.avatar !== undefined) updates.avatar = data.avatar;
-    if (data.coverUrl !== undefined) updates.coverUrl = data.coverUrl;
-    if (data.category !== undefined) updates.category = data.category;
-    if (data.rules !== undefined) updates.rules = data.rules;
-    if (data.type !== undefined) updates.type = data.type;
-    if (data.joinPolicy !== undefined) {
+    const changedFields: Record<string, { old: any; new: any }> = {};
+    if (data.name !== undefined && data.name.trim() !== existing.name) {
+      changedFields.name = { old: existing.name, new: data.name.trim() };
+      updates.name = data.name.trim();
+    }
+    if (nextSlug && nextSlug !== existing.slug) {
+      changedFields.slug = { old: existing.slug, new: nextSlug };
+      updates.slug = nextSlug;
+    }
+    if (data.description !== undefined && data.description !== existing.description) {
+      changedFields.description = { old: existing.description, new: data.description };
+      updates.description = data.description;
+    }
+    if (data.avatar !== undefined && data.avatar !== existing.avatar) {
+      changedFields.avatar = { old: existing.avatar, new: data.avatar };
+      updates.avatar = data.avatar;
+    }
+    if (data.coverUrl !== undefined && data.coverUrl !== existing.coverUrl) {
+      changedFields.coverUrl = { old: existing.coverUrl, new: data.coverUrl };
+      updates.coverUrl = data.coverUrl;
+    }
+    if (data.category !== undefined && data.category !== existing.category) {
+      changedFields.category = { old: existing.category, new: data.category };
+      updates.category = data.category;
+    }
+    if (data.rules !== undefined) {
+      changedFields.rules = { old: existing.rules, new: data.rules };
+      updates.rules = data.rules;
+    }
+    if (data.type !== undefined && data.type !== existing.type) {
+      changedFields.type = { old: existing.type, new: data.type };
+      updates.type = data.type;
+    }
+    if (data.joinPolicy !== undefined && data.joinPolicy !== existing.joinPolicy) {
+      changedFields.joinPolicy = { old: existing.joinPolicy, new: data.joinPolicy };
       updates.joinPolicy = joinPolicy;
       updates.isApprovalRequired = joinPolicy === 'approval';
     }
-    if (data.isPostApprovalRequired !== undefined) {
+    if (
+      data.isPostApprovalRequired !== undefined &&
+      data.isPostApprovalRequired !== existing.isPostApprovalRequired
+    ) {
+      changedFields.isPostApprovalRequired = {
+        old: existing.isPostApprovalRequired,
+        new: data.isPostApprovalRequired,
+      };
       updates.isPostApprovalRequired = data.isPostApprovalRequired;
     }
 
@@ -395,6 +538,20 @@ export const communityService = {
         documentId: groupId,
         document: toSearchDocument(updated),
       });
+
+      if (Object.keys(changedFields).length > 0) {
+        await communityService.writeModerationLog(
+          actorId,
+          groupId,
+          'update_settings',
+          groupId,
+          'community',
+          existing.name,
+          undefined,
+          { changedFields },
+        );
+      }
+
       return attachViewerState(updated, actorId);
     } catch (error) {
       if (isConditionalFailure(error)) throw new ConflictError('Slug cộng đồng đã tồn tại');
@@ -532,6 +689,9 @@ export const communityService = {
     const request = await communityRepository.getJoinRequest(groupId, userId);
     if (!request || request.status !== 'pending') throw new NotFoundError('Yêu cầu tham gia');
 
+    const targetUser = await userRepository.findById(userId);
+    const targetName = targetUser?.displayName ?? userId;
+
     if (data.action === 'approve') {
       const joinedAtMs = Date.now();
       const joinedAt = new Date(joinedAtMs).toISOString();
@@ -541,11 +701,27 @@ export const communityService = {
           buildMember(groupId, userId, 'member', joinedAt, joinedAtMs),
           actorId,
         );
+        await communityService.writeModerationLog(
+          actorId,
+          groupId,
+          'approve_join',
+          userId,
+          'member',
+          targetName,
+        );
       } catch (error) {
         if (!isConditionalFailure(error)) throw error;
       }
     } else {
       await communityRepository.rejectJoinRequest(request, actorId);
+      await communityService.writeModerationLog(
+        actorId,
+        groupId,
+        'reject_join',
+        userId,
+        'member',
+        targetName,
+      );
     }
 
     await notificationService.dispatch({
@@ -574,7 +750,19 @@ export const communityService = {
     if (ROLE_RANK[actor.role] <= ROLE_RANK[target.role]) {
       throw new ForbiddenError('Không thể xử lý thành viên có quyền ngang hoặc cao hơn');
     }
+
+    const targetUser = await userRepository.findById(targetUserId);
+    const targetName = targetUser?.displayName ?? targetUserId;
+
     await communityRepository.banMember(groupId, targetUserId);
+    await communityService.writeModerationLog(
+      actorId,
+      groupId,
+      'ban_member',
+      targetUserId,
+      'member',
+      targetName,
+    );
   },
 
   updateMemberRole: async (
@@ -588,7 +776,21 @@ export const communityService = {
     if (!target || target.status !== 'active') throw new NotFoundError('Thành viên');
     if (target.role === 'owner')
       throw new ValidationError('Dùng transfer owner để chuyển quyền owner');
+
+    const targetUser = await userRepository.findById(targetUserId);
+    const targetName = targetUser?.displayName ?? targetUserId;
+
     await communityRepository.updateMemberRole(groupId, targetUserId, data.role);
+    await communityService.writeModerationLog(
+      actorId,
+      groupId,
+      'change_role',
+      targetUserId,
+      'member',
+      targetName,
+      undefined,
+      { oldRole: target.role, newRole: data.role },
+    );
   },
 
   transferOwner: async (
@@ -600,7 +802,19 @@ export const communityService = {
     if (data.targetUserId === actorId) throw new ValidationError('Target đã là owner hiện tại');
     const target = await communityRepository.getMember(groupId, data.targetUserId);
     if (!target || target.status !== 'active') throw new NotFoundError('Thành viên nhận quyền');
+
+    const targetUser = await userRepository.findById(data.targetUserId);
+    const targetName = targetUser?.displayName ?? data.targetUserId;
+
     await communityRepository.transferOwner(groupId, actorId, data.targetUserId);
+    await communityService.writeModerationLog(
+      actorId,
+      groupId,
+      'transfer_ownership',
+      data.targetUserId,
+      'member',
+      targetName,
+    );
   },
 
   addContentIndex: async (
@@ -697,6 +911,16 @@ export const communityService = {
       isPinned: true,
       pinnedAt: new Date().toISOString(),
     });
+
+    const postSnippet = post.content ? post.content.substring(0, 100) : 'Bài viết';
+    await communityService.writeModerationLog(
+      actorId,
+      groupId,
+      'pin_post',
+      postId,
+      'post',
+      postSnippet,
+    );
   },
 
   unpinPost: async (actorId: string, groupId: string, postId: string): Promise<void> => {
@@ -717,6 +941,17 @@ export const communityService = {
       isPinned: false,
       pinnedAt: null,
     });
+
+    const post = await newsfeedRepository.getPostById(postId);
+    const postSnippet = post?.content ? post.content.substring(0, 100) : 'Bài viết';
+    await communityService.writeModerationLog(
+      actorId,
+      groupId,
+      'unpin_post',
+      postId,
+      'post',
+      postSnippet,
+    );
   },
 
   reportCommunity: async (
@@ -801,6 +1036,16 @@ export const communityService = {
         isModerated: true,
       });
 
+      const postSnippet = post.content ? post.content.substring(0, 100) : 'Bài viết';
+      await communityService.writeModerationLog(
+        actorId,
+        groupId,
+        'approve_post',
+        postId,
+        'post',
+        postSnippet,
+      );
+
       const doc = {
         postId: post.postId,
         authorId: post.authorId,
@@ -863,6 +1108,17 @@ export const communityService = {
         moderationStatus: 'rejected',
         isModerated: true,
       });
+
+      const postSnippet = post.content ? post.content.substring(0, 100) : 'Bài viết';
+      await communityService.writeModerationLog(
+        actorId,
+        groupId,
+        'reject_post',
+        postId,
+        'post',
+        postSnippet,
+        rejectReason,
+      );
 
       const resolver = await userRepository.findById(actorId);
       const community = await communityRepository.getCommunityById(groupId);

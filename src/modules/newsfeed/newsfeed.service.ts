@@ -527,10 +527,45 @@ export const newsfeedService = {
     }
   },
 
-  deletePost: async (postId: string, authorId: string): Promise<void> => {
+  deletePost: async (postId: string, actorId: string): Promise<void> => {
     const existing = await newsfeedRepository.getPostById(postId);
     if (!existing) throw new NotFoundError('Bài viết');
-    if (existing.authorId !== authorId) throw new ForbiddenError('Không có quyền xóa bài viết');
+
+    let isModeratorDelete = false;
+
+    if (existing.authorId !== actorId) {
+      if (existing.groupId) {
+        await communityService.assertCommunityRole(actorId, existing.groupId, [
+          'owner',
+          'admin',
+          'moderator',
+        ]);
+        isModeratorDelete = true;
+      } else {
+        throw new ForbiddenError('Không có quyền xóa bài viết');
+      }
+    }
+
+    if (existing.groupId) {
+      await communityService.deleteCommunityPost(
+        existing.groupId,
+        postId,
+        new Date(existing.createdAt).getTime(),
+      );
+
+      if (isModeratorDelete) {
+        const postSnippet = existing.content ? existing.content.substring(0, 100) : 'Bài viết';
+        await communityService.writeModerationLog(
+          actorId,
+          existing.groupId,
+          'delete_post',
+          postId,
+          'post',
+          postSnippet,
+          'Xóa bởi Ban quản trị cộng đồng',
+        );
+      }
+    }
 
     await newsfeedRepository.deleteCommentsByPostId(postId);
     await newsfeedRepository.deleteReactionsByPostId(postId);

@@ -56,3 +56,8 @@ export const resolvePendingPostSchema = z.object({
   action: z.enum(['approve', 'reject']),
   rejectReason: z.string().max(500).optional(),
 });
+
+export const listModerationLogsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  cursor: z.string().optional(),
+});

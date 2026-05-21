@@ -166,3 +166,50 @@ export interface IJoinCommunityResult {
   status: 'joined' | 'requested' | 'already_member' | 'already_pending';
   community: ICommunity;
 }
+
+export type CommunityModerationAction =
+  | 'approve_join'
+  | 'reject_join'
+  | 'ban_member'
+  | 'unban_member'
+  | 'change_role'
+  | 'transfer_ownership'
+  | 'approve_post'
+  | 'reject_post'
+  | 'delete_post'
+  | 'pin_post'
+  | 'unpin_post'
+  | 'update_settings';
+
+export type CommunityModerationTargetType = 'member' | 'post' | 'community';
+
+export interface ICommunityModerationLog {
+  groupId: string;
+  communityId: string;
+  logId: string;
+  actorId: string;
+  action: CommunityModerationAction;
+  targetId: string;
+  targetType: CommunityModerationTargetType;
+  targetName?: string;
+  reason?: string;
+  metadata?: Record<string, any>;
+  createdAt: string;
+  createdAtMs: number;
+  actorInfo?: {
+    userId: string;
+    displayName: string;
+    avatar: string | null;
+  };
+  targetUserInfo?: {
+    userId: string;
+    displayName: string;
+    avatar: string | null;
+  };
+}
+
+export interface ICommunityModerationLogsPage {
+  items: ICommunityModerationLog[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}

@@ -237,4 +237,18 @@ export const communityController = {
       next(error);
     }
   },
+
+  listModerationLogs: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const page = await communityService.listModerationLogs(
+        req.user!.userId,
+        req.params.groupId,
+        req.query.limit ? Number(req.query.limit) : undefined,
+        typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
+      );
+      sendSuccess(res, page);
+    } catch (error) {
+      next(error);
+    }
+  },
 };

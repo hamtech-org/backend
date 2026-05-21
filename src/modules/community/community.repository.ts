@@ -19,9 +19,11 @@ import type {
   ICommunityJoinRequest,
   ICommunityMember,
   ICommunityPendingRequest,
+  ICommunityModerationLog,
 } from './community.types.js';
 
 const GROUPS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Groups`;
+const MODERATION_LOGS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}ModerationLogs`;
 const GSI1 = 'GSI-1';
 const GSI2 = 'GSI-2';
 
@@ -698,5 +700,76 @@ export const communityRepository = {
       items,
       lastEvaluatedKey: result.LastEvaluatedKey as Record<string, unknown> | undefined,
     };
+  },
+
+  createModerationLog: async (log: ICommunityModerationLog): Promise<void> => {
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: MODERATION_LOGS_TABLE,
+        Item: {
+          PK: `GROUP#${log.groupId}`,
+          SK: `LOG#${padMs(log.createdAtMs)}#${log.logId}`,
+          ...log,
+        },
+      }),
+    );
+  },
+
+  listModerationLogs: async (
+    groupId: string,
+    limit: number,
+    exclusiveStartKey?: Record<string, unknown>,
+  ): Promise<PageResult<ICommunityModerationLog>> => {
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: MODERATION_LOGS_TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        ExpressionAttributeValues: {
+          ':pk': `GROUP#${groupId}`,
+          ':prefix': 'LOG#',
+        },
+        Limit: limit,
+        ScanIndexForward: false, // Lấy mới nhất lên đầu tiên
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+    return {
+      items: (result.Items as ICommunityModerationLog[]) ?? [],
+      lastEvaluatedKey: result.LastEvaluatedKey as Record<string, unknown> | undefined,
+    };
+  },
+
+  deleteContentIndex: async (
+    groupId: string,
+    contentType: CommunityContentType,
+    contentId: string,
+    createdAtMs: number,
+  ): Promise<void> => {
+    await dynamoClient.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Delete: {
+              TableName: GROUPS_TABLE,
+              Key: {
+                PK: `GROUP#${groupId}`,
+                SK: `CONTENT#${padMs(createdAtMs)}#${contentType}#${contentId}`,
+              },
+            },
+          },
+          {
+            Update: {
+              TableName: GROUPS_TABLE,
+              Key: { PK: `GROUP#${groupId}`, SK: 'META' },
+              UpdateExpression: 'SET updatedAt = :now ADD postCount :minusOne',
+              ExpressionAttributeValues: {
+                ':minusOne': -1,
+                ':now': new Date().toISOString(),
+              },
+            },
+          },
+        ],
+      }),
+    );
   },
 };
