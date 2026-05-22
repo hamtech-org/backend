@@ -1,4 +1,9 @@
 import { v4 as uuidv4 } from 'uuid';
+import { dynamoClient } from '@/config/database.js';
+import { env } from '@/config/env.js';
+import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { conversationService } from '@/modules/chat/conversation/conversation.service.js';
+import { conversationRepository } from '@/modules/chat/conversation/conversation.repository.js';
 import { getKafkaProducer } from '@/config/kafka.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { logger } from '@/shared/utils/logger.js';
@@ -393,6 +398,7 @@ export const communityService = {
       isApprovalRequired: joinPolicy === 'approval',
       isPostApprovalRequired: data.isPostApprovalRequired ?? false,
       conversationId: null,
+      chatEnabled: true,
       isActive: true,
       status: 'active',
       createdAt,
@@ -525,6 +531,15 @@ export const communityService = {
       updates.isPostApprovalRequired = data.isPostApprovalRequired;
     }
 
+    if (data.chatEnabled !== undefined && data.chatEnabled !== existing.chatEnabled) {
+      changedFields.chatEnabled = { old: existing.chatEnabled, new: data.chatEnabled };
+      updates.chatEnabled = data.chatEnabled;
+      if (data.chatEnabled === false && existing.conversationId) {
+        updates.conversationId = null;
+        await conversationService.updateGroupId(existing.conversationId, null);
+      }
+    }
+
     try {
       const updated = await communityRepository.updateCommunity(
         groupId,
@@ -571,6 +586,25 @@ export const communityService = {
       documentId: groupId,
       document: { ...toSearchDocument(community), isActive: false, status: 'archived' },
     });
+
+    try {
+      const producer = getKafkaProducer();
+      await producer.send({
+        topic: KAFKA_TOPICS.COMMUNITY_EVENTS,
+        messages: [
+          {
+            key: groupId,
+            value: JSON.stringify({
+              type: 'community_archived',
+              groupId,
+              conversationId: community.conversationId,
+            }),
+          },
+        ],
+      });
+    } catch (err) {
+      logger.error(`Emit community_archived event failed for group ${groupId}:`, err);
+    }
   },
 
   joinCommunity: async (
@@ -791,6 +825,26 @@ export const communityService = {
       undefined,
       { oldRole: target.role, newRole: data.role },
     );
+
+    try {
+      const producer = getKafkaProducer();
+      await producer.send({
+        topic: KAFKA_TOPICS.COMMUNITY_EVENTS,
+        messages: [
+          {
+            key: groupId,
+            value: JSON.stringify({
+              type: 'member_role_updated',
+              groupId,
+              userId: targetUserId,
+              role: data.role,
+            }),
+          },
+        ],
+      });
+    } catch (err) {
+      logger.error(`Emit member_role_updated event failed for group ${groupId}:`, err);
+    }
   },
 
   transferOwner: async (
@@ -815,6 +869,26 @@ export const communityService = {
       'member',
       targetName,
     );
+
+    try {
+      const producer = getKafkaProducer();
+      await producer.send({
+        topic: KAFKA_TOPICS.COMMUNITY_EVENTS,
+        messages: [
+          {
+            key: groupId,
+            value: JSON.stringify({
+              type: 'ownership_transferred',
+              groupId,
+              oldOwnerId: actorId,
+              newOwnerId: data.targetUserId,
+            }),
+          },
+        ],
+      });
+    } catch (err) {
+      logger.error(`Emit ownership_transferred event failed for group ${groupId}:`, err);
+    }
   },
 
   addContentIndex: async (
@@ -1144,5 +1218,163 @@ export const communityService = {
         })
         .catch((e) => logger.error('post_rejected notification failed', e));
     }
+  },
+
+  joinCommunityChat: async (groupId: string, userId: string): Promise<string> => {
+    const meta = await communityRepository.getCommunityById(groupId);
+    if (!meta || !meta.isActive || meta.status === 'archived') {
+      throw new NotFoundError('Cộng đồng');
+    }
+    if (!meta.chatEnabled) {
+      throw new ForbiddenError('Tính năng chat chưa được kích hoạt cho cộng đồng này');
+    }
+
+    // Kiểm tra xem user có phải là thành viên active không
+    const member = await communityRepository.getMember(groupId, userId);
+    if (!member || member.status !== 'active') {
+      throw new ForbiddenError('Bạn chưa là thành viên cộng đồng');
+    }
+
+    if (meta.conversationId) {
+      // Đã có phòng chat, tiến hành add member (idempotent)
+      await conversationService.addMemberIfNotExist(meta.conversationId, userId);
+      return meta.conversationId;
+    }
+
+    // Lazy Creation kích hoạt: Sử dụng TransactWriteItems nguyên tử
+    const tempConversationId = uuidv4();
+    const now = new Date().toISOString();
+    const CONVERSATIONS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Conversations`;
+    const GROUPS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Groups`;
+
+    const conversationItem = {
+      PK: `CONV#${tempConversationId}`,
+      SK: 'META',
+      conversationId: tempConversationId,
+      type: 'group' as const,
+      groupId: groupId,
+      name: meta.name,
+      avatar: meta.avatar ?? undefined,
+      creatorId: meta.ownerId,
+      leaderId: meta.ownerId,
+      memberCount: 0,
+      isEncrypted: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    try {
+      await dynamoClient.send(
+        new TransactWriteCommand({
+          TransactItems: [
+            {
+              Put: {
+                TableName: CONVERSATIONS_TABLE,
+                Item: conversationItem,
+                ConditionExpression: 'attribute_not_exists(PK)',
+              },
+            },
+            {
+              Update: {
+                TableName: GROUPS_TABLE,
+                Key: { PK: `GROUP#${groupId}`, SK: 'META' },
+                UpdateExpression:
+                  'SET conversationId = :cid, chatEnabled = :trueVal, updatedAt = :now',
+                ConditionExpression:
+                  'attribute_not_exists(conversationId) OR conversationId = :nullVal',
+                ExpressionAttributeValues: {
+                  ':cid': tempConversationId,
+                  ':trueVal': true,
+                  ':nullVal': null,
+                  ':now': now,
+                },
+              },
+            },
+          ],
+        }),
+      );
+
+      // Winner: Thêm user hiện tại làm thành viên đầu tiên
+      await conversationService.addMemberIfNotExist(tempConversationId, userId);
+      return tempConversationId;
+    } catch (error) {
+      if (isConditionalFailure(error)) {
+        // Loser: Giao dịch bị hủy do có người khác ghi conversationId trước
+        // Đọc lại META để lấy conversationId của Winner
+        const updatedMeta = await communityRepository.getCommunityById(groupId);
+        if (updatedMeta && updatedMeta.conversationId) {
+          await conversationService.addMemberIfNotExist(updatedMeta.conversationId, userId);
+          return updatedMeta.conversationId;
+        }
+      }
+      throw error;
+    }
+  },
+
+  linkExistingChat: async (
+    groupId: string,
+    conversationId: string,
+    actorId: string,
+  ): Promise<void> => {
+    // 1. Check quyền Owner cộng đồng
+    await communityService.assertCommunityRole(actorId, groupId, ['owner']);
+
+    // 2. Check chi tiết conversation & Quyền Leader phòng chat
+    const conversation = await conversationRepository.getConversationById(conversationId);
+    if (!conversation) {
+      throw new NotFoundError('Không tìm thấy phòng chat');
+    }
+    if (conversation.type !== 'group') {
+      throw new ValidationError('Chỉ có thể liên kết cuộc trò chuyện loại nhóm');
+    }
+    if (conversation.leaderId !== actorId) {
+      throw new ForbiddenError('Bạn phải là Leader của phòng chat để thực hiện liên kết');
+    }
+
+    // 3. Check liên kết chéo
+    if (conversation.groupId && conversation.groupId !== groupId) {
+      throw new ConflictError('Phòng chat này đang được liên kết với cộng đồng khác');
+    }
+
+    // 4. Update thông tin liên kết chéo trên cả 2 bảng
+    await communityRepository.updateConversationId(groupId, conversationId, true);
+    await conversationService.updateGroupId(conversationId, groupId);
+
+    // 5. Gửi thông báo fan-out bất đồng bộ qua Kafka
+    try {
+      const producer = getKafkaProducer();
+      await producer.send({
+        topic: KAFKA_TOPICS.NOTIFICATION_FANOUT,
+        messages: [
+          {
+            key: groupId,
+            value: JSON.stringify({
+              type: 'community_chat_enabled',
+              groupId,
+              conversationId,
+              recipientType: 'all_members',
+            }),
+          },
+        ],
+      });
+    } catch (err) {
+      logger.error(`Emit community_chat_enabled event failed for group ${groupId}:`, err);
+    }
+  },
+
+  unlinkChat: async (groupId: string, actorId: string): Promise<void> => {
+    await communityService.assertCommunityRole(actorId, groupId, ['owner']);
+    const community = await requireActiveCommunity(groupId);
+    if (!community.conversationId) {
+      throw new ValidationError('Cộng đồng này chưa được liên kết với phòng chat nào');
+    }
+
+    const conversationId = community.conversationId;
+
+    // Update Group META: set conversationId = null, chatEnabled = false
+    await communityRepository.updateConversationId(groupId, null, false);
+
+    // Update Conversation: set groupId = null
+    await conversationService.updateGroupId(conversationId, null);
   },
 };

@@ -45,6 +45,7 @@ export interface ICommunity {
   isApprovalRequired: boolean;
   isPostApprovalRequired: boolean;
   conversationId: string | null;
+  chatEnabled: boolean;
   isActive: boolean;
   status: CommunityStatus;
   createdAt: string;
@@ -125,6 +126,7 @@ export interface IUpdateCommunityDto {
   type?: CommunityType;
   joinPolicy?: CommunityJoinPolicy;
   isPostApprovalRequired?: boolean;
+  chatEnabled?: boolean;
 }
 
 export interface IListCommunitiesQuery {

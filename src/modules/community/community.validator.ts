@@ -20,6 +20,7 @@ export const createCommunitySchema = z.object({
   type: z.enum(['public', 'private']),
   joinPolicy: z.enum(['open', 'approval']).optional(),
   isPostApprovalRequired: z.boolean().optional(),
+  chatEnabled: z.boolean().optional(),
 });
 
 export const updateCommunitySchema = createCommunitySchema.partial();
@@ -60,4 +61,8 @@ export const resolvePendingPostSchema = z.object({
 export const listModerationLogsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
   cursor: z.string().optional(),
+});
+
+export const linkExistingChatSchema = z.object({
+  conversationId: z.string().uuid(),
 });

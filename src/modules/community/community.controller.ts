@@ -251,4 +251,35 @@ export const communityController = {
       next(error);
     }
   },
+
+  joinChat: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const conversationId = await communityService.joinCommunityChat(
+        req.params.groupId,
+        req.user!.userId,
+      );
+      sendSuccess(res, { conversationId }, 'Gia nhập phòng chat cộng đồng thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  linkChat: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { conversationId } = req.body as { conversationId: string };
+      await communityService.linkExistingChat(req.params.groupId, conversationId, req.user!.userId);
+      sendSuccess(res, null, 'Liên kết phòng chat thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  unlinkChat: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await communityService.unlinkChat(req.params.groupId, req.user!.userId);
+      sendSuccess(res, null, 'Hủy liên kết phòng chat thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
 };
