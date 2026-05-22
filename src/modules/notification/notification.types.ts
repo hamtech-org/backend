@@ -14,7 +14,8 @@ export type NotificationType =
   | 'ai_job_done'
   | 'stats_milestone'
   | 'post_approved'
-  | 'post_rejected';
+  | 'post_rejected'
+  | 'community_chat_enabled';
 
 export type NotificationRoute =
   | 'chat'
