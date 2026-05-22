@@ -313,4 +313,52 @@ export const conversationService = {
 
     await conversationRepository.updateMemberPreferences(conversationId, userId, updates);
   },
+
+  updateGroupId: async (conversationId: string, groupId: string | null): Promise<void> => {
+    await conversationRepository.updateGroupId(conversationId, groupId);
+  },
+
+  addMemberIfNotExist: async (conversationId: string, userId: string): Promise<void> => {
+    const existing = await conversationRepository.getMember(conversationId, userId);
+    if (existing) return;
+
+    const now = new Date().toISOString();
+    await conversationRepository.addConversationMember({
+      conversationId,
+      userId,
+      role: 'member',
+      joinedAt: now,
+      unreadCount: 0,
+      isMuted: false,
+      isPinnedToTop: false,
+    });
+
+    const members = await conversationRepository.getConversationMembers(conversationId);
+    await conversationRepository.updateConversation(conversationId, {
+      memberCount: members.length,
+    });
+
+    try {
+      let userName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([userId]);
+        userName = users[0]?.displayName || 'Ai đó';
+      } catch {
+        // ignore
+      }
+      await createAndBroadcastSystemMessage(
+        {
+          conversationId,
+          senderId: userId,
+          content: `${userName} đã tham gia nhóm`,
+        },
+        {
+          createMessage: conversationRepository.createMessage,
+          updateConversationLastMessage: conversationRepository.updateConversationLastMessage,
+        },
+      );
+    } catch {
+      // ignore
+    }
+  },
 };

@@ -1081,4 +1081,31 @@ export const conversationRepository = {
     ).trim();
     return conversationId || null;
   },
+
+  updateGroupId: async (conversationId: string, groupId: string | null): Promise<void> => {
+    if (groupId) {
+      await dynamoClient.send(
+        new UpdateCommand({
+          TableName: CONVERSATIONS_TABLE,
+          Key: { PK: `CONV#${conversationId}`, SK: 'META' },
+          UpdateExpression: 'SET groupId = :groupId, updatedAt = :now',
+          ExpressionAttributeValues: {
+            ':groupId': groupId,
+            ':now': new Date().toISOString(),
+          },
+        }),
+      );
+    } else {
+      await dynamoClient.send(
+        new UpdateCommand({
+          TableName: CONVERSATIONS_TABLE,
+          Key: { PK: `CONV#${conversationId}`, SK: 'META' },
+          UpdateExpression: 'REMOVE groupId SET updatedAt = :now',
+          ExpressionAttributeValues: {
+            ':now': new Date().toISOString(),
+          },
+        }),
+      );
+    }
+  },
 };
