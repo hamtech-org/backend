@@ -4,6 +4,7 @@ import { env } from '@/config/env.js';
 import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { conversationService } from '@/modules/chat/conversation/conversation.service.js';
 import { conversationRepository } from '@/modules/chat/conversation/conversation.repository.js';
+import { createInitialGroupSettings } from '@/modules/chat/group/group.service.js';
 import { getKafkaProducer } from '@/config/kafka.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { logger } from '@/shared/utils/logger.js';
@@ -1259,6 +1260,7 @@ export const communityService = {
       leaderId: meta.ownerId,
       memberCount: 0,
       isEncrypted: false,
+      groupSettings: createInitialGroupSettings(),
       createdAt: now,
       updatedAt: now,
     };
