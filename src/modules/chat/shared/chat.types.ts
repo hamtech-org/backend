@@ -55,6 +55,8 @@ export interface IConversation extends TimestampFields {
   groupStatus?: GroupAdminStatus;
   /** META: số tin đang ghim trong hội thoại (đồng bộ khi ghim/bỏ ghim/thu hồi tin). */
   pinnedMessageCount?: number;
+  /** ID của cộng đồng (community/group) liên kết nếu có */
+  groupId?: string | null;
   /**
    * Trường gộp từ bản ghi MEMBER# của user đang gọi API (danh sách hội thoại / preferences).
    * Không lưu trên META.
