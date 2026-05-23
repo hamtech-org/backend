@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { dynamoClient } from '@/config/database.js';
 import { env } from '@/config/env.js';
-import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { TransactWriteCommand, GetCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { conversationService } from '@/modules/chat/conversation/conversation.service.js';
 import { conversationRepository } from '@/modules/chat/conversation/conversation.repository.js';
 import { createInitialGroupSettings } from '@/modules/chat/group/group.service.js';
@@ -42,6 +42,8 @@ import type {
   CommunityModerationTargetType,
   ICommunityModerationLog,
   ICommunityModerationLogsPage,
+  ICommunityReport,
+  ICommunityReportsPage,
 } from './community.types.js';
 
 type ISearchIndexEvent = {
@@ -1477,5 +1479,307 @@ export const communityService = {
         socketErr,
       );
     }
+  },
+
+  reportEntity: async (
+    actorId: string,
+    groupId: string,
+    data: {
+      entityType: 'POST' | 'CMT' | 'GROUP';
+      entityId: string;
+      reason: 'spam' | 'harassment' | 'hate_speech' | 'inappropriate' | 'rules_violation' | 'other';
+      details?: string;
+      postId?: string;
+      createdAt?: string;
+    },
+  ): Promise<ICommunityReport> => {
+    const member = await communityService.assertActiveMember(actorId, groupId);
+
+    let targetAuthorId = '';
+    let contentPreview: { text?: string; mediaUrls?: string[] } | undefined;
+
+    if (data.entityType === 'POST') {
+      const post = await newsfeedRepository.getPostById(data.entityId);
+      if (!post) throw new NotFoundError('Không tìm thấy bài viết bị báo cáo');
+      targetAuthorId = post.authorId;
+      contentPreview = {
+        text: post.content,
+        mediaUrls: post.mediaUrls,
+      };
+    } else if (data.entityType === 'CMT') {
+      if (!data.postId || !data.createdAt) {
+        throw new ValidationError('Thiếu thông tin postId hoặc createdAt của bình luận');
+      }
+      const result = await dynamoClient.send(
+        new GetCommand({
+          TableName: `${env.DYNAMODB_TABLE_PREFIX}Comments`,
+          Key: {
+            PK: `POST#${data.postId}`,
+            SK: `CMT#${data.createdAt}#${data.entityId}`,
+          },
+        }),
+      );
+      const comment = result.Item;
+      if (!comment) throw new NotFoundError('Không tìm thấy bình luận bị báo cáo');
+      targetAuthorId = comment.authorId;
+      contentPreview = {
+        text: comment.content,
+        mediaUrls: comment.mediaUrls,
+      };
+    } else if (data.entityType === 'GROUP') {
+      const group = await communityRepository.getCommunityById(data.entityId);
+      if (!group) throw new NotFoundError('Không tìm thấy cộng đồng bị báo cáo');
+      targetAuthorId = group.ownerId;
+      contentPreview = {
+        text: group.description || undefined,
+      };
+    }
+
+    const reportId = uuidv4();
+    const now = new Date().toISOString();
+    const report: ICommunityReport = {
+      PK: `${data.entityType}#${data.entityId}`,
+      SK: `REPORT#${now}#${actorId}`,
+      reportId,
+      groupId,
+      entityType: data.entityType,
+      entityId: data.entityId,
+      reporterId: actorId,
+      targetAuthorId,
+      reason: data.reason,
+      details: data.details,
+      status: 'pending',
+      createdAt: now,
+      contentPreview,
+    };
+
+    if (data.entityType === 'CMT') {
+      report.commentPostId = data.postId;
+      report.commentCreatedAt = data.createdAt;
+    }
+
+    await communityRepository.createReport(report);
+
+    try {
+      const io = getIO();
+      io.to(`group:${groupId}`).emit('community:report_created', report);
+    } catch (err) {
+      logger.error('Failed to emit report socket event:', err);
+    }
+
+    return report;
+  },
+
+  listCommunityReports: async (
+    actorId: string,
+    groupId: string,
+    query: { status?: string; limit?: number; cursor?: string },
+  ): Promise<ICommunityReportsPage> => {
+    await communityService.assertCommunityRole(actorId, groupId, ['owner', 'admin', 'moderator']);
+
+    const resolvedLimit = Math.min(query.limit ?? 20, 100);
+    const decoded = decodeCursor(query.cursor);
+
+    const page = await communityRepository.listReports(
+      groupId,
+      query.status,
+      resolvedLimit,
+      decoded,
+    );
+
+    if (page.items.length === 0) {
+      return {
+        items: [],
+        nextCursor: null,
+        hasMore: false,
+      };
+    }
+
+    const userIds = new Set<string>();
+    for (const report of page.items) {
+      if (report.reporterId) userIds.add(report.reporterId);
+      if (report.targetAuthorId) userIds.add(report.targetAuthorId);
+    }
+
+    const uniqueUserIds = Array.from(userIds);
+    const users =
+      uniqueUserIds.length > 0 ? await userRepository.findMultipleById(uniqueUserIds) : [];
+    const userMap = new Map(users.map((u) => [u.userId, u]));
+
+    const items = page.items.map((report) => {
+      const reporter = userMap.get(report.reporterId);
+      const targetAuthor = userMap.get(report.targetAuthorId);
+
+      return {
+        ...report,
+        reporterInfo: reporter
+          ? {
+              userId: report.reporterId,
+              displayName: reporter.displayName ?? report.reporterId,
+              avatar: reporter.avatar ?? null,
+            }
+          : { userId: report.reporterId, displayName: report.reporterId, avatar: null },
+        targetAuthorInfo: targetAuthor
+          ? {
+              userId: report.targetAuthorId,
+              displayName: targetAuthor.displayName ?? report.targetAuthorId,
+              avatar: targetAuthor.avatar ?? null,
+            }
+          : { userId: report.targetAuthorId, displayName: report.targetAuthorId, avatar: null },
+      };
+    });
+
+    return {
+      items,
+      nextCursor: page.lastEvaluatedKey ? encodeCursor(page.lastEvaluatedKey) : null,
+      hasMore: Boolean(page.lastEvaluatedKey),
+    };
+  },
+
+  resolveCommunityReport: async (
+    actorId: string,
+    groupId: string,
+    reportData: {
+      entityType: 'POST' | 'CMT' | 'GROUP';
+      entityId: string;
+      createdAt: string;
+      reporterId: string;
+      action: 'dismiss' | 'delete_content' | 'warn_user' | 'ban_user';
+      notes?: string;
+    },
+  ): Promise<ICommunityReport> => {
+    const adminMember = await communityService.assertCommunityRole(actorId, groupId, [
+      'owner',
+      'admin',
+      'moderator',
+    ]);
+    const community = await requireActiveCommunity(groupId);
+
+    const report = await communityRepository.getReport(
+      reportData.entityType,
+      reportData.entityId,
+      reportData.createdAt,
+      reportData.reporterId,
+    );
+    if (!report) {
+      throw new NotFoundError('Không tìm thấy bản ghi báo cáo');
+    }
+
+    if (report.status !== 'pending') {
+      throw new ValidationError('Báo cáo này đã được xử lý từ trước');
+    }
+
+    const now = new Date().toISOString();
+    let finalStatus: 'resolved_deleted' | 'resolved_dismissed' | 'resolved_warned' =
+      'resolved_dismissed';
+
+    if (reportData.action === 'dismiss') {
+      finalStatus = 'resolved_dismissed';
+    } else if (reportData.action === 'delete_content') {
+      finalStatus = 'resolved_deleted';
+
+      if (report.entityType === 'POST') {
+        const post = await newsfeedRepository.getPostById(report.entityId);
+        if (post) {
+          await communityRepository.deleteContentIndex(
+            groupId,
+            'post',
+            report.entityId,
+            new Date(post.createdAt).getTime(),
+          );
+          await newsfeedRepository.deletePost(report.entityId);
+          await newsfeedRepository.deleteCommentsByPostId(report.entityId);
+          await newsfeedRepository.deleteReactionsByPostId(report.entityId);
+
+          try {
+            const producer = getKafkaProducer();
+            await producer.send({
+              topic: KAFKA_TOPICS.SEARCH_INDEX,
+              messages: [
+                {
+                  value: JSON.stringify({
+                    action: 'delete',
+                    indexName: 'posts',
+                    documentId: report.entityId,
+                  }),
+                },
+              ],
+            });
+          } catch (kafkaErr) {
+            logger.error('Failed to emit post deletion Kafka event:', kafkaErr);
+          }
+        }
+      } else if (report.entityType === 'CMT') {
+        const commentPostId = report.commentPostId;
+        const commentCreatedAt = report.commentCreatedAt;
+        if (commentPostId && commentCreatedAt) {
+          await dynamoClient.send(
+            new DeleteCommand({
+              TableName: `${env.DYNAMODB_TABLE_PREFIX}Comments`,
+              Key: {
+                PK: `POST#${commentPostId}`,
+                SK: `CMT#${commentCreatedAt}#${report.entityId}`,
+              },
+            }),
+          );
+        }
+      }
+    } else if (reportData.action === 'warn_user') {
+      finalStatus = 'resolved_warned';
+
+      try {
+        await notificationService.dispatch({
+          userId: report.targetAuthorId,
+          type: 'group_invite',
+          title: 'Cảnh báo kiểm duyệt',
+          body: `Nội dung của bạn trong cộng đồng "${community.name}" đã bị báo cáo và nhận cảnh báo từ Ban quản trị: ${reportData.notes || 'Vi phạm tiêu chuẩn cộng đồng'}.`,
+          data: { route: 'community', id: groupId },
+        });
+      } catch (err) {
+        logger.error('Failed to send warning notification:', err);
+      }
+    } else if (reportData.action === 'ban_user') {
+      finalStatus = 'resolved_deleted';
+
+      try {
+        const targetMember = await communityRepository.getMember(groupId, report.targetAuthorId);
+        if (targetMember && targetMember.status === 'active') {
+          if (ROLE_RANK[adminMember.role] > ROLE_RANK[targetMember.role]) {
+            await communityService.removeMember(actorId, groupId, report.targetAuthorId);
+          }
+        }
+      } catch (err) {
+        logger.error('Failed to ban member during report resolution:', err);
+      }
+    }
+
+    const updates = {
+      status: finalStatus,
+      resolvedBy: actorId,
+      resolvedAt: now,
+      resolutionNotes: reportData.notes || '',
+    };
+
+    await communityRepository.updateReportStatus(
+      report.entityType,
+      report.entityId,
+      report.createdAt,
+      report.reporterId,
+      updates,
+    );
+
+    const updatedReport: ICommunityReport = {
+      ...report,
+      ...updates,
+    };
+
+    try {
+      const io = getIO();
+      io.to(`group:${groupId}`).emit('community:report_resolved', updatedReport);
+    } catch (err) {
+      logger.error('Failed to emit report resolved socket event:', err);
+    }
+
+    return updatedReport;
   },
 };

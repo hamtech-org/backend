@@ -13,6 +13,9 @@ import {
   reportCommunitySchema,
   resolvePendingPostSchema,
   listModerationLogsQuerySchema,
+  reportCommunityEntitySchema,
+  resolveCommunityReportSchema,
+  listCommunityReportsQuerySchema,
 } from './community.validator.js';
 
 const router = Router();
@@ -56,8 +59,21 @@ router.put('/:groupId/posts/:postId/unpin', authenticate, communityController.un
 router.post(
   '/:groupId/reports',
   authenticate,
-  validate(reportCommunitySchema),
+  validate(reportCommunityEntitySchema),
   communityController.report,
+);
+
+router.get(
+  '/:groupId/moderation/reports',
+  authenticate,
+  validateQuery(listCommunityReportsQuerySchema),
+  communityController.listReports,
+);
+router.post(
+  '/:groupId/moderation/reports/resolve',
+  authenticate,
+  validate(resolveCommunityReportSchema),
+  communityController.resolveReport,
 );
 
 router.get('/:groupId/moderation/posts', authenticate, communityController.listPendingPosts);

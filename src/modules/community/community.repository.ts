@@ -20,10 +20,12 @@ import type {
   ICommunityMember,
   ICommunityPendingRequest,
   ICommunityModerationLog,
+  ICommunityReport,
 } from './community.types.js';
 
 const GROUPS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Groups`;
 const MODERATION_LOGS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}ModerationLogs`;
+const REPORTS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Reports`;
 const GSI1 = 'GSI-1';
 const GSI2 = 'GSI-2';
 
@@ -806,5 +808,101 @@ export const communityRepository = {
         }),
       );
     }
+  },
+
+  createReport: async (report: ICommunityReport): Promise<void> => {
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: REPORTS_TABLE,
+        Item: report,
+      }),
+    );
+  },
+
+  getReport: async (
+    entityType: string,
+    entityId: string,
+    createdAt: string,
+    reporterId: string,
+  ): Promise<ICommunityReport | null> => {
+    const result = await dynamoClient.send(
+      new GetCommand({
+        TableName: REPORTS_TABLE,
+        Key: {
+          PK: `${entityType}#${entityId}`,
+          SK: `REPORT#${createdAt}#${reporterId}`,
+        },
+      }),
+    );
+    return (result.Item as ICommunityReport | undefined) ?? null;
+  },
+
+  updateReportStatus: async (
+    entityType: string,
+    entityId: string,
+    createdAt: string,
+    reporterId: string,
+    updates: {
+      status: 'resolved_deleted' | 'resolved_dismissed' | 'resolved_warned';
+      resolvedBy: string;
+      resolvedAt: string;
+      resolutionNotes?: string;
+    },
+  ): Promise<void> => {
+    const entries = Object.entries(updates).filter(([, v]) => v !== undefined);
+    if (entries.length === 0) return;
+    const updateExpr = entries.map(([k], i) => `#k${i} = :v${i}`).join(', ');
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: REPORTS_TABLE,
+        Key: {
+          PK: `${entityType}#${entityId}`,
+          SK: `REPORT#${createdAt}#${reporterId}`,
+        },
+        UpdateExpression: `SET ${updateExpr}`,
+        ExpressionAttributeNames: Object.fromEntries(entries.map(([k], i) => [`#k${i}`, k])),
+        ExpressionAttributeValues: Object.fromEntries(entries.map(([, v], i) => [`:v${i}`, v])),
+      }),
+    );
+  },
+
+  listReports: async (
+    groupId: string,
+    status?: string,
+    limit: number = 20,
+    exclusiveStartKey?: Record<string, unknown>,
+  ): Promise<PageResult<ICommunityReport>> => {
+    const isResolvedFilter = status === 'resolved';
+
+    // DynamoDB Query
+    const queryParams: any = {
+      TableName: REPORTS_TABLE,
+      IndexName: 'GSI-CommunityReports',
+      KeyConditionExpression: 'groupId = :groupId',
+      ExpressionAttributeValues: {
+        ':groupId': groupId,
+      },
+      Limit: limit,
+      ScanIndexForward: false, // newest first
+      ExclusiveStartKey: exclusiveStartKey,
+    };
+
+    if (status) {
+      if (isResolvedFilter) {
+        queryParams.FilterExpression = 'begins_with(#status, :statusPrefix)';
+        queryParams.ExpressionAttributeNames = { '#status': 'status' };
+        queryParams.ExpressionAttributeValues[':statusPrefix'] = 'resolved_';
+      } else {
+        queryParams.FilterExpression = '#status = :status';
+        queryParams.ExpressionAttributeNames = { '#status': 'status' };
+        queryParams.ExpressionAttributeValues[':status'] = status;
+      }
+    }
+
+    const result = await dynamoClient.send(new QueryCommand(queryParams));
+    return {
+      items: (result.Items as ICommunityReport[]) ?? [],
+      lastEvaluatedKey: result.LastEvaluatedKey as Record<string, unknown> | undefined,
+    };
   },
 };

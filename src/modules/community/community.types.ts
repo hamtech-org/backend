@@ -215,3 +215,43 @@ export interface ICommunityModerationLogsPage {
   nextCursor: string | null;
   hasMore: boolean;
 }
+
+export interface ICommunityReport {
+  PK: string;
+  SK: string;
+  reportId: string;
+  groupId: string;
+  entityType: 'POST' | 'CMT' | 'GROUP';
+  entityId: string;
+  reporterId: string;
+  targetAuthorId: string;
+  reason: 'spam' | 'harassment' | 'hate_speech' | 'inappropriate' | 'rules_violation' | 'other';
+  details?: string;
+  status: 'pending' | 'resolved_deleted' | 'resolved_dismissed' | 'resolved_warned';
+  resolvedBy?: string;
+  resolvedAt?: string;
+  resolutionNotes?: string;
+  createdAt: string;
+  commentPostId?: string;
+  commentCreatedAt?: string;
+  reporterInfo?: {
+    userId: string;
+    displayName: string;
+    avatar: string | null;
+  };
+  targetAuthorInfo?: {
+    userId: string;
+    displayName: string;
+    avatar: string | null;
+  };
+  contentPreview?: {
+    text?: string;
+    mediaUrls?: string[];
+  };
+}
+
+export interface ICommunityReportsPage {
+  items: ICommunityReport[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}

@@ -62,3 +62,32 @@ export const listModerationLogsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
   cursor: z.string().optional(),
 });
+
+export const reportCommunityEntitySchema = z.object({
+  entityType: z.enum(['POST', 'CMT', 'GROUP']),
+  entityId: z.string().min(1),
+  reason: z.enum([
+    'spam',
+    'harassment',
+    'hate_speech',
+    'inappropriate',
+    'rules_violation',
+    'other',
+  ]),
+  details: z.string().max(500).optional(),
+  postId: z.string().optional(),
+  createdAt: z.string().optional(),
+});
+
+export const resolveCommunityReportSchema = z.object({
+  action: z.enum(['dismiss', 'delete_content', 'warn_user', 'ban_user']),
+  notes: z.string().max(500).optional(),
+});
+
+export const listCommunityReportsQuerySchema = z.object({
+  status: z
+    .enum(['pending', 'resolved_deleted', 'resolved_dismissed', 'resolved_warned', 'resolved'])
+    .optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  cursor: z.string().optional(),
+});

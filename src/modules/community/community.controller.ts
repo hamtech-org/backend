@@ -194,8 +194,12 @@ export const communityController = {
 
   report: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      await communityService.reportCommunity(req.user!.userId, req.params.groupId, req.body);
-      sendSuccess(res, null, 'Báo cáo cộng đồng thành công');
+      const report = await communityService.reportEntity(
+        req.user!.userId,
+        req.params.groupId,
+        req.body,
+      );
+      sendCreated(res, report, 'Gửi báo cáo thành công');
     } catch (error) {
       next(error);
     }
@@ -268,6 +272,36 @@ export const communityController = {
     try {
       await communityService.unlinkChat(req.params.groupId, req.user!.userId);
       sendSuccess(res, null, 'Giải tán phòng chat thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  listReports: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const page = await communityService.listCommunityReports(
+        req.user!.userId,
+        req.params.groupId,
+        {
+          status: typeof req.query.status === 'string' ? req.query.status : undefined,
+          limit: req.query.limit ? Number(req.query.limit) : undefined,
+          cursor: typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
+        },
+      );
+      sendSuccess(res, page);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  resolveReport: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const resolved = await communityService.resolveCommunityReport(
+        req.user!.userId,
+        req.params.groupId,
+        req.body,
+      );
+      sendSuccess(res, resolved, 'Xử lý báo cáo thành công');
     } catch (error) {
       next(error);
     }
