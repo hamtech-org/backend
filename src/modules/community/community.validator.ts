@@ -62,7 +62,3 @@ export const listModerationLogsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
   cursor: z.string().optional(),
 });
-
-export const linkExistingChatSchema = z.object({
-  conversationId: z.string().uuid(),
-});

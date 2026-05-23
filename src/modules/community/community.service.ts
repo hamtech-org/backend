@@ -537,10 +537,6 @@ export const communityService = {
     if (data.chatEnabled !== undefined && data.chatEnabled !== existing.chatEnabled) {
       changedFields.chatEnabled = { old: existing.chatEnabled, new: data.chatEnabled };
       updates.chatEnabled = data.chatEnabled;
-      if (data.chatEnabled === false && existing.conversationId) {
-        updates.conversationId = null;
-        await conversationService.updateGroupId(existing.conversationId, null);
-      }
     }
 
     try {
@@ -1394,57 +1390,6 @@ export const communityService = {
     }
   },
 
-  linkExistingChat: async (
-    groupId: string,
-    conversationId: string,
-    actorId: string,
-  ): Promise<void> => {
-    // 1. Check quyền Owner cộng đồng
-    await communityService.assertCommunityRole(actorId, groupId, ['owner']);
-
-    // 2. Check chi tiết conversation & Quyền Leader phòng chat
-    const conversation = await conversationRepository.getConversationById(conversationId);
-    if (!conversation) {
-      throw new NotFoundError('Không tìm thấy phòng chat');
-    }
-    if (conversation.type !== 'group') {
-      throw new ValidationError('Chỉ có thể liên kết cuộc trò chuyện loại nhóm');
-    }
-    if (conversation.leaderId !== actorId) {
-      throw new ForbiddenError('Bạn phải là Leader của phòng chat để thực hiện liên kết');
-    }
-
-    // 3. Check liên kết chéo
-    if (conversation.groupId && conversation.groupId !== groupId) {
-      throw new ConflictError('Phòng chat này đang được liên kết với cộng đồng khác');
-    }
-
-    // 4. Update thông tin liên kết chéo trên cả 2 bảng
-    await communityRepository.updateConversationId(groupId, conversationId, true);
-    await conversationService.updateGroupId(conversationId, groupId);
-
-    // 5. Gửi thông báo fan-out bất đồng bộ qua Kafka
-    try {
-      const producer = getKafkaProducer();
-      await producer.send({
-        topic: KAFKA_TOPICS.NOTIFICATION_FANOUT,
-        messages: [
-          {
-            key: groupId,
-            value: JSON.stringify({
-              type: 'community_chat_enabled',
-              groupId,
-              conversationId,
-              recipientType: 'all_members',
-            }),
-          },
-        ],
-      });
-    } catch (err) {
-      logger.error(`Emit community_chat_enabled event failed for group ${groupId}:`, err);
-    }
-  },
-
   unlinkChat: async (groupId: string, actorId: string): Promise<void> => {
     await communityService.assertCommunityRole(actorId, groupId, ['owner']);
     const community = await requireActiveCommunity(groupId);
@@ -1454,13 +1399,30 @@ export const communityService = {
 
     const conversationId = community.conversationId;
 
-    // Update Group META: set conversationId = null, chatEnabled = false
+    // 1. Cập nhật Group META: set conversationId = null, chatEnabled = false
     await communityRepository.updateConversationId(groupId, null, false);
 
-    // Update Conversation: set groupId = null
+    // 2. Lấy danh sách thành viên trước khi xóa và chi tiết phòng chat
+    const membersBefore = await conversationRepository.getConversationMembers(conversationId);
+    const conversation = await conversationRepository.getConversationById(conversationId);
+    const convName = conversation?.name || 'Nhóm';
+
+    // 3. Cập nhật Conversation META trong database: isDeleted = true, memberCount = 0
+    await conversationRepository.updateConversation(conversationId, {
+      name: `[ĐÃ GIẢI TÁN] ${convName}`,
+      isDeleted: true,
+      memberCount: 0,
+    } as any);
+
+    // 4. Gỡ liên kết groupId khỏi Conversation
     await conversationService.updateGroupId(conversationId, null);
 
-    // 1. Đồng bộ sang Elasticsearch index groups
+    // 5. Xóa các bản ghi MEMBER# của tất cả thành viên trong DB
+    await Promise.all(
+      membersBefore.map((m) => conversationRepository.removeMember(conversationId, m.userId)),
+    );
+
+    // 6. Đồng bộ sang Elasticsearch index groups
     const updatedCommunity = await communityRepository.getCommunityById(groupId);
     if (updatedCommunity) {
       await emitCommunityIndexEvent({
@@ -1471,7 +1433,7 @@ export const communityService = {
       });
     }
 
-    // 2. Ghi nhật ký kiểm duyệt (Moderation Log)
+    // 7. Ghi nhật ký kiểm duyệt (Moderation Log)
     await communityService.writeModerationLog(
       actorId,
       groupId,
@@ -1479,20 +1441,32 @@ export const communityService = {
       groupId,
       'community',
       community.name,
-      'Hủy liên kết phòng chat',
+      'Giải tán phòng chat',
       { unlinkChat: true, conversationId },
     );
 
-    // 3. Phát socket event realtime để các client cập nhật danh sách hội thoại
+    // 8. Phát các sự kiện WebSocket giải tán/xóa tới room chung và room cá nhân của từng thành viên
     try {
       const io = getIO();
-      io.to(`conv:${conversationId}`).emit('group:updated', {
+      const disbandedPayload = {
         conversationId,
-        groupId: null,
-      });
+        groupId: conversationId,
+        reason: 'community_chat_disbanded',
+      };
+      const deletedPayload = { groupId: conversationId, conversationId };
+
+      io.to(`conv:${conversationId}`).emit('conversation:disbanded', disbandedPayload);
+      io.to(`conv:${conversationId}`).emit('group:disbanded', disbandedPayload);
+      io.to(`conv:${conversationId}`).emit('group:deleted', deletedPayload);
+
+      for (const m of membersBefore) {
+        io.to(`user:${m.userId}`).emit('conversation:disbanded', disbandedPayload);
+        io.to(`user:${m.userId}`).emit('group:disbanded', disbandedPayload);
+        io.to(`user:${m.userId}`).emit('group:deleted', deletedPayload);
+      }
     } catch (socketErr) {
       logger.error(
-        `Failed to emit group:updated socket event for unlinked chat ${conversationId}:`,
+        `Failed to emit disband socket events for community chat ${conversationId}:`,
         socketErr,
       );
     }

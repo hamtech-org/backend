@@ -13,7 +13,6 @@ import {
   reportCommunitySchema,
   resolvePendingPostSchema,
   listModerationLogsQuerySchema,
-  linkExistingChatSchema,
 } from './community.validator.js';
 
 const router = Router();
@@ -78,12 +77,6 @@ router.get(
 
 // Linked Chat Routes
 router.post('/:groupId/join-chat', authenticate, communityController.joinChat);
-router.post(
-  '/:groupId/link-chat',
-  authenticate,
-  validate(linkExistingChatSchema),
-  communityController.linkChat,
-);
 router.delete('/:groupId/link-chat', authenticate, communityController.unlinkChat);
 
 export default router;
