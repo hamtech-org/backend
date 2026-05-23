@@ -25,6 +25,10 @@ echo "[3/5] Initializing tables..."
 npx tsx scripts/database/setup-database.ts
 echo ""
 
+echo "[3.5/5] Running database migrations..."
+npm run db:migrate
+echo ""
+
 # echo "[4/5] Seeding data..."
 # npx tsx scripts/database/insert-data.ts
 # echo ""
