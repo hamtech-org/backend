@@ -554,13 +554,19 @@ export const communityService = {
       });
 
       // Đồng bộ sang Linked Chat (nếu có)
-      if (existing.conversationId && (data.name !== undefined || data.avatar !== undefined)) {
+      if (
+        existing.conversationId &&
+        (data.name !== undefined || data.avatar !== undefined || data.chatEnabled !== undefined)
+      ) {
         const chatUpdates: Partial<any> = {};
         if (data.name !== undefined && data.name.trim() !== existing.name) {
           chatUpdates.name = data.name.trim();
         }
         if (data.avatar !== undefined && data.avatar !== existing.avatar) {
           chatUpdates.avatar = data.avatar;
+        }
+        if (data.chatEnabled !== undefined && data.chatEnabled !== existing.chatEnabled) {
+          chatUpdates.chatEnabled = data.chatEnabled;
         }
 
         if (Object.keys(chatUpdates).length > 0) {
@@ -1327,6 +1333,7 @@ export const communityService = {
       conversationId: tempConversationId,
       type: 'group' as const,
       groupId: groupId,
+      chatEnabled: true,
       name: meta.name,
       avatar: meta.avatar ?? undefined,
       creatorId: meta.ownerId,

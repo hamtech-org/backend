@@ -59,6 +59,8 @@ export interface IConversation extends TimestampFields {
   pinnedMessageCount?: number;
   /** ID của cộng đồng (community/group) liên kết nếu có */
   groupId?: string | null;
+  /** Cho biết tính năng chat của cộng đồng liên kết có đang bật không */
+  chatEnabled?: boolean;
   /**
    * Trường gộp từ bản ghi MEMBER# của user đang gọi API (danh sách hội thoại / preferences).
    * Không lưu trên META.

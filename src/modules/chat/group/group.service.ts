@@ -196,6 +196,9 @@ async function assertMemberGroupPermission(
   const c = await conversationRepository.getConversationById(conversationId);
   if (!c) throw new NotFoundError('Hội thoại');
   if (c.type !== 'group') return;
+  if (c.groupId && c.chatEnabled === false) {
+    throw new ForbiddenError('Trò chuyện đã bị tắt bởi quản trị viên Cộng đồng');
+  }
   const member = await conversationRepository.getMember(conversationId, userId);
   if (!member) throw new ForbiddenError('Bạn không phải thành viên nhóm');
 
