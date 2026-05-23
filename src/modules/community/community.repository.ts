@@ -778,18 +778,33 @@ export const communityRepository = {
     conversationId: string | null,
     chatEnabled: boolean,
   ): Promise<void> => {
-    await dynamoClient.send(
-      new UpdateCommand({
-        TableName: GROUPS_TABLE,
-        Key: { PK: `GROUP#${groupId}`, SK: 'META' },
-        UpdateExpression:
-          'SET conversationId = :conversationId, chatEnabled = :chatEnabled, updatedAt = :now',
-        ExpressionAttributeValues: {
-          ':conversationId': conversationId,
-          ':chatEnabled': chatEnabled,
-          ':now': new Date().toISOString(),
-        },
-      }),
-    );
+    if (conversationId) {
+      await dynamoClient.send(
+        new UpdateCommand({
+          TableName: GROUPS_TABLE,
+          Key: { PK: `GROUP#${groupId}`, SK: 'META' },
+          UpdateExpression:
+            'SET conversationId = :conversationId, chatEnabled = :chatEnabled, updatedAt = :now',
+          ExpressionAttributeValues: {
+            ':conversationId': conversationId,
+            ':chatEnabled': chatEnabled,
+            ':now': new Date().toISOString(),
+          },
+        }),
+      );
+    } else {
+      await dynamoClient.send(
+        new UpdateCommand({
+          TableName: GROUPS_TABLE,
+          Key: { PK: `GROUP#${groupId}`, SK: 'META' },
+          UpdateExpression:
+            'REMOVE conversationId SET chatEnabled = :chatEnabled, updatedAt = :now',
+          ExpressionAttributeValues: {
+            ':chatEnabled': chatEnabled,
+            ':now': new Date().toISOString(),
+          },
+        }),
+      );
+    }
   },
 };

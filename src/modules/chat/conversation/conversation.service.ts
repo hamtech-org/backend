@@ -5,6 +5,7 @@ import type {
   IConversation,
   IConversationMember,
   ICreateConversationDto,
+  MemberRole,
 } from '../shared/chat.types.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
 import { MAX_PINNED_CHATS_TO_TOP } from '../shared/chat.constants.js';
@@ -318,7 +319,11 @@ export const conversationService = {
     await conversationRepository.updateGroupId(conversationId, groupId);
   },
 
-  addMemberIfNotExist: async (conversationId: string, userId: string): Promise<void> => {
+  addMemberIfNotExist: async (
+    conversationId: string,
+    userId: string,
+    role?: MemberRole,
+  ): Promise<void> => {
     const existing = await conversationRepository.getMember(conversationId, userId);
     if (existing) return;
 
@@ -326,7 +331,7 @@ export const conversationService = {
     await conversationRepository.addConversationMember({
       conversationId,
       userId,
-      role: 'member',
+      role: role || 'member',
       joinedAt: now,
       unreadCount: 0,
       isMuted: false,

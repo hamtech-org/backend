@@ -5,7 +5,9 @@ import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { conversationService } from '@/modules/chat/conversation/conversation.service.js';
 import { conversationRepository } from '@/modules/chat/conversation/conversation.repository.js';
 import { createInitialGroupSettings } from '@/modules/chat/group/group.service.js';
+import type { MemberRole } from '@/modules/chat/shared/chat.types.js';
 import { getKafkaProducer } from '@/config/kafka.js';
+import { getIO } from '@/socket/index.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { logger } from '@/shared/utils/logger.js';
 import {
@@ -555,6 +557,35 @@ export const communityService = {
         document: toSearchDocument(updated),
       });
 
+      // Đồng bộ sang Linked Chat (nếu có)
+      if (existing.conversationId && (data.name !== undefined || data.avatar !== undefined)) {
+        const chatUpdates: Partial<any> = {};
+        if (data.name !== undefined && data.name.trim() !== existing.name) {
+          chatUpdates.name = data.name.trim();
+        }
+        if (data.avatar !== undefined && data.avatar !== existing.avatar) {
+          chatUpdates.avatar = data.avatar;
+        }
+
+        if (Object.keys(chatUpdates).length > 0) {
+          await conversationRepository.updateConversation(existing.conversationId, chatUpdates);
+
+          // Phát socket event để client update UI realtime
+          try {
+            const io = getIO();
+            io.to(`conv:${existing.conversationId}`).emit('group:updated', {
+              conversationId: existing.conversationId,
+              ...chatUpdates,
+            });
+          } catch (socketErr) {
+            logger.error(
+              `Failed to emit group:updated socket event for synced community update:`,
+              socketErr,
+            );
+          }
+        }
+      }
+
       if (Object.keys(changedFields).length > 0) {
         await communityService.writeModerationLog(
           actorId,
@@ -691,6 +722,25 @@ export const communityService = {
       throw new ValidationError('Owner phải chuyển quyền trước khi rời cộng đồng');
     }
     await communityRepository.leaveCommunity(groupId, userId);
+
+    try {
+      const producer = getKafkaProducer();
+      await producer.send({
+        topic: KAFKA_TOPICS.COMMUNITY_EVENTS,
+        messages: [
+          {
+            key: groupId,
+            value: JSON.stringify({
+              type: 'member_left',
+              groupId,
+              userId,
+            }),
+          },
+        ],
+      });
+    } catch (err) {
+      logger.error(`Emit member_left event failed for group ${groupId}:`, err);
+    }
   },
 
   listMembers: async (actorId: string, groupId: string): Promise<ICommunityMember[]> => {
@@ -798,6 +848,26 @@ export const communityService = {
       'member',
       targetName,
     );
+
+    try {
+      const producer = getKafkaProducer();
+      await producer.send({
+        topic: KAFKA_TOPICS.COMMUNITY_EVENTS,
+        messages: [
+          {
+            key: groupId,
+            value: JSON.stringify({
+              type: 'member_kicked',
+              groupId,
+              userId: targetUserId,
+              kickedBy: actorId,
+            }),
+          },
+        ],
+      });
+    } catch (err) {
+      logger.error(`Emit member_kicked event failed for group ${groupId}:`, err);
+    }
   },
 
   updateMemberRole: async (
@@ -1236,9 +1306,16 @@ export const communityService = {
       throw new ForbiddenError('Bạn chưa là thành viên cộng đồng');
     }
 
+    let chatRole: MemberRole = 'member';
+    if (member.role === 'owner') {
+      chatRole = 'owner';
+    } else if (member.role === 'admin' || member.role === 'moderator') {
+      chatRole = 'admin';
+    }
+
     if (meta.conversationId) {
       // Đã có phòng chat, tiến hành add member (idempotent)
-      await conversationService.addMemberIfNotExist(meta.conversationId, userId);
+      await conversationService.addMemberIfNotExist(meta.conversationId, userId, chatRole);
       return meta.conversationId;
     }
 
@@ -1297,7 +1374,7 @@ export const communityService = {
       );
 
       // Winner: Thêm user hiện tại làm thành viên đầu tiên
-      await conversationService.addMemberIfNotExist(tempConversationId, userId);
+      await conversationService.addMemberIfNotExist(tempConversationId, userId, chatRole);
       return tempConversationId;
     } catch (error) {
       if (isConditionalFailure(error)) {
@@ -1305,7 +1382,11 @@ export const communityService = {
         // Đọc lại META để lấy conversationId của Winner
         const updatedMeta = await communityRepository.getCommunityById(groupId);
         if (updatedMeta && updatedMeta.conversationId) {
-          await conversationService.addMemberIfNotExist(updatedMeta.conversationId, userId);
+          await conversationService.addMemberIfNotExist(
+            updatedMeta.conversationId,
+            userId,
+            chatRole,
+          );
           return updatedMeta.conversationId;
         }
       }
@@ -1378,5 +1459,42 @@ export const communityService = {
 
     // Update Conversation: set groupId = null
     await conversationService.updateGroupId(conversationId, null);
+
+    // 1. Đồng bộ sang Elasticsearch index groups
+    const updatedCommunity = await communityRepository.getCommunityById(groupId);
+    if (updatedCommunity) {
+      await emitCommunityIndexEvent({
+        action: 'update',
+        indexName: 'groups',
+        documentId: groupId,
+        document: toSearchDocument(updatedCommunity),
+      });
+    }
+
+    // 2. Ghi nhật ký kiểm duyệt (Moderation Log)
+    await communityService.writeModerationLog(
+      actorId,
+      groupId,
+      'update_settings',
+      groupId,
+      'community',
+      community.name,
+      'Hủy liên kết phòng chat',
+      { unlinkChat: true, conversationId },
+    );
+
+    // 3. Phát socket event realtime để các client cập nhật danh sách hội thoại
+    try {
+      const io = getIO();
+      io.to(`conv:${conversationId}`).emit('group:updated', {
+        conversationId,
+        groupId: null,
+      });
+    } catch (socketErr) {
+      logger.error(
+        `Failed to emit group:updated socket event for unlinked chat ${conversationId}:`,
+        socketErr,
+      );
+    }
   },
 };

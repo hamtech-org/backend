@@ -6,6 +6,8 @@ import type {
   MessageStatus,
 } from '@/shared/types/chat.types.js';
 
+export type { MemberRole };
+
 /** Cài đặt nhóm (META conversation type group). */
 export interface IGroupMemberPermissions {
   changeNameAvatar: boolean;

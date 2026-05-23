@@ -3,6 +3,8 @@ import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { logger } from '@/shared/utils/logger.js';
 import { communityRepository } from './community.repository.js';
 import { conversationRepository } from '@/modules/chat/conversation/conversation.repository.js';
+import { createAndBroadcastSystemMessage } from '@/modules/chat/shared/system-message.factory.js';
+import { userRepository } from '@/modules/user/user.repository.js';
 import { getIO } from '@/socket/index.js';
 
 /**
@@ -36,6 +38,7 @@ export const startCommunityConsumer = async (): Promise<void> => {
           oldOwnerId?: string;
           newOwnerId?: string;
           conversationId?: string | null;
+          kickedBy?: string;
         };
 
         const { type, groupId } = payload;
@@ -129,25 +132,162 @@ export const startCommunityConsumer = async (): Promise<void> => {
               break;
             }
 
-            // 1. Đánh dấu phòng chat đã bị xóa trong database
-            await conversationRepository.updateConversation(conversationId, { isDeleted: true });
-            logger.info(
-              `Conversation ${conversationId} marked as isDeleted: true due to community archive.`,
+            // Lấy danh sách thành viên trước khi xóa
+            const membersBefore =
+              await conversationRepository.getConversationMembers(conversationId);
+            const conversation = await conversationRepository.getConversationById(conversationId);
+            const convName = conversation?.name || 'Nhóm';
+
+            // 1. Cập nhật bản ghi META trong database
+            await conversationRepository.updateConversation(conversationId, {
+              name: `[ĐÃ GIẢI TÁN] ${convName}`,
+              isDeleted: true,
+              memberCount: 0,
+            } as any);
+
+            // 2. Xóa các bản ghi MEMBER# của tất cả thành viên trong DB
+            await Promise.all(
+              membersBefore.map((m) =>
+                conversationRepository.removeMember(conversationId, m.userId),
+              ),
             );
 
-            // 2. Phát sự kiện WebSocket tới toàn bộ client đang kết nối trong phòng chat đó
+            logger.info(
+              `Conversation ${conversationId} disbanded, renamed, and all member records deleted due to community archive.`,
+            );
+
+            // 3. Phát các sự kiện WebSocket tới room chung và room cá nhân của từng thành viên
             try {
               const io = getIO();
-              io.to(`conversation:${conversationId}`).emit('conversation:disbanded', {
+              const disbandedPayload = {
                 conversationId,
+                groupId: conversationId,
                 reason: 'community_archived',
-              });
+              };
+              const deletedPayload = { groupId: conversationId, conversationId };
+
+              io.to(`conv:${conversationId}`).emit('conversation:disbanded', disbandedPayload);
+              io.to(`conv:${conversationId}`).emit('group:disbanded', disbandedPayload);
+              io.to(`conv:${conversationId}`).emit('group:deleted', deletedPayload);
+
+              for (const m of membersBefore) {
+                io.to(`user:${m.userId}`).emit('conversation:disbanded', disbandedPayload);
+                io.to(`user:${m.userId}`).emit('group:disbanded', disbandedPayload);
+                io.to(`user:${m.userId}`).emit('group:deleted', deletedPayload);
+              }
+
               logger.info(
-                `Disbanded notification emitted via WebSockets to conversation room ${conversationId}`,
+                `Disbanded & deleted notifications emitted via WebSockets to conversation room ${conversationId} and all members.`,
               );
             } catch (socketErr) {
-              logger.error(`Failed to emit conversation:disbanded event via socket:`, socketErr);
+              logger.error(`Failed to emit disbandment events via socket:`, socketErr);
             }
+            break;
+          }
+
+          case 'member_left':
+          case 'member_kicked': {
+            const { userId, kickedBy } = payload;
+            if (!userId) break;
+
+            const community = await communityRepository.getCommunityById(groupId);
+            if (!community || !community.conversationId) {
+              logger.debug(
+                `Community ${groupId} has no conversationId linked. Skipping member sync.`,
+              );
+              break;
+            }
+
+            const conversationId = community.conversationId;
+            const chatMember = await conversationRepository.getMember(conversationId, userId);
+            if (!chatMember) {
+              logger.debug(`User ${userId} is not in the linked chat. No need to remove.`);
+              break;
+            }
+
+            // Xóa thành viên khỏi phòng chat
+            await conversationRepository.removeMember(conversationId, userId);
+
+            // Cập nhật lại số lượng thành viên của conversation
+            const membersAfter =
+              await conversationRepository.getConversationMembers(conversationId);
+            const memberCount = membersAfter.length;
+            await conversationRepository.updateConversation(conversationId, { memberCount });
+
+            // Gửi tin nhắn hệ thống
+            try {
+              let targetName = 'Ai đó';
+              let actorName = 'Admin';
+              try {
+                const userIds = [userId];
+                if (kickedBy) userIds.push(kickedBy);
+                const users = await userRepository.findByIds(userIds);
+                const userMap = new Map(users.map((u) => [u.userId, u]));
+                targetName = userMap.get(userId)?.displayName || userId;
+                if (kickedBy) {
+                  actorName = userMap.get(kickedBy)?.displayName || kickedBy;
+                }
+              } catch (err) {
+                logger.error('Failed to fetch user profiles for system message:', err);
+              }
+
+              const sysContent =
+                type === 'member_kicked'
+                  ? `${actorName} đã mời ${targetName} ra khỏi nhóm`
+                  : `${targetName} đã rời nhóm`;
+
+              await createAndBroadcastSystemMessage(
+                {
+                  conversationId,
+                  senderId: kickedBy || userId,
+                  content: sysContent,
+                },
+                {
+                  createMessage: conversationRepository.createMessage,
+                  updateConversationLastMessage:
+                    conversationRepository.updateConversationLastMessage,
+                },
+              );
+            } catch (sysErr) {
+              logger.error(
+                'Failed to create and broadcast system message for community leave/kick:',
+                sysErr,
+              );
+            }
+
+            // Emit socket notification
+            try {
+              const io = getIO();
+              const socketEvent =
+                type === 'member_kicked' ? 'group:member_removed' : 'group:member_left';
+              const socketPayload = {
+                conversationId,
+                groupId: conversationId,
+                userId,
+                kickedBy,
+                memberCount,
+              };
+
+              io.to(`conv:${conversationId}`).emit(socketEvent, socketPayload);
+              io.to(`user:${userId}`).emit(socketEvent, socketPayload);
+
+              for (const m of membersAfter) {
+                io.to(`user:${m.userId}`).emit(socketEvent, socketPayload);
+                io.to(`user:${m.userId}`).emit('group:updated', {
+                  conversationId,
+                  memberCount,
+                });
+              }
+            } catch (socketErr) {
+              logger.error(
+                'Failed to emit socket updates for community member leave/kick:',
+                socketErr,
+              );
+            }
+
+            logger.info(
+              `Synced ${type} for user ${userId} from community ${groupId} to chat ${conversationId}`,
+            );
             break;
           }
 
