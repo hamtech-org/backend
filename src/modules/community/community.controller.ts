@@ -160,6 +160,19 @@ export const communityController = {
     }
   },
 
+  feed: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const page = await communityService.listJoinedCommunitiesPosts(
+        req.user!.userId,
+        req.query.limit ? Number(req.query.limit) : undefined,
+        typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
+      );
+      sendSuccess(res, page);
+    } catch (error) {
+      next(error);
+    }
+  },
+
   posts: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const page = await communityService.listCommunityPosts(

@@ -28,6 +28,12 @@ export interface IAuthorInfo {
   avatar: string | null;
 }
 
+export interface ICommunityInfo {
+  groupId: string;
+  name: string;
+  avatar: string | null;
+}
+
 export interface IPost extends TimestampFields {
   postId: string;
   authorId: string;
@@ -52,6 +58,7 @@ export interface IPost extends TimestampFields {
   sharedFrom?: ISharedPostInfo; // Bài gốc nếu đây là shared post
   isPinned?: boolean;
   pinnedAt?: string | null;
+  communityInfo?: ICommunityInfo; // Enrich ở service
 }
 
 export interface IComment extends TimestampFields {

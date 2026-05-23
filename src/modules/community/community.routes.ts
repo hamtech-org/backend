@@ -16,12 +16,19 @@ import {
   reportCommunityEntitySchema,
   resolveCommunityReportSchema,
   listCommunityReportsQuerySchema,
+  communityFeedQuerySchema,
 } from './community.validator.js';
 
 const router = Router();
 
 router.get('/', authenticate, validateQuery(listCommunitiesQuerySchema), communityController.list);
 router.post('/', authenticate, validate(createCommunitySchema), communityController.create);
+router.get(
+  '/feed',
+  authenticate,
+  validateQuery(communityFeedQuerySchema),
+  communityController.feed,
+);
 router.get('/:groupId', authenticate, communityController.get);
 router.put('/:groupId', authenticate, validate(updateCommunitySchema), communityController.update);
 router.delete('/:groupId', authenticate, communityController.archive);

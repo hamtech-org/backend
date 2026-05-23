@@ -181,6 +181,31 @@ export const newsfeedService = {
     });
   },
 
+  attachCommunityInfo: async (posts: IPost[]): Promise<IPost[]> => {
+    const groupIds = Array.from(
+      new Set(posts.map((p) => p.groupId || p.communityId).filter((id): id is string => !!id)),
+    );
+    if (groupIds.length === 0) return posts;
+
+    const communities = await communityRepository.batchGetCommunities(groupIds);
+    const communityMap = new Map(communities.map((c) => [c.groupId, c]));
+
+    return posts.map((p) => {
+      const gId = p.groupId || p.communityId;
+      if (!gId) return p;
+      const c = communityMap.get(gId);
+      if (!c) return p;
+      return {
+        ...p,
+        communityInfo: {
+          groupId: c.groupId,
+          name: c.name,
+          avatar: c.avatar ?? null,
+        },
+      };
+    });
+  },
+
   attachCurrentUserReaction: async (posts: IPost[], viewerUserId: string): Promise<IPost[]> => {
     if (posts.length === 0) return posts;
     const enriched = await Promise.all(
@@ -289,7 +314,8 @@ export const newsfeedService = {
       viewerUserId,
     );
     const enrichedSaved = await newsfeedService.attachSavedStatus(enrichedReactions, viewerUserId);
-    const enriched = await newsfeedService.attachSharedFromAuthorInfo(enrichedSaved);
+    const enrichedShared = await newsfeedService.attachSharedFromAuthorInfo(enrichedSaved);
+    const enriched = await newsfeedService.attachCommunityInfo(enrichedShared);
     const lastItem = enriched[enriched.length - 1];
     const nextCursor =
       hasMore && lastItem
@@ -417,7 +443,8 @@ export const newsfeedService = {
         viewerUserId,
       );
       const [withShared] = await newsfeedService.attachSharedFromAuthorInfo([withReaction]);
-      return withShared;
+      const [withCommunity] = await newsfeedService.attachCommunityInfo([withShared]);
+      return withCommunity;
     };
 
     const publicationStatus = post.publicationStatus ?? 'published';
@@ -1459,12 +1486,13 @@ export const newsfeedService = {
       userId,
     );
     const enrichedWithShared = await newsfeedService.attachSharedFromAuthorInfo(enrichedReactions);
+    const enriched = await newsfeedService.attachCommunityInfo(enrichedWithShared);
 
     const enrichedSaved = validItems.map((s, i) => ({
       userId: s.userId,
       postId: s.postId,
       savedAt: s.savedAt,
-      post: { ...enrichedWithShared[i], isSaved: true },
+      post: { ...enriched[i], isSaved: true },
     }));
 
     const hasMore = Boolean(lastEvaluatedKey);

@@ -75,6 +75,26 @@ const decodeCursor = (cursor?: string): Record<string, unknown> | undefined => {
   }
 };
 
+interface IJoinedFeedCursorPayload {
+  createdAtMs: number;
+  postId: string;
+}
+
+const encodeJoinedFeedCursor = (payload: IJoinedFeedCursorPayload): string =>
+  Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+
+const decodeJoinedFeedCursor = (cursor?: string): IJoinedFeedCursorPayload | null => {
+  if (!cursor) return null;
+  try {
+    const raw = Buffer.from(cursor, 'base64url').toString('utf8');
+    const parsed = JSON.parse(raw) as Partial<IJoinedFeedCursorPayload>;
+    if (!parsed.createdAtMs || !parsed.postId) return null;
+    return { createdAtMs: parsed.createdAtMs, postId: parsed.postId };
+  } catch {
+    return null;
+  }
+};
+
 const normalizeSlug = (input: string): string => {
   const normalized = input
     .normalize('NFD')
@@ -230,6 +250,29 @@ const enrichPosts = async (validPosts: IPost[], actorId: string): Promise<IPost[
                 avatar: u.avatar ?? null,
               }
             : { userId: p.sharedFrom.authorId, displayName: p.sharedFrom.authorId, avatar: null },
+        },
+      };
+    });
+  }
+
+  // 5. Enrich Community Info
+  const groupIds = Array.from(
+    new Set(enriched.map((p) => p.groupId || p.communityId).filter((id): id is string => !!id)),
+  );
+  if (groupIds.length > 0) {
+    const communities = await communityRepository.batchGetCommunities(groupIds);
+    const communityMap = new Map(communities.map((c) => [c.groupId, c]));
+    enriched = enriched.map((p) => {
+      const gId = p.groupId || p.communityId;
+      if (!gId) return p;
+      const c = communityMap.get(gId);
+      if (!c) return p;
+      return {
+        ...p,
+        communityInfo: {
+          groupId: c.groupId,
+          name: c.name,
+          avatar: c.avatar ?? null,
         },
       };
     });
@@ -1030,6 +1073,84 @@ export const communityService = {
       items: [...pinnedPosts, ...enrichedPosts],
       nextCursor: page.lastEvaluatedKey ? encodeCursor(page.lastEvaluatedKey) : null,
       hasMore: Boolean(page.lastEvaluatedKey),
+    };
+  },
+
+  listJoinedCommunitiesPosts: async (
+    userId: string,
+    limit?: number,
+    cursor?: string,
+  ): Promise<ICommunityPostsPage> => {
+    // 1. Lấy danh sách các cộng đồng mà user đã gia nhập
+    const joined = await communityRepository.listJoinedByUser(userId, 100);
+    const joinedItems: ICommunityMember[] = joined.items || [];
+    if (joinedItems.length === 0) {
+      return { items: [], nextCursor: null, hasMore: false };
+    }
+    const groupIds = joinedItems.map((c: ICommunityMember) => c.groupId);
+
+    // 2. Query song song tối đa 20 bài đăng mới nhất từ mỗi groupId đã join
+    const pageSize = Math.max(1, Math.min(limit ?? 15, 50));
+    const perGroupLimit = 20;
+    const allContentIndices: ICommunityContentIndex[] = [];
+
+    await Promise.all(
+      groupIds.map(async (groupId: string) => {
+        try {
+          const res = await communityRepository.listContentIndex(groupId, 'post', perGroupLimit);
+          allContentIndices.push(...res.items);
+        } catch (err) {
+          logger.error(`Error listing content index for group ${groupId}:`, err);
+        }
+      }),
+    );
+
+    // 3. Hợp nhất và sắp xếp giảm dần theo createdAtMs
+    let sortedIndices = allContentIndices.sort((a, b) => b.createdAtMs - a.createdAtMs);
+
+    // 4. Lọc bài đăng cũ hơn cursor
+    const decodedCursor = decodeJoinedFeedCursor(cursor);
+    if (decodedCursor) {
+      sortedIndices = sortedIndices.filter((item) => {
+        if (item.createdAtMs < decodedCursor.createdAtMs) return true;
+        if (item.createdAtMs > decodedCursor.createdAtMs) return false;
+        return item.contentId.localeCompare(decodedCursor.postId) < 0;
+      });
+    }
+
+    // Lấy slice cho trang hiện tại (+1 để kiểm tra hasMore)
+    const pageIndices = sortedIndices.slice(0, pageSize + 1);
+    const hasMore = pageIndices.length > pageSize;
+    const currentIndices = hasMore ? pageIndices.slice(0, pageSize) : pageIndices;
+
+    // 5. Query chi tiết các posts
+    const rawPosts = await Promise.all(
+      currentIndices.map((item) => newsfeedRepository.getPostById(item.contentId)),
+    );
+    const validPosts = rawPosts.filter(
+      (item): item is IPost =>
+        !!item &&
+        (item.publicationStatus ?? 'published') === 'published' &&
+        (item.moderationStatus ?? 'approved') === 'approved',
+    );
+
+    // 6. Enrich bài viết
+    const enriched = await enrichPosts(validPosts, userId);
+
+    // 7. Tạo nextCursor
+    const lastIndex = currentIndices[currentIndices.length - 1];
+    const nextCursor =
+      hasMore && lastIndex
+        ? encodeJoinedFeedCursor({
+            createdAtMs: lastIndex.createdAtMs,
+            postId: lastIndex.contentId,
+          })
+        : null;
+
+    return {
+      items: enriched,
+      nextCursor,
+      hasMore,
     };
   },
 
