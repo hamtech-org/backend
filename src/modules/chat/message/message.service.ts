@@ -9,7 +9,7 @@ import type {
   ISendMessageDto,
 } from '../shared/chat.types.js';
 import type { MessageStatus } from '@/shared/types/chat.types.js';
-import { NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
+import { AppError, NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
 import { MAX_PINNED_MESSAGES_PER_CONVERSATION } from '../shared/chat.constants.js';
 import { getKafkaProducer } from '@/config/kafka.js';
 import { kafkaProducer } from '@/shared/kafka/producer.js';
@@ -506,6 +506,22 @@ export const messageService = {
     if (!conversation) throw new NotFoundError('Hội thoại');
     if (conversation.type === 'group') {
       await groupService.assertUserMaySendMessage(senderId, conversationId);
+    } else {
+      const members = await conversationRepository.getConversationMembers(conversationId);
+      const receiverId = members.find((member) => member.userId !== senderId)?.userId;
+      if (receiverId) {
+        const blockStatus = await userRepository.getBlockStatusBetween(senderId, receiverId);
+        if (blockStatus === 'blocked_by_me') {
+          throw new AppError(
+            'Ban dang chan nguoi dung nay, vui long go chan de tiep tuc nhan tin.',
+            403,
+            'MESSAGE_BLOCKED_BY_ME',
+          );
+        }
+        if (blockStatus === 'blocked_by_other') {
+          throw new AppError('Ban da bi chan boi nguoi dung nay.', 403, 'MESSAGE_BLOCKED_BY_OTHER');
+        }
+      }
     }
 
     const now = new Date().toISOString();
