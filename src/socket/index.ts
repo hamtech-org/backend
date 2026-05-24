@@ -8,6 +8,20 @@ import { userService } from '@/modules/user/user.service.js';
 
 let io: Server;
 
+const notifyFriendsAboutStatus = async (
+  userId: string,
+  status: 'online' | 'offline' | 'away',
+): Promise<void> => {
+  const friends = await userService.getFriends(userId, 1000);
+  friends.friends.forEach((friend) => {
+    io.to(`user:${friend.userId}`).emit('friend:statusChanged', {
+      userId,
+      status,
+      timestamp: new Date(),
+    });
+  });
+};
+
 export const initializeSocket = (httpServer: HttpServer): void => {
   io = new Server(httpServer, {
     cors: {
@@ -23,13 +37,16 @@ export const initializeSocket = (httpServer: HttpServer): void => {
     logger.info(`Socket kết nối: ${socket.id} (user: ${socket.data.userId})`);
     const userId = socket.data.userId as string;
 
-    // Set user status to online
-    userService.updateUserStatus(userId, 'online').catch((error) => {
-      logger.error('Failed to update user status to online:', error);
-    });
-
     // Join user-specific room for targeted notifications
     socket.join(`user:${userId}`);
+
+    // Set user status to online and notify friends
+    userService
+      .updateUserStatus(userId, 'online')
+      .then(() => notifyFriendsAboutStatus(userId, 'online'))
+      .catch((error) => {
+        logger.error('Failed to update user status to online:', error);
+      });
 
     const sessionId = socket.data.sessionId as string | undefined;
     if (sessionId) {
@@ -44,21 +61,11 @@ export const initializeSocket = (httpServer: HttpServer): void => {
 
       // Set user status to offline
       try {
-        await userService.updateUserStatus(userId, 'offline');
+        const remainingSockets = await io.in(`user:${userId}`).fetchSockets();
+        if (remainingSockets.length > 0) return;
 
-        // Notify friends about status change
-        try {
-          const friends = await userService.getFriends(userId, 1000);
-          friends.friends.forEach((friend) => {
-            io.to(`user:${friend.userId}`).emit('friend:statusChanged', {
-              userId,
-              status: 'offline',
-              timestamp: new Date(),
-            });
-          });
-        } catch (error) {
-          logger.error('Failed to notify friends about disconnect:', error);
-        }
+        await userService.updateUserStatus(userId, 'offline');
+        await notifyFriendsAboutStatus(userId, 'offline');
       } catch (error) {
         logger.error('Failed to update user status to offline:', error);
       }

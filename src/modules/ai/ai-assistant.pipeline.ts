@@ -30,27 +30,166 @@ export type AiAssistantStage =
 
 type StageReporter = (stage: AiAssistantStage, detail?: string) => void;
 
+export class AiAssistantCancelledError extends Error {
+  constructor() {
+    super('AI request was cancelled');
+    this.name = 'AiAssistantCancelledError';
+  }
+}
+
+export type AiAssistantPipelineOptions = {
+  onStage?: StageReporter;
+  signal?: AbortSignal;
+};
+
 type LlmJsonShape = {
   reply?: string;
   toolCalls?: AiToolCall[];
+  messageResultIds?: string[];
+  messageResultKeys?: string[];
 };
+
+const MAX_HISTORY_MESSAGE_CHARS = 1200;
+const MAX_HISTORY_TRANSCRIPT_CHARS = 16000;
+const MAX_RAG_CHUNK_CHARS = 900;
+const SENSITIVE_PLACEHOLDER = '[Nội dung nhạy cảm đã được chặn]';
+
+function normalizePipelineOptions(
+  optionsOrReporter?: StageReporter | AiAssistantPipelineOptions,
+): AiAssistantPipelineOptions {
+  return typeof optionsOrReporter === 'function'
+    ? { onStage: optionsOrReporter }
+    : (optionsOrReporter ?? {});
+}
+
+function isAbortLike(error: unknown): boolean {
+  if (error instanceof AiAssistantCancelledError) return true;
+  if (error instanceof Error && error.name === 'AbortError') return true;
+  return false;
+}
+
+export function isAiAssistantCancellation(error: unknown): boolean {
+  return isAbortLike(error);
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new AiAssistantCancelledError();
+  }
+}
+
+function truncateText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+}
+
+function decodeJsonStringLoose(value: string): string {
+  try {
+    return JSON.parse(`"${value}"`) as string;
+  } catch {
+    return value
+      .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex: string) =>
+        String.fromCharCode(Number.parseInt(hex, 16)),
+      )
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, '\n')
+      .replace(/\\r/g, '\r')
+      .replace(/\\t/g, '\t')
+      .replace(/\\\\/g, '\\');
+  }
+}
+
+function extractReplyLoose(text: string): string {
+  const match = text.match(/"reply"\s*:\s*"((?:\\.|[^"\\])*)"/s);
+  return match?.[1] ? decodeJsonStringLoose(match[1]).trim() : '';
+}
+
+function unwrapNestedJsonReply(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('{') || !trimmed.includes('"reply"')) return value;
+  const parsed = parseJsonLoose(trimmed);
+  return typeof parsed?.reply === 'string' && parsed.reply.trim() ? parsed.reply.trim() : value;
+}
+
+function sanitizeInternalIdsForUser(text: string): string {
+  return text
+    .replace(
+      /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g,
+      'thành viên',
+    )
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function normalizeMessageResultSelector(value: string): string {
+  const normalized = value
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]/g, '');
+  if (/^\d+$/.test(normalized)) return `R${normalized}`;
+  return normalized;
+}
+
+function filterMessageResultActions(
+  actions: import('./ai.types.js').AiAssistantClientAction[],
+  selectedKeysOrIds: string[],
+): import('./ai.types.js').AiAssistantClientAction[] {
+  const selected = new Set(
+    selectedKeysOrIds.map((id) => normalizeMessageResultSelector(id)).filter(Boolean),
+  );
+  return actions
+    .map((action) => {
+      if (action.type !== 'show_message_results') return action;
+      const fallbackMessages = action.payload.messages.slice(0, 5);
+      const selectedMessages =
+        selected.size > 0
+          ? action.payload.messages.filter((message) => {
+              const resultKey = message.resultKey
+                ? normalizeMessageResultSelector(message.resultKey)
+                : '';
+              return (
+                (resultKey && selected.has(resultKey)) ||
+                selected.has(normalizeMessageResultSelector(message.messageId))
+              );
+            })
+          : fallbackMessages;
+      const messages = (selectedMessages.length > 0 ? selectedMessages : fallbackMessages).slice(
+        0,
+        5,
+      );
+      return {
+        ...action,
+        payload: {
+          ...action.payload,
+          messages,
+        },
+      };
+    })
+    .filter((action) => action.type !== 'show_message_results' || action.payload.messages.length);
+}
 
 function parseJsonLoose(text: string): LlmJsonShape | null {
   const t = text.trim();
   if (!t) return null;
   try {
-    return JSON.parse(t) as LlmJsonShape;
+    const parsed = JSON.parse(t) as LlmJsonShape;
+    if (typeof parsed.reply === 'string') parsed.reply = unwrapNestedJsonReply(parsed.reply);
+    return parsed;
   } catch {
     const start = t.indexOf('{');
     const end = t.lastIndexOf('}');
     if (start >= 0 && end > start) {
       try {
-        return JSON.parse(t.slice(start, end + 1)) as LlmJsonShape;
+        const parsed = JSON.parse(t.slice(start, end + 1)) as LlmJsonShape;
+        if (typeof parsed.reply === 'string') parsed.reply = unwrapNestedJsonReply(parsed.reply);
+        return parsed;
       } catch {
-        return null;
+        const reply = extractReplyLoose(t.slice(start, end + 1));
+        return reply ? { reply, toolCalls: [] } : null;
       }
     }
-    return null;
+    const reply = extractReplyLoose(t);
+    return reply ? { reply, toolCalls: [] } : null;
   }
 }
 
@@ -59,13 +198,80 @@ function buildHistoryTranscript(
   maxLines: number,
 ): string {
   const slice = rows.slice(-maxLines);
-  return slice.map((r) => `${r.role === 'assistant' ? 'AI' : 'User'}: ${r.content}`).join('\n');
+  const transcript = slice
+    .map(
+      (r) =>
+        `${r.role === 'assistant' ? 'AI' : 'User'}: ${truncateText(
+          r.content,
+          MAX_HISTORY_MESSAGE_CHARS,
+        )}`,
+    )
+    .join('\n');
+  return truncateText(transcript, MAX_HISTORY_TRANSCRIPT_CHARS);
+}
+
+function looksLikeMessageSearchRequest(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  return (
+    /\b(search|find)\b.*\b(message|messages|chat|conversation)\b/.test(normalized) ||
+    /(tìm|tim|kiếm|kiem|lục|luc|tra).{0,30}(tin nhắn|tin nhan|message|chat|hội thoại|hoi thoai)/.test(
+      normalized,
+    ) ||
+    /(tin nhắn|tin nhan).{0,30}(về|ve|liên quan|lien quan|có nội dung|co noi dung)/.test(normalized)
+  );
+}
+
+function detectSensitiveUserInput(text: string): string[] {
+  const normalized = text.normalize('NFKC');
+  const lower = normalized.toLowerCase();
+  const findings = new Set<string>();
+
+  const checks: Array<[string, RegExp]> = [
+    [
+      'OTP/mã xác thực',
+      /\b(?:otp|mã\s*(?:otp|xác\s*thực|xac\s*thuc|2fa|mfa|code)|verification\s*code|auth(?:entication)?\s*code)\b.{0,40}\b\d{4,8}\b/i,
+    ],
+    ['mật khẩu', /\b(?:password|pass|passwd|pwd|mật\s*khẩu|mat\s*khau)\b\s*[:=：-]?\s*\S{4,}/i],
+    ['private key', /-----BEGIN (?:RSA |EC |OPENSSH |DSA |)?PRIVATE KEY-----/i],
+    [
+      'API key/token/secret',
+      /\b(?:api[_-]?key|secret[_-]?key|access[_-]?token|refresh[_-]?token|bearer\s+token|client[_-]?secret|github[_-]?token|slack[_-]?token)\b\s*[:=：-]?\s*['"]?[A-Za-z0-9._~+/=-]{12,}/i,
+    ],
+    ['AWS access key', /\bAKIA[0-9A-Z]{16}\b/],
+    ['JWT/token', /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/],
+    ['SSH key', /\bssh-(?:rsa|ed25519)\s+[A-Za-z0-9+/=]{80,}/i],
+  ];
+
+  for (const [label, pattern] of checks) {
+    if (pattern.test(normalized)) findings.add(label);
+  }
+
+  if (
+    /\b\d{4,8}\b/.test(normalized) &&
+    /\b(?:otp|2fa|mfa|xác\s*thực|xac\s*thuc|verify|verification|đăng\s*nhập|dang\s*nhap)\b/i.test(
+      lower,
+    )
+  ) {
+    findings.add('OTP/mã xác thực');
+  }
+
+  return [...findings];
+}
+
+function buildSensitiveInputRefusal(findings: string[]): string {
+  const labels = findings.length ? findings.join(', ') : 'thông tin nhạy cảm';
+  return [
+    `Mình không thể xử lý nội dung có ${labels}.`,
+    'Bạn hãy xóa hoặc che các thông tin nhạy cảm như OTP, mật khẩu, private key, API key/token rồi gửi lại.',
+  ].join('\n');
 }
 
 export async function runAiAssistantPipeline(
   req: IAiAssistantRequest,
-  onStage?: StageReporter,
+  optionsOrReporter?: StageReporter | AiAssistantPipelineOptions,
 ): Promise<IAiAssistantResponse> {
+  const { onStage, signal } = normalizePipelineOptions(optionsOrReporter);
+  throwIfAborted(signal);
   onStage?.('init');
   const userId = req.userId?.trim();
   if (!userId) throw new Error('Thiếu userId');
@@ -75,12 +281,38 @@ export async function runAiAssistantPipeline(
     throw new Error('Tin nhắn trống');
   }
   const tokenDecision = parseConfirmToken(message);
+  throwIfAborted(signal);
 
   let threadId = req.threadId?.trim();
   if (!threadId) {
     threadId = await aiAssistantRepository.getOrCreateDefaultThreadId(userId);
   } else {
     await aiAssistantRepository.assertThreadOwnedByUser(userId, threadId);
+  }
+  throwIfAborted(signal);
+
+  const sensitiveFindings = tokenDecision ? [] : detectSensitiveUserInput(message);
+  if (sensitiveFindings.length > 0) {
+    onStage?.('persist_user_message');
+    const userRow = await aiAssistantRepository.appendMessage(
+      threadId,
+      'user',
+      SENSITIVE_PLACEHOLDER,
+    );
+    await aiAssistantRepository.touchDefaultThread(userId);
+    const reply = buildSensitiveInputRefusal(sensitiveFindings);
+    onStage?.('persist_assistant_message');
+    const assistantRow = await aiAssistantRepository.appendMessage(threadId, 'assistant', reply);
+    await aiAssistantRepository.touchDefaultThread(userId);
+    onStage?.('completed');
+    return {
+      reply,
+      model: aiConfig.modelId,
+      tokensUsed: 0,
+      threadId,
+      userMessageId: userRow.messageId,
+      assistantMessageId: assistantRow.messageId,
+    };
   }
 
   onStage?.('persist_user_message');
@@ -92,6 +324,7 @@ export async function runAiAssistantPipeline(
         : message;
   const userRow = await aiAssistantRepository.appendMessage(threadId, 'user', userVisibleMessage);
   await aiAssistantRepository.touchDefaultThread(userId);
+  throwIfAborted(signal);
 
   const persistAssistantAndBuildResponse = async (
     reply: string,
@@ -100,10 +333,16 @@ export async function runAiAssistantPipeline(
     actions?: import('./ai.types.js').AiAssistantClientAction[],
   ): Promise<IAiAssistantResponse> => {
     onStage?.('persist_assistant_message');
-    const assistantRow = await aiAssistantRepository.appendMessage(threadId, 'assistant', reply);
+    throwIfAborted(signal);
+    const assistantRow = await aiAssistantRepository.appendMessage(
+      threadId,
+      'assistant',
+      reply,
+      actions,
+    );
     try {
       onStage?.('embedding_reply');
-      const vecA = await embedText(reply);
+      const vecA = await embedText(reply, signal);
       if (vecA.length > 0) {
         await upsertAiMessageVector(assistantRow.messageId, vecA, {
           userId,
@@ -114,7 +353,8 @@ export async function runAiAssistantPipeline(
           createdAt: assistantRow.createdAt,
         });
       }
-    } catch {
+    } catch (e) {
+      if (isAbortLike(e)) throw e;
       /* optional */
     }
     await aiAssistantRepository.touchDefaultThread(userId);
@@ -131,6 +371,7 @@ export async function runAiAssistantPipeline(
   };
 
   const pending = await aiAssistantRepository.getPendingTool(threadId);
+  throwIfAborted(signal);
   if (pending) {
     onStage?.('await_user_confirmation');
     if (tokenDecision && tokenDecision.pendingId !== pending.pendingId) {
@@ -150,10 +391,21 @@ export async function runAiAssistantPipeline(
 
     if (approved) {
       onStage?.('tool_execution');
-      const exec = await executeAiToolCalls(userId, [
-        { name: pending.toolName, args: pending.toolArgs ?? {} },
-      ]);
-      await aiAssistantRepository.clearPendingTool(threadId);
+      throwIfAborted(signal);
+      const claimed = await aiAssistantRepository.claimPendingTool(threadId, pending.pendingId);
+      if (!claimed) {
+        return persistAssistantAndBuildResponse(
+          'Thao tác này đã được xử lý hoặc đã hết hiệu lực.',
+          aiConfig.modelId,
+          0,
+        );
+      }
+      const exec = await executeAiToolCalls(
+        userId,
+        [{ name: pending.toolName, args: pending.toolArgs ?? {} }],
+        { signal },
+      );
+      throwIfAborted(signal);
       const followPrompt = [
         `Kết quả công cụ:\n${exec.textForModel}`,
         'Tóm tắt gọn kết quả cho user bằng tiếng Việt. Nếu không có kết quả thì nói rõ.',
@@ -163,6 +415,7 @@ export async function runAiAssistantPipeline(
         systemPrompt: 'Bạn là trợ lý HAMTECH. Trả lời ngắn gọn, rõ ràng.',
         temperature: 0.2,
         maxTokens: 500,
+        signal,
       });
       return persistAssistantAndBuildResponse(
         summarized.text.trim() || 'Tôi đã thực hiện thao tác theo yêu cầu.',
@@ -190,9 +443,11 @@ export async function runAiAssistantPipeline(
 
   let ragBlock = '';
   try {
+    throwIfAborted(signal);
     onStage?.('embedding_query');
-    const vec = await embedText(message);
+    const vec = await embedText(message, signal);
     if (vec.length > 0) {
+      throwIfAborted(signal);
       onStage?.('rag_search');
       const hits = await searchSimilarAiChunks({
         userId,
@@ -202,7 +457,9 @@ export async function runAiAssistantPipeline(
       });
       const useful = hits.filter((h) => h.text.length > 0);
       if (useful.length) {
-        ragBlock = `\nĐoạn liên quan (RAG):\n${useful.map((h, i) => `${i + 1}. (${h.role}) ${h.text}`).join('\n')}\n`;
+        ragBlock = `\nĐoạn liên quan (RAG):\n${useful
+          .map((h, i) => `${i + 1}. (${h.role}) ${truncateText(h.text, MAX_RAG_CHUNK_CHARS)}`)
+          .join('\n')}\n`;
       }
       await upsertAiMessageVector(userRow.messageId, vec, {
         userId,
@@ -213,15 +470,18 @@ export async function runAiAssistantPipeline(
         createdAt: userRow.createdAt,
       });
     }
-  } catch {
+  } catch (e) {
+    if (isAbortLike(e)) throw e;
     /* RAG / embedding optional */
   }
 
   onStage?.('load_history');
+  throwIfAborted(signal);
   const history = await aiAssistantRepository.listRecentMessages(threadId, 36);
   const transcript = buildHistoryTranscript(history, 32);
 
   const locale = req.locale === 'en' ? 'en' : 'vi';
+  const forceMessageSearchTool = looksLikeMessageSearchRequest(message);
   const toolDoc =
     locale === 'vi'
       ? [
@@ -250,6 +510,9 @@ export async function runAiAssistantPipeline(
       ? [
           'Bạn là trợ lý HAMTECH trong app chat.',
           'Luôn trả lời trung thực; nếu thiếu dữ liệu hãy dùng tool hoặc hỏi ngắn.',
+          forceMessageSearchTool
+            ? 'Yêu cầu hiện tại là tìm tin nhắn: PHẢI gọi tool search_messages; không được trả lời chỉ dựa trên lịch sử/RAG.'
+            : '',
           'Bạn PHẢI trả về đúng MỘT JSON hợp lệ (không markdown), schema:',
           '{"reply": string, "toolCalls": Array<{ "name": string, "args": object }>}',
           'toolCalls có thể là [].',
@@ -257,6 +520,9 @@ export async function runAiAssistantPipeline(
         ].join('\n')
       : [
           'You are HAMTECH AI assistant in a chat app.',
+          forceMessageSearchTool
+            ? 'The current request is a message search: you MUST call search_messages; do not answer only from history/RAG.'
+            : '',
           'Return exactly ONE valid JSON object, schema:',
           '{"reply": string, "toolCalls": Array<{ "name": string, "args": object }>}',
           toolDoc,
@@ -275,11 +541,14 @@ export async function runAiAssistantPipeline(
   let modelUsed = aiConfig.modelId;
 
   onStage?.('model_reasoning');
+  throwIfAborted(signal);
   const first = await generateText(firstPrompt, {
     systemPrompt,
     temperature: 0.25,
     maxTokens: 900,
+    signal,
   });
+  throwIfAborted(signal);
   totalTokens += first.tokensUsed ?? 0;
   modelUsed = first.model;
 
@@ -342,7 +611,9 @@ export async function runAiAssistantPipeline(
     }
 
     onStage?.('tool_execution');
-    const exec = await executeAiToolCalls(userId, extraCalls);
+    throwIfAborted(signal);
+    const exec = await executeAiToolCalls(userId, extraCalls, { signal });
+    throwIfAborted(signal);
     allActions.push(...exec.clientActions);
 
     if (exec.textForModel.trim().length > 0) {
@@ -350,19 +621,35 @@ export async function runAiAssistantPipeline(
       const secondPrompt = [
         `Kết quả công cụ:\n${exec.textForModel}`,
         'Hãy tóm tắt ngắn gọn cho user (tiếng Việt nếu user dùng vi).',
-        'Trả về JSON: {"reply": string, "toolCalls": []}',
+        'Không nhắc UUID/id nội bộ; với người gửi hãy dùng tên hiển thị nếu có.',
+        'Nếu có kết quả search_messages, hãy chọn tối đa 5 resultKey thật sự liên quan để hiển thị trên card.',
+        'Trả về JSON: {"reply": string, "toolCalls": [], "messageResultKeys": string[]}',
       ].join('\n\n');
       const second = await generateText(secondPrompt, {
         systemPrompt:
           locale === 'vi'
-            ? 'Bạn là trợ lý HAMTECH. Chỉ trả JSON {"reply","toolCalls"}. toolCalls luôn [].'
-            : 'HAMTECH assistant. Output only JSON {"reply","toolCalls"}; toolCalls always [].',
+            ? 'Bạn là trợ lý HAMTECH. Chỉ trả JSON {"reply","toolCalls","messageResultKeys"}. toolCalls luôn []. Không nhắc UUID/id nội bộ cho user.'
+            : 'HAMTECH assistant. Output only JSON {"reply","toolCalls","messageResultKeys"}; toolCalls always []. Do not mention internal UUIDs to users.',
         temperature: 0.2,
         maxTokens: 700,
+        signal,
       });
+      throwIfAborted(signal);
       totalTokens += second.tokensUsed ?? 0;
       parsed = parseJsonLoose(second.text);
       reply = typeof parsed?.reply === 'string' ? parsed.reply.trim() : second.text.trim();
+      const selectedMessageKeys = Array.isArray(parsed?.messageResultKeys)
+        ? parsed.messageResultKeys.map((id) => String(id))
+        : Array.isArray(parsed?.messageResultIds)
+          ? parsed.messageResultIds.map((id) => String(id))
+          : [];
+      if (allActions.some((action) => action.type === 'show_message_results')) {
+        allActions.splice(
+          0,
+          allActions.length,
+          ...filterMessageResultActions(allActions, selectedMessageKeys),
+        );
+      }
     }
   }
 
@@ -373,5 +660,10 @@ export async function runAiAssistantPipeline(
         ? 'Đã chuẩn bị thao tác trên giao diện (xem các nút gợi ý nếu có).'
         : 'Không tạo được phản hồi.');
   }
-  return persistAssistantAndBuildResponse(reply, modelUsed, totalTokens, allActions);
+  return persistAssistantAndBuildResponse(
+    sanitizeInternalIdsForUser(reply),
+    modelUsed,
+    totalTokens,
+    allActions,
+  );
 }

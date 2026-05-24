@@ -5,6 +5,7 @@ export type AiGenerateTextOptions = Partial<
   Pick<BedrockAiConfig, 'modelId' | 'maxTokens' | 'temperature' | 'topP'>
 > & {
   systemPrompt?: string;
+  signal?: AbortSignal;
 };
 
 export type AiGenerateTextResult = {
@@ -20,6 +21,9 @@ export async function generateText(
   const input = prompt?.trim();
   if (!input) {
     return { text: '', model: options.modelId ?? aiConfig.modelId, tokensUsed: 0 };
+  }
+  if (options.signal?.aborted) {
+    throw new DOMException('AI request was cancelled', 'AbortError');
   }
 
   const modelId = options.modelId ?? aiConfig.modelId;
@@ -51,6 +55,7 @@ export async function generateText(
         topP,
       },
     }),
+    options.signal ? { abortSignal: options.signal } : undefined,
   );
 
   const text =

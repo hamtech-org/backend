@@ -36,6 +36,8 @@ router.get('/friends/:userId/status', authenticate, userController.getFriendRequ
 
 // Remove/unfriend
 router.delete('/friends/:friendId', authenticate, userController.removeFriend);
+router.post('/friends/:friendId/block', authenticate, userController.blockFriend);
+router.post('/friends/:friendId/unblock', authenticate, userController.unblockFriend);
 
 // Get friends list
 router.get('/friends', authenticate, userController.getFriends);
