@@ -334,7 +334,7 @@ export const searchService = {
       });
 
       let items: ISearchGroupResult[] = result.hits.hits
-        .map((hit) => {
+        .map((hit): ISearchGroupResult | null => {
           const source = hit._source as ISearchGroupResult;
           if (options.userId && !visibleGroupById.has(source.groupId)) return null;
           const visible = visibleGroupById.get(source.groupId);
