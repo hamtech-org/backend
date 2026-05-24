@@ -410,4 +410,29 @@ export const communityController = {
       next(error);
     }
   },
+
+  getAutoModSettings: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const settings = await communityService.getAutoModSettings(
+        req.user!.userId,
+        req.params.groupId,
+      );
+      sendSuccess(res, settings);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  updateAutoModSettings: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const community = await communityService.updateAutoModSettings(
+        req.user!.userId,
+        req.params.groupId,
+        req.body,
+      );
+      sendSuccess(res, community, 'Cập nhật bộ lọc từ khóa thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
 };

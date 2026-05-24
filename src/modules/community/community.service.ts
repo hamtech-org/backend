@@ -19,7 +19,9 @@ import {
 import { notificationService } from '@/modules/notification/notification.service.js';
 import { newsfeedRepository } from '@/modules/newsfeed/newsfeed.repository.js';
 import { userRepository } from '@/modules/user/user.repository.js';
+import { getRedis } from '@/config/redis.js';
 import type { IPost, ReactionType } from '@/modules/newsfeed/newsfeed.types.js';
+
 import { communityRepository, padMs } from './community.repository.js';
 import type {
   CommunityContentType,
@@ -38,6 +40,7 @@ import type {
   ITransferOwnerDto,
   IUpdateCommunityDto,
   IUpdateMemberRoleDto,
+  IUpdateAutoModDto,
   CommunityModerationAction,
   CommunityModerationTargetType,
   ICommunityModerationLog,
@@ -490,8 +493,16 @@ export const communityService = {
       const groupIds = page.items.map((item) => item.groupId);
       const communities = await communityRepository.batchGetCommunities(groupIds);
       const visible = communities.filter((item) => item.isActive && item.status === 'active');
+      const enrichedItems = await Promise.all(
+        visible.map((item) => attachViewerState(item, userId)),
+      );
+      for (const item of enrichedItems) {
+        if (item.viewerRole !== 'owner' && item.viewerRole !== 'admin') {
+          delete item.blacklistedKeywords;
+        }
+      }
       return {
-        items: await Promise.all(visible.map((item) => attachViewerState(item, userId))),
+        items: enrichedItems,
         nextCursor: page.lastEvaluatedKey ? encodeCursor(page.lastEvaluatedKey) : null,
         hasMore: Boolean(page.lastEvaluatedKey),
       };
@@ -500,8 +511,16 @@ export const communityService = {
     const page = query.category
       ? await communityRepository.listByCategory(query.category, limit, cursor)
       : await communityRepository.listAll(limit, cursor);
+    const enrichedItems = await Promise.all(
+      page.items.map((item) => attachViewerState(item, userId)),
+    );
+    for (const item of enrichedItems) {
+      if (item.viewerRole !== 'owner' && item.viewerRole !== 'admin') {
+        delete item.blacklistedKeywords;
+      }
+    }
     return {
-      items: await Promise.all(page.items.map((item) => attachViewerState(item, userId))),
+      items: enrichedItems,
       nextCursor: page.lastEvaluatedKey ? encodeCursor(page.lastEvaluatedKey) : null,
       hasMore: Boolean(page.lastEvaluatedKey),
     };
@@ -511,7 +530,11 @@ export const communityService = {
     const community = await requireActiveCommunity(groupId);
     const canView = await communityService.canViewCommunity(userId, community);
     if (!canView) throw new ForbiddenError('Không có quyền xem cộng đồng riêng tư');
-    return attachViewerState(community, userId);
+    const enriched = await attachViewerState(community, userId);
+    if (enriched.viewerRole !== 'owner' && enriched.viewerRole !== 'admin') {
+      delete enriched.blacklistedKeywords;
+    }
+    return enriched;
   },
 
   updateCommunity: async (
@@ -2328,5 +2351,80 @@ export const communityService = {
     }
 
     return attachViewerState(community, userId);
+  },
+
+  getAutoModSettings: async (actorId: string, groupId: string): Promise<IUpdateAutoModDto> => {
+    await communityService.assertCommunityRole(actorId, groupId, ['owner', 'admin']);
+    const community = await requireActiveCommunity(groupId);
+    return {
+      autoModerateEnabled: community.autoModerateEnabled ?? false,
+      autoModerateAction: community.autoModerateAction ?? 'censor',
+      blacklistedKeywords: community.blacklistedKeywords ?? [],
+    };
+  },
+
+  updateAutoModSettings: async (
+    actorId: string,
+    groupId: string,
+    data: IUpdateAutoModDto,
+  ): Promise<ICommunity> => {
+    await communityService.assertCommunityRole(actorId, groupId, ['owner', 'admin']);
+    const existing = await requireActiveCommunity(groupId);
+
+    // Normalize, deduplicate keywords
+    const keywords = [
+      ...new Set(data.blacklistedKeywords.map((k) => k.trim().normalize('NFC')).filter(Boolean)),
+    ];
+
+    const updates: Partial<ICommunity> = {
+      autoModerateEnabled: data.autoModerateEnabled,
+      autoModerateAction: data.autoModerateAction,
+      blacklistedKeywords: keywords,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const updated = await communityRepository.updateCommunity(groupId, updates);
+
+    // Invalidate Redis Cache
+    try {
+      const redis = getRedis();
+      await redis.del(`group:automod:${groupId}`);
+    } catch (err) {
+      logger.error(`Failed to invalidate automod redis cache for group ${groupId}:`, err);
+    }
+
+    // Ghi Moderation Log
+    await communityService.writeModerationLog(
+      actorId,
+      groupId,
+      'update_settings',
+      groupId,
+      'community',
+      existing.name,
+      'Cập nhật bộ lọc từ khóa cấm',
+      {
+        changedFields: {
+          autoModerateEnabled: {
+            old: existing.autoModerateEnabled ?? false,
+            new: data.autoModerateEnabled,
+          },
+          autoModerateAction: {
+            old: existing.autoModerateAction ?? 'censor',
+            new: data.autoModerateAction,
+          },
+          blacklistedKeywords: { old: existing.blacklistedKeywords ?? [], new: keywords },
+        },
+      },
+    );
+
+    // Emit search index event
+    await emitCommunityIndexEvent({
+      action: 'update',
+      indexName: 'groups',
+      documentId: groupId,
+      document: toSearchDocument(updated),
+    });
+
+    return attachViewerState(updated, actorId);
   },
 };

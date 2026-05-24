@@ -100,3 +100,18 @@ export const communityFeedQuerySchema = z.object({
 export const inviteFriendsSchema = z.object({
   userIds: z.array(z.string().uuid()).min(1).max(100),
 });
+
+export const updateAutoModSchema = z.object({
+  autoModerateEnabled: z.boolean(),
+  autoModerateAction: z.enum(['censor', 'block']),
+  blacklistedKeywords: z
+    .array(
+      z
+        .string()
+        .trim()
+        .min(1)
+        .max(50)
+        .refine((v) => !/[\r\n\t]/.test(v), 'Từ khóa chứa ký tự không hợp lệ'),
+    )
+    .max(100),
+});

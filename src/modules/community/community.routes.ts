@@ -19,6 +19,7 @@ import {
   listCommunityReportsQuerySchema,
   communityFeedQuerySchema,
   inviteFriendsSchema,
+  updateAutoModSchema,
 } from './community.validator.js';
 
 const router = Router();
@@ -121,5 +122,14 @@ router.post('/:groupId/invite-link', authenticate, communityController.getInvite
 router.delete('/:groupId/invite-link', authenticate, communityController.disableInviteLink);
 router.get('/join/:inviteCode', authenticate, communityController.getCommunityByInviteCode);
 router.post('/join/:inviteCode/accept', authenticate, communityController.acceptInviteLink);
+
+// Auto-Mod Settings Routes
+router.get('/:groupId/automod', authenticate, communityController.getAutoModSettings);
+router.put(
+  '/:groupId/automod',
+  authenticate,
+  validate(updateAutoModSchema),
+  communityController.updateAutoModSettings,
+);
 
 export default router;

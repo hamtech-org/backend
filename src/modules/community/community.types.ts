@@ -61,6 +61,9 @@ export interface ICommunity {
   inviteCode?: string | null;
   inviteCodeEnabled?: boolean;
   inviteCodeCreatedAt?: string;
+  autoModerateEnabled?: boolean;
+  autoModerateAction?: 'censor' | 'block';
+  blacklistedKeywords?: string[];
 }
 
 export interface ICommunityMember {
@@ -292,4 +295,25 @@ export interface ICommunityInvitationsPage {
   items: ICommunityInvitation[];
   nextCursor: string | null;
   hasMore: boolean;
+}
+
+export interface IUpdateAutoModDto {
+  autoModerateEnabled: boolean;
+  autoModerateAction: 'censor' | 'block';
+  blacklistedKeywords: string[];
+}
+
+export interface ModerateMessageInput {
+  groupId: string;
+  conversationId: string;
+  senderId: string;
+  content: string;
+  messageType: 'text' | 'image' | 'video' | 'file' | 'emoji' | 'sticker' | string;
+}
+
+export interface ModerateMessageResult {
+  allowed: boolean;
+  content: string;
+  action?: 'censor' | 'block';
+  matchedKeywords?: string[];
 }
