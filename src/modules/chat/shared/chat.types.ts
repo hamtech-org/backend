@@ -143,6 +143,10 @@ export interface IMessage extends TimestampFields {
    * Chỉ trên tin của chính viewer: ai đã đọc (so `MEMBER.lastReadAt` với `createdAt` của tin).
    */
   readBy?: { userId: string; displayName?: string | null }[];
+  moderation?: {
+    autoModerated: boolean;
+    action: 'censor' | 'block';
+  };
 }
 
 /** Cursor-based paginated response for message loading (oldest → newest). */
