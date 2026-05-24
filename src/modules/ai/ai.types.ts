@@ -76,10 +76,14 @@ export interface IAiGroupSummaryRequest {
 }
 
 export interface IAiGroupSummaryResponse {
-  /** Tóm tắt ngắn 3-6 bullet */
+  /** Tổng hợp ngắn 3-6 bullet cho các tin nhắn gần đây */
   summary: string;
   /** Các điểm cần làm / quyết định / câu hỏi còn bỏ ngỏ */
   highlights: string[];
+  /** Tóm tắt riêng cho recap session unread gần nhất của user */
+  unreadSummary: string;
+  /** Số tin đã được chụp trong recap session unread gần nhất */
+  unreadMessageCount: number;
   model: string;
   tokensUsed: number;
 }
@@ -104,6 +108,37 @@ export type AiAssistantClientAction =
           bio?: string | null;
           isFriend?: boolean;
           friendshipStatus?: string;
+        }>;
+      };
+    }
+  | {
+      type: 'show_message_results';
+      payload: {
+        source: 'search_messages';
+        query: string;
+        messages: Array<{
+          resultKey?: string;
+          messageId: string;
+          conversationId: string;
+          conversationName?: string | null;
+          senderId: string;
+          senderDisplayName?: string | null;
+          content: string;
+          createdAt: string;
+        }>;
+      };
+    }
+  | {
+      type: 'show_group_results';
+      payload: {
+        source: 'search_groups';
+        query: string;
+        groups: Array<{
+          groupId: string;
+          name: string;
+          description: string | null;
+          memberCount: number;
+          type: string;
         }>;
       };
     }

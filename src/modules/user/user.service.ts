@@ -16,6 +16,26 @@ import { putObject, deleteObjectKey, getSignedGetUrl } from '@/shared/services/s
 import { v4 as uuidv4 } from 'uuid';
 import { buildPublicCdnUrl } from '@/shared/services/cloudfrontSigner.service.js';
 import { notificationService } from '@/modules/notification/notification.service.js';
+import { conversationService } from '@/modules/chat/conversation/conversation.service.js';
+
+async function ensureDirectConversationForFriends(
+  userId: string,
+  friendId: string,
+): Promise<string | null> {
+  try {
+    const conversation = await conversationService.createConversation(userId, {
+      type: 'direct',
+      memberIds: [friendId],
+    });
+    return conversation.conversationId;
+  } catch (error) {
+    logger.error(
+      `Failed to create direct conversation for friends ${userId}<->${friendId}:`,
+      error,
+    );
+    return null;
+  }
+}
 
 /**
  * Emit search index event to Kafka for Elasticsearch synchronization
@@ -172,10 +192,15 @@ export const userService = {
       throw new ConflictError('Bạn đã gửi lời mời cho người này');
     }
 
+    if (status === 'blocked') {
+      throw new ConflictError('Khong the gui loi moi ket ban vi mot trong hai ben da chan nhau');
+    }
+
     // 'pending_received' or 'none' - allow sending
     if (status === 'pending_received') {
       // Auto-accept if they sent you a request
       await userRepository.acceptFriendRequest(senderId, receiverId);
+      const conversationId = await ensureDirectConversationForFriends(senderId, receiverId);
       logger.info(`Auto-accepted friend request: ${senderId} <-> ${receiverId}`);
 
       // Emit socket events for auto-accept
@@ -187,10 +212,12 @@ export const userService = {
         });
         io.to(`user:${senderId}`).emit('friend:added', {
           friendId: receiverId,
+          conversationId,
           timestamp: new Date(),
         });
         io.to(`user:${receiverId}`).emit('friend:added', {
           friendId: senderId,
+          conversationId,
           timestamp: new Date(),
         });
       } catch (error) {
@@ -253,6 +280,7 @@ export const userService = {
     }
 
     await userRepository.acceptFriendRequest(userId, senderId);
+    const conversationId = await ensureDirectConversationForFriends(userId, senderId);
     logger.info(`Friend request accepted: ${senderId} <-> ${userId}`);
 
     // Emit socket events
@@ -266,10 +294,12 @@ export const userService = {
       // Notify both users about new friendship
       io.to(`user:${senderId}`).emit('friend:added', {
         friendId: userId,
+        conversationId,
         timestamp: new Date(),
       });
       io.to(`user:${userId}`).emit('friend:added', {
         friendId: senderId,
+        conversationId,
         timestamp: new Date(),
       });
 
@@ -343,7 +373,7 @@ export const userService = {
   getFriendRequestStatus: async (
     userId: string,
     otherUserId: string,
-  ): Promise<'friend' | 'pending_sent' | 'pending_received' | 'none'> => {
+  ): Promise<'friend' | 'pending_sent' | 'pending_received' | 'blocked' | 'none'> => {
     return userRepository.getFriendRequestStatus(userId, otherUserId);
   },
 
@@ -408,6 +438,61 @@ export const userService = {
     }
 
     return 'Hủy kết bạn thành công';
+  },
+
+  blockFriend: async (userId: string, friendId: string): Promise<string> => {
+    if (userId === friendId) {
+      throw new ValidationError('Khong the chan chinh ban');
+    }
+
+    const target = await userRepository.findById(friendId);
+    if (!target) {
+      throw new NotFoundError('Nguoi dung');
+    }
+
+    await userRepository.blockFriend(userId, friendId);
+    logger.info(`User ${userId} blocked user ${friendId}`);
+
+    try {
+      const io = getIO();
+      io.to(`user:${userId}`).emit('friend:blocked', {
+        friendId,
+        timestamp: new Date(),
+      });
+      io.to(`user:${friendId}`).emit('friend:blockedBy', {
+        userId,
+        timestamp: new Date(),
+      });
+    } catch (error) {
+      logger.error('Failed to emit socket events for block friend:', error);
+    }
+
+    return 'Da chan nguoi dung';
+  },
+
+  unblockFriend: async (userId: string, friendId: string): Promise<string> => {
+    if (userId === friendId) {
+      throw new ValidationError('Khong the bo chan chinh ban');
+    }
+
+    await userRepository.unblockFriend(userId, friendId);
+    logger.info(`User ${userId} unblocked user ${friendId}`);
+
+    try {
+      const io = getIO();
+      io.to(`user:${userId}`).emit('friend:unblocked', {
+        friendId,
+        timestamp: new Date(),
+      });
+      io.to(`user:${friendId}`).emit('friend:unblockedBy', {
+        userId,
+        timestamp: new Date(),
+      });
+    } catch (error) {
+      logger.error('Failed to emit socket events for unblock friend:', error);
+    }
+
+    return 'Da bo chan nguoi dung';
   },
 
   getFriends: async (
