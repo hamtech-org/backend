@@ -1,4 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
+import sharp from 'sharp';
+import { env } from '@/config/env.js';
 import { conversationRepository } from './conversation.repository.js';
 import { messageUserHideRepository } from '../message/message-user-hide.repository.js';
 import type {
@@ -102,7 +104,13 @@ export const conversationService = {
       (conversation as IConversation & { otherUserId?: string }).otherUserId = otherMember.userId;
     });
 
-    return filterDisbandedGroupsFromList(conversations);
+    const filtered = filterDisbandedGroupsFromList(conversations);
+    for (const c of filtered) {
+      if (c.type === 'group' && (!c.avatar || !c.avatar.trim())) {
+        c.avatar = `/api/v1/chat/conversations/${c.conversationId}/avatar`;
+      }
+    }
+    return filtered;
   },
 
   /**
@@ -131,7 +139,12 @@ export const conversationService = {
       conversationId,
       type: data.type,
       ...(data.name != null && data.name !== '' ? { name: data.name } : {}),
-      ...(data.avatar != null && data.avatar.trim() !== '' ? { avatar: data.avatar.trim() } : {}),
+      avatar:
+        data.avatar != null && data.avatar.trim() !== ''
+          ? data.avatar.trim()
+          : data.type === 'group'
+            ? `/api/v1/chat/conversations/${conversationId}/avatar`
+            : undefined,
       creatorId,
       ...(data.type === 'group' ? { leaderId: creatorId } : {}),
       ...(initialGroupSettings ? { groupSettings: initialGroupSettings } : {}),
@@ -204,6 +217,10 @@ export const conversationService = {
     const members = await conversationRepository.getConversationMembers(conversationId);
     const me = members.find((m) => m.userId === userId);
     if (!me) throw new ForbiddenError('Bạn không phải thành viên của hội thoại này');
+
+    if (conversation.type === 'group' && (!conversation.avatar || !conversation.avatar.trim())) {
+      conversation.avatar = `/api/v1/chat/conversations/${conversationId}/avatar`;
+    }
 
     return {
       ...conversation,
@@ -313,4 +330,147 @@ export const conversationService = {
 
     await conversationRepository.updateMemberPreferences(conversationId, userId, updates);
   },
+
+  getConversationAvatar: async (conversationId: string): Promise<Buffer> => {
+    const conv = await conversationRepository.getConversationById(conversationId);
+    if (!conv) throw new NotFoundError('Hội thoại');
+
+    const members = await conversationRepository.getConversationMembers(conversationId);
+    if (members.length === 0) {
+      return sharp({
+        create: {
+          width: 200,
+          height: 200,
+          channels: 4,
+          background: { r: 220, g: 220, b: 220, alpha: 1 },
+        },
+      })
+        .png()
+        .toBuffer();
+    }
+
+    const memberIds = members.map((m) => m.userId);
+    const users = await userRepository.findByIds(memberIds);
+    const displayUsers = users.slice(0, 4);
+
+    const size = 200;
+    const baseBg = sharp({
+      create: {
+        width: size,
+        height: size,
+        channels: 4,
+        background: { r: 240, g: 240, b: 240, alpha: 1 },
+      },
+    });
+
+    const composites: any[] = [];
+    const N = displayUsers.length;
+    let getLayout: (index: number) => { size: number; x: number; y: number };
+
+    if (N === 1) {
+      getLayout = () => ({ size: 120, x: 40, y: 40 });
+    } else if (N === 2) {
+      getLayout = (i) => {
+        if (i === 0) return { size: 110, x: 10, y: 10 };
+        return { size: 110, x: 80, y: 80 };
+      };
+    } else if (N === 3) {
+      getLayout = (i) => {
+        if (i === 0) return { size: 95, x: 52, y: 10 };
+        if (i === 1) return { size: 95, x: 10, y: 95 };
+        return { size: 95, x: 95, y: 95 };
+      };
+    } else {
+      getLayout = (i) => {
+        if (i === 0) return { size: 85, x: 10, y: 10 };
+        if (i === 1) return { size: 85, x: 105, y: 10 };
+        if (i === 2) return { size: 85, x: 10, y: 105 };
+        return { size: 85, x: 105, y: 105 };
+      };
+    }
+
+    for (let i = 0; i < N; i++) {
+      const u = displayUsers[i];
+      const name = u.displayName || 'User';
+      const layout = getLayout(i);
+      let avatarBuf: Buffer;
+
+      if (u.avatar) {
+        try {
+          let avatarUrl = u.avatar.trim();
+          if (avatarUrl.startsWith('/')) {
+            avatarUrl = `${env.API_PUBLIC_ORIGIN}${avatarUrl}`;
+          }
+          const res = await fetch(avatarUrl);
+          if (res.ok) {
+            const arrayBuf = await res.arrayBuffer();
+            avatarBuf = Buffer.from(arrayBuf);
+          } else {
+            throw new Error('Fetch failed');
+          }
+        } catch {
+          avatarBuf = generateSvgAvatar(name, layout.size);
+        }
+      } else {
+        avatarBuf = generateSvgAvatar(name, layout.size);
+      }
+
+      const circleMask = Buffer.from(
+        `<svg width="${layout.size}" height="${layout.size}"><circle cx="${layout.size / 2}" cy="${layout.size / 2}" r="${layout.size / 2}" fill="white"/></svg>`,
+      );
+      const circularBuf = await sharp(avatarBuf)
+        .resize(layout.size, layout.size)
+        .composite([{ input: circleMask, blend: 'dest-in' }])
+        .png()
+        .toBuffer();
+
+      composites.push({
+        input: circularBuf,
+        top: layout.y,
+        left: layout.x,
+      });
+    }
+
+    return baseBg.composite(composites).png().toBuffer();
+  },
 };
+
+function getRandomColor(name: string): string {
+  const colors = [
+    '#f44336',
+    '#e91e63',
+    '#9c27b0',
+    '#673ab7',
+    '#3f51b5',
+    '#2196f3',
+    '#009688',
+    '#4caf50',
+    '#ff9800',
+    '#ff5722',
+  ];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const index = Math.abs(hash) % colors.length;
+  return colors[index];
+}
+
+function getInitials(name: string): string {
+  const words = name.trim().split(/\s+/);
+  if (words.length === 0 || !words[0]) return '?';
+  if (words.length === 1) return words[0].charAt(0).toUpperCase();
+  return (words[0].charAt(0) + words[words.length - 1].charAt(0)).toUpperCase();
+}
+
+function generateSvgAvatar(name: string, size: number): Buffer {
+  const initials = getInitials(name);
+  const color = getRandomColor(name);
+  const svg = `
+    <svg width="${size}" height="${size}">
+      <rect width="100%" height="100%" fill="${color}" />
+      <text x="50%" y="55%" text-anchor="middle" dy=".3em" fill="white" font-family="Arial" font-size="${Math.floor(size / 2.2)}px" font-weight="bold">${initials}</text>
+    </svg>
+  `;
+  return Buffer.from(svg);
+}
