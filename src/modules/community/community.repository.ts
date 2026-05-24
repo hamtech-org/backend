@@ -297,6 +297,20 @@ export const communityRepository = {
     return (result.Responses?.[GROUPS_TABLE] as ICommunity[]) ?? [];
   },
 
+  batchGetMembers: async (groupIds: string[], userId: string): Promise<ICommunityMember[]> => {
+    if (groupIds.length === 0) return [];
+    const result = await dynamoClient.send(
+      new BatchGetCommand({
+        RequestItems: {
+          [GROUPS_TABLE]: {
+            Keys: groupIds.map((groupId) => ({ PK: `GROUP#${groupId}`, SK: `MEMBER#${userId}` })),
+          },
+        },
+      }),
+    );
+    return (result.Responses?.[GROUPS_TABLE] as ICommunityMember[]) ?? [];
+  },
+
   listMembers: async (groupId: string): Promise<ICommunityMember[]> => {
     const result = await dynamoClient.send(
       new QueryCommand({

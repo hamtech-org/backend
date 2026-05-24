@@ -17,7 +17,12 @@ export type NotificationType =
   | 'post_rejected'
   | 'community_chat_enabled'
   | 'community_invite'
-  | 'community_invite_accepted';
+  | 'community_invite_accepted'
+  | 'community_join_request'
+  | 'community_request_resolved'
+  | 'community_member_kicked'
+  | 'community_role_changed'
+  | 'community_ownership_transferred';
 
 export type NotificationRoute =
   | 'chat'

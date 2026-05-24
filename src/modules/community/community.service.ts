@@ -757,13 +757,22 @@ export const communityService = {
       throw error;
     }
 
-    await notificationService.dispatch({
-      userId: community.ownerId,
-      type: 'group_invite',
-      title: 'Yêu cầu tham gia cộng đồng',
-      body: `Có người muốn tham gia ${community.name}`,
-      data: { route: 'community', id: groupId, extra: { requesterId: userId } },
-    });
+    await notificationService
+      .dispatch({
+        userId: community.ownerId,
+        type: 'community_join_request',
+        title: 'Yêu cầu tham gia cộng đồng',
+        body: `Có người muốn tham gia ${community.name}`,
+        data: {
+          route: 'community',
+          id: groupId,
+          entityType: 'community',
+          entityId: groupId,
+          actorId: userId,
+          extra: { requesterId: userId },
+        },
+      })
+      .catch((e) => logger.error('community_join_request notification failed', e));
 
     return { status: 'requested', community: await attachViewerState(community, userId) };
   },
@@ -861,19 +870,31 @@ export const communityService = {
       );
     }
 
-    await notificationService.dispatch({
-      userId,
-      type: 'group_invite',
-      title:
-        data.action === 'approve'
-          ? 'Yêu cầu tham gia đã được duyệt'
-          : 'Yêu cầu tham gia đã bị từ chối',
-      body:
-        data.action === 'approve'
-          ? `Bạn đã là thành viên của ${community.name}`
-          : `Yêu cầu tham gia ${community.name} đã bị từ chối`,
-      data: { route: 'community', id: groupId, extra: { action: data.action } },
-    });
+    const resolver = await userRepository.findById(actorId);
+    await notificationService
+      .dispatch({
+        userId,
+        type: 'community_request_resolved',
+        title:
+          data.action === 'approve'
+            ? 'Yêu cầu tham gia đã được duyệt'
+            : 'Yêu cầu tham gia đã bị từ chối',
+        body:
+          data.action === 'approve'
+            ? `Bạn đã là thành viên của ${community.name}`
+            : `Yêu cầu tham gia ${community.name} đã bị từ chối`,
+        data: {
+          route: 'community',
+          id: groupId,
+          entityType: 'community',
+          entityId: groupId,
+          actorId,
+          actorName: resolver?.displayName || undefined,
+          actorAvatar: resolver?.avatar ?? null,
+          extra: { action: data.action },
+        },
+      })
+      .catch((e) => logger.error('community_request_resolved notification failed', e));
   },
 
   removeMember: async (actorId: string, groupId: string, targetUserId: string): Promise<void> => {
@@ -900,6 +921,24 @@ export const communityService = {
       'member',
       targetName,
     );
+
+    const community = await requireActiveCommunity(groupId);
+    await notificationService
+      .dispatch({
+        type: 'community_member_kicked',
+        userId: targetUserId,
+        title: 'Bạn đã bị xóa khỏi cộng đồng',
+        body: `Bạn không còn là thành viên của "${community.name}"`,
+        data: {
+          route: 'community',
+          id: groupId,
+          entityType: 'community',
+          entityId: groupId,
+          actorId,
+          extra: { groupId, communityName: community.name },
+        },
+      })
+      .catch((e) => logger.error('community_member_kicked notification failed', e));
 
     try {
       const producer = getKafkaProducer();
@@ -949,6 +988,30 @@ export const communityService = {
       { oldRole: target.role, newRole: data.role },
     );
 
+    const community = await requireActiveCommunity(groupId);
+    const roleLabels: Record<CommunityMemberRole, string> = {
+      member: 'Thành viên',
+      moderator: 'Người kiểm duyệt',
+      admin: 'Quản trị viên',
+      owner: 'Chủ sở hữu',
+    };
+    await notificationService
+      .dispatch({
+        type: 'community_role_changed',
+        userId: targetUserId,
+        title: 'Quyền hạn của bạn đã thay đổi',
+        body: `Bạn đã được thay đổi thành ${roleLabels[data.role]} trong "${community.name}"`,
+        data: {
+          route: 'community',
+          id: groupId,
+          entityType: 'community',
+          entityId: groupId,
+          actorId,
+          extra: { groupId, newRole: data.role },
+        },
+      })
+      .catch((e) => logger.error('community_role_changed notification failed', e));
+
     try {
       const producer = getKafkaProducer();
       await producer.send({
@@ -992,6 +1055,28 @@ export const communityService = {
       'member',
       targetName,
     );
+
+    const community = await requireActiveCommunity(groupId);
+    const actorUser = await userRepository.findById(actorId);
+    const actorName = actorUser?.displayName ?? actorId;
+    await notificationService
+      .dispatch({
+        type: 'community_ownership_transferred',
+        userId: data.targetUserId,
+        title: 'Bạn là chủ sở hữu mới',
+        body: `${actorName} đã chuyển quyền chủ sở hữu "${community.name}" cho bạn`,
+        data: {
+          route: 'community',
+          id: groupId,
+          entityType: 'community',
+          entityId: groupId,
+          actorId,
+          actorName,
+          actorAvatar: actorUser?.avatar ?? null,
+          extra: { groupId },
+        },
+      })
+      .catch((e) => logger.error('community_ownership_transferred notification failed', e));
 
     try {
       const producer = getKafkaProducer();

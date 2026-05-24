@@ -19,6 +19,7 @@
     "es:wait": "tsx scripts/database/wait-for-elasticsearch.ts",
     "es:seed:analytics": "tsx scripts/database/seed-analytics-es.ts --",
     "es:sync:users": "tsx scripts/database/sync-users-to-es.ts",
+    "es:sync:groups": "tsx scripts/database/sync-groups-to-es.ts",
     "db:setup": "tsx scripts/database/setup-database.ts",
     "db:migrate": "tsx scripts/database/run-migrations.ts",
     "db:migrate:dist": "node dist/scripts/database/run-migrations.js",
