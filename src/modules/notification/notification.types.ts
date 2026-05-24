@@ -12,7 +12,8 @@ export type NotificationType =
   | 'live_started'
   | 'comment_reply'
   | 'ai_job_done'
-  | 'stats_milestone';
+  | 'stats_milestone'
+  | 'call_missed';
 
 export type NotificationRoute =
   | 'chat'
@@ -21,12 +22,30 @@ export type NotificationRoute =
   | 'friends'
   | 'profile'
   | 'notifications'
+  | 'call'
   | 'live'
   | 'ai';
 
 export interface INotificationRouteData {
   route: NotificationRoute;
   id: string;
+  deepLink?: string;
+  entityType?: string;
+  entityId?: string;
+  actorId?: string;
+  actorName?: string;
+  actorAvatar?: string | null;
+  senderId?: string;
+  senderName?: string;
+  senderAvatar?: string | null;
+  messageId?: string;
+  messagePreview?: string;
+  conversationType?: 'direct' | 'group';
+  chatScope?: 'direct' | 'group';
+  conversationName?: string | null;
+  conversationAvatar?: string | null;
+  groupName?: string | null;
+  groupAvatar?: string | null;
   extra?: Record<string, unknown>;
 }
 

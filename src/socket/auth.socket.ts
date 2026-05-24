@@ -33,6 +33,7 @@ export const authenticateSocket = async (
     const user = await userRepository.findById(decoded.userId);
     if (user) {
       socket.data.displayName = user.displayName;
+      socket.data.avatar = user.avatar;
     }
 
     next();
