@@ -9,6 +9,7 @@ import type {
   ITransferOwnerDto,
   IUpdateCommunityDto,
   IUpdateMemberRoleDto,
+  IInviteFriendsDto,
 } from './community.types.js';
 
 export const communityController = {
@@ -315,6 +316,96 @@ export const communityController = {
         req.body,
       );
       sendSuccess(res, resolved, 'Xử lý báo cáo thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  invite: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await communityService.inviteFriends(
+        req.user!.userId,
+        req.params.groupId,
+        req.body as IInviteFriendsDto,
+      );
+      sendSuccess(res, result, 'Gửi lời mời bạn bè thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  listInvitations: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const page = await communityService.listReceivedInvitations(
+        req.user!.userId,
+        req.query.limit ? Number(req.query.limit) : undefined,
+        typeof req.query.cursor === 'string' ? req.query.cursor : undefined,
+      );
+      sendSuccess(res, page);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  acceptInvite: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const community = await communityService.acceptInvitation(
+        req.user!.userId,
+        req.params.groupId,
+      );
+      sendSuccess(res, community, 'Chấp nhận lời mời gia nhập cộng đồng thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  declineInvite: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await communityService.declineInvitation(req.user!.userId, req.params.groupId);
+      sendSuccess(res, null, 'Từ chối lời mời gia nhập cộng đồng thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  getInviteLink: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const linkInfo = await communityService.getInviteLink(req.user!.userId, req.params.groupId);
+      sendSuccess(res, linkInfo, 'Lấy liên kết mời thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  disableInviteLink: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      await communityService.disableInviteLink(req.user!.userId, req.params.groupId);
+      sendSuccess(res, null, 'Vô hiệu hóa liên kết mời thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  getCommunityByInviteCode: async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
+    try {
+      const community = await communityService.getCommunityByInviteCode(req.params.inviteCode);
+      sendSuccess(res, community, 'Lấy thông tin mã mời thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  acceptInviteLink: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const community = await communityService.acceptInviteLink(
+        req.user!.userId,
+        req.params.inviteCode,
+      );
+      sendSuccess(res, community, 'Gia nhập cộng đồng bằng liên kết mời thành công');
     } catch (error) {
       next(error);
     }

@@ -15,7 +15,9 @@ export type NotificationType =
   | 'stats_milestone'
   | 'post_approved'
   | 'post_rejected'
-  | 'community_chat_enabled';
+  | 'community_chat_enabled'
+  | 'community_invite'
+  | 'community_invite_accepted';
 
 export type NotificationRoute =
   | 'chat'

@@ -44,6 +44,9 @@ import type {
   ICommunityModerationLogsPage,
   ICommunityReport,
   ICommunityReportsPage,
+  IInviteFriendsDto,
+  ICommunityInvitation,
+  ICommunityInvitationsPage,
 } from './community.types.js';
 
 type ISearchIndexEvent = {
@@ -172,15 +175,17 @@ const requireActiveCommunity = async (groupId: string): Promise<ICommunity> => {
 };
 
 const attachViewerState = async (community: ICommunity, userId: string): Promise<ICommunity> => {
-  const [member, request] = await Promise.all([
+  const [member, request, invite] = await Promise.all([
     communityRepository.getMember(community.groupId, userId),
     communityRepository.getJoinRequest(community.groupId, userId),
+    communityRepository.getInvitation(community.groupId, userId),
   ]);
   return {
     ...community,
     viewerRole: member?.status === 'active' ? member.role : null,
     viewerStatus: member?.status ?? null,
     joinRequestStatus: request?.status ?? null,
+    viewerInviteStatus: invite?.status ?? null,
   };
 };
 
@@ -1902,5 +1907,341 @@ export const communityService = {
     }
 
     return updatedReport;
+  },
+
+  inviteFriends: async (
+    actorId: string,
+    groupId: string,
+    data: IInviteFriendsDto,
+  ): Promise<{ success: boolean; invitedUserIds: string[] }> => {
+    const community = await requireActiveCommunity(groupId);
+
+    // Kiểm tra quyền đối với cộng đồng riêng tư / cần duyệt
+    if (community.type === 'private' || community.joinPolicy === 'approval') {
+      await communityService.assertCommunityRole(actorId, groupId, ['owner', 'admin', 'moderator']);
+    } else {
+      // Cộng đồng công khai: yêu cầu là thành viên active
+      await communityService.assertActiveMember(actorId, groupId);
+    }
+
+    const USERS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Users`;
+    const actorUser = await userRepository.findById(actorId);
+    const actorName = actorUser?.displayName ?? actorId;
+
+    const invitedUserIds: string[] = [];
+    const invitationsToCreate: ICommunityInvitation[] = [];
+
+    await Promise.all(
+      data.userIds.map(async (targetUserId: string) => {
+        if (targetUserId === actorId) return;
+
+        // 1. Kiểm tra mối quan hệ bạn bè & block (Backend-enforced)
+        // Check A -> B
+        const relResult = await dynamoClient.send(
+          new GetCommand({
+            TableName: USERS_TABLE,
+            Key: { PK: `USER#${actorId}`, SK: `FRIEND#${targetUserId}` },
+          }),
+        );
+        const relation = relResult.Item;
+        if (!relation || (relation.status !== 'accepted' && relation.status !== 'friend')) return;
+        if (relation.status === 'blocked') return;
+
+        // Check B -> A for block
+        const revRelResult = await dynamoClient.send(
+          new GetCommand({
+            TableName: USERS_TABLE,
+            Key: { PK: `USER#${targetUserId}`, SK: `FRIEND#${actorId}` },
+          }),
+        );
+        const reverseRelation = revRelResult.Item;
+        if (reverseRelation?.status === 'blocked') return;
+
+        // 2. Kiểm tra xem đã là thành viên chưa
+        const existingMember = await communityRepository.getMember(groupId, targetUserId);
+        if (existingMember && existingMember.status === 'active') return;
+
+        // 3. Kiểm tra xem đã có join request pending chưa
+        const existingRequest = await communityRepository.getJoinRequest(groupId, targetUserId);
+        if (existingRequest && existingRequest.status === 'pending') return;
+
+        // 3b. Kiểm tra xem đã có lời mời pending chưa (Chống spam lời mời trùng)
+        const existingInvite = await communityRepository.getInvitation(groupId, targetUserId);
+        if (existingInvite && existingInvite.status === 'pending') return;
+
+        // 4. Tạo bản ghi lời mời
+        const now = new Date();
+        const createdAt = now.toISOString();
+        const createdAtMs = now.getTime();
+
+        const invite: ICommunityInvitation = {
+          PK: `GROUP#${groupId}`,
+          SK: `INVITE#${targetUserId}`,
+          groupId,
+          communityId: groupId,
+          userId: targetUserId,
+          invitedById: actorId,
+          status: 'pending',
+          createdAt,
+          createdAtMs,
+          GSI1PK: `USER#${targetUserId}`,
+          GSI1SK: `INVITE#${padMs(createdAtMs)}#${groupId}`,
+        };
+
+        invitationsToCreate.push(invite);
+        invitedUserIds.push(targetUserId);
+      }),
+    );
+
+    if (invitationsToCreate.length > 0) {
+      await communityRepository.createInvitations(invitationsToCreate);
+
+      // Gửi notification cho từng user
+      await Promise.all(
+        invitationsToCreate.map(async (invite) => {
+          try {
+            await notificationService.dispatch({
+              userId: invite.userId,
+              type: 'community_invite',
+              title: 'Lời mời tham gia cộng đồng',
+              body: `${actorName} đã mời bạn tham gia cộng đồng "${community.name}"`,
+              data: {
+                route: 'community',
+                id: groupId,
+                entityType: 'community',
+                entityId: groupId,
+                actorId,
+                extra: { groupId, inviterName: actorName },
+              },
+            });
+          } catch (err) {
+            logger.error(
+              `Failed to dispatch community_invite notification to ${invite.userId}:`,
+              err,
+            );
+          }
+        }),
+      );
+    }
+
+    return { success: true, invitedUserIds };
+  },
+
+  listReceivedInvitations: async (
+    userId: string,
+    limit?: number,
+    cursor?: string,
+  ): Promise<ICommunityInvitationsPage> => {
+    const resolvedLimit = Math.min(limit ?? 20, 100);
+    const decoded = decodeCursor(cursor);
+
+    const page = await communityRepository.listInvitationsByUser(userId, resolvedLimit, decoded);
+    if (page.items.length === 0) {
+      return { items: [], nextCursor: null, hasMore: false };
+    }
+
+    // Enrich thông tin cộng đồng (META) và người mời (invitedById)
+    const groupIds = Array.from(new Set(page.items.map((item) => item.groupId)));
+    const inviterIds = Array.from(new Set(page.items.map((item) => item.invitedById)));
+
+    const [communities, inviters] = await Promise.all([
+      communityRepository.batchGetCommunities(groupIds),
+      userRepository.findMultipleById(inviterIds),
+    ]);
+
+    const communityMap = new Map(communities.map((c) => [c.groupId, c]));
+    const inviterMap = new Map(inviters.map((u) => [u.userId, u]));
+
+    const enrichedItems = page.items.map((item) => {
+      const c = communityMap.get(item.groupId);
+      const u = inviterMap.get(item.invitedById);
+
+      return {
+        ...item,
+        communityInfo: c
+          ? {
+              groupId: c.groupId,
+              name: c.name,
+              avatar: c.avatar ?? null,
+            }
+          : undefined,
+        invitedByInfo: u
+          ? {
+              userId: u.userId,
+              displayName: u.displayName ?? u.email ?? item.invitedById,
+              avatar: u.avatar ?? null,
+            }
+          : undefined,
+      };
+    });
+
+    return {
+      items: enrichedItems,
+      nextCursor: page.lastEvaluatedKey ? encodeCursor(page.lastEvaluatedKey) : null,
+      hasMore: Boolean(page.lastEvaluatedKey),
+    };
+  },
+
+  acceptInvitation: async (userId: string, groupId: string): Promise<ICommunity> => {
+    const community = await requireActiveCommunity(groupId);
+
+    // Lấy lời mời
+    const invite = await communityRepository.getInvitation(groupId, userId);
+    if (!invite) {
+      throw new NotFoundError('Không tìm thấy lời mời tham gia cộng đồng này');
+    }
+
+    const joinedAtMs = Date.now();
+    const joinedAt = new Date(joinedAtMs).toISOString();
+    const member = buildMember(groupId, userId, 'member', joinedAt, joinedAtMs);
+
+    // Chấp nhận và xóa invite
+    await communityRepository.acceptInvitation(invite, member, userId);
+
+    // Ghi Moderation Log
+    const targetUser = await userRepository.findById(userId);
+    const targetName = targetUser?.displayName ?? userId;
+    await communityService.writeModerationLog(
+      userId,
+      groupId,
+      'approve_join',
+      userId,
+      'member',
+      targetName,
+      'Chấp nhận lời mời tham gia cộng đồng',
+    );
+
+    // Gửi thông báo 'community_invite_accepted' cho người mời
+    try {
+      const communityName = community.name;
+      await notificationService.dispatch({
+        userId: invite.invitedById,
+        type: 'community_invite_accepted',
+        title: 'Chấp nhận lời mời tham gia cộng đồng',
+        body: `${targetName} đã tham gia cộng đồng "${communityName}"`,
+        data: {
+          route: 'community',
+          id: groupId,
+          entityType: 'community',
+          entityId: groupId,
+          actorId: userId,
+          extra: { groupId, accepterName: targetName },
+        },
+      });
+    } catch (err) {
+      logger.error(`Failed to send community_invite_accepted notification:`, err);
+    }
+
+    // Trả về chi tiết cộng đồng sau khi gia nhập
+    return attachViewerState(community, userId);
+  },
+
+  declineInvitation: async (userId: string, groupId: string): Promise<void> => {
+    await requireActiveCommunity(groupId);
+
+    const invite = await communityRepository.getInvitation(groupId, userId);
+    if (!invite) {
+      throw new NotFoundError('Không tìm thấy lời mời tham gia cộng đồng này');
+    }
+
+    await communityRepository.declineInvitation(groupId, userId);
+  },
+
+  getInviteLink: async (
+    actorId: string,
+    groupId: string,
+  ): Promise<{ inviteCode: string; inviteCodeEnabled: boolean }> => {
+    const community = await requireActiveCommunity(groupId);
+    await communityService.assertCommunityRole(actorId, groupId, ['owner', 'admin', 'moderator']);
+
+    if (community.inviteCode && community.inviteCodeEnabled) {
+      return {
+        inviteCode: community.inviteCode,
+        inviteCodeEnabled: true,
+      };
+    }
+
+    // Sinh mã mời độc bản mới
+    const inviteCode = uuidv4().replace(/-/g, '').substring(0, 10).toLowerCase();
+    await communityRepository.updateCommunityInviteCode(groupId, inviteCode, true);
+
+    return {
+      inviteCode,
+      inviteCodeEnabled: true,
+    };
+  },
+
+  disableInviteLink: async (actorId: string, groupId: string): Promise<void> => {
+    await requireActiveCommunity(groupId);
+    await communityService.assertCommunityRole(actorId, groupId, ['owner', 'admin', 'moderator']);
+
+    await communityRepository.updateCommunityInviteCode(groupId, null, false);
+  },
+
+  getCommunityByInviteCode: async (inviteCode: string): Promise<ICommunity> => {
+    const community = await communityRepository.getCommunityByInviteCode(
+      inviteCode.trim().toLowerCase(),
+    );
+    if (!community || !community.isActive || !community.inviteCodeEnabled) {
+      throw new NotFoundError('Đường liên kết mời không tồn tại hoặc đã hết hạn');
+    }
+    return community;
+  },
+
+  acceptInviteLink: async (userId: string, inviteCode: string): Promise<ICommunity> => {
+    const community = await communityRepository.getCommunityByInviteCode(
+      inviteCode.trim().toLowerCase(),
+    );
+    if (!community || !community.isActive || !community.inviteCodeEnabled) {
+      throw new NotFoundError('Đường liên kết mời không tồn tại hoặc đã hết hạn');
+    }
+
+    const groupId = community.groupId;
+
+    // Kiểm tra xem đã là thành viên chưa
+    const existingMember = await communityRepository.getMember(groupId, userId);
+    if (existingMember && existingMember.status === 'active') {
+      return attachViewerState(community, userId);
+    }
+
+    // Kiểm tra xem có bị ban không
+    if (existingMember && existingMember.status === 'banned') {
+      throw new ForbiddenError('Bạn đã bị chặn khỏi cộng đồng này');
+    }
+
+    // Đăng ký gia nhập trực tiếp (Bypass approval vì có link mời hợp lệ)
+    const joinedAtMs = Date.now();
+    const joinedAt = new Date(joinedAtMs).toISOString();
+    const member = buildMember(groupId, userId, 'member', joinedAt, joinedAtMs);
+
+    // Sử dụng putOpenMember (hoặc hàm ghi trực tiếp của repository)
+    await communityRepository.putOpenMember(member);
+
+    // Ghi Moderation Log
+    const targetUser = await userRepository.findById(userId);
+    const targetName = targetUser?.displayName ?? userId;
+    await communityService.writeModerationLog(
+      userId,
+      groupId,
+      'approve_join',
+      userId,
+      'member',
+      targetName,
+      'Gia nhập cộng đồng thông qua liên kết mời',
+    );
+
+    // Xóa join request cũ nếu có
+    const existingRequest = await communityRepository.getJoinRequest(groupId, userId);
+    if (existingRequest && existingRequest.status === 'pending') {
+      await communityRepository.rejectJoinRequest(existingRequest, userId);
+    }
+
+    // Xóa lời mời pending cũ nếu có
+    const existingInvite = await communityRepository.getInvitation(groupId, userId);
+    if (existingInvite) {
+      await communityRepository.declineInvitation(groupId, userId);
+    }
+
+    return attachViewerState(community, userId);
   },
 };

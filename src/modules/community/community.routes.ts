@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticate } from '@/shared/middlewares/auth.middleware.js';
 import { validate, validateQuery } from '@/shared/middlewares/validate.middleware.js';
+import { communityInviteLimiter } from '@/shared/middlewares/rateLimiter.middleware.js';
 import { communityController } from './community.controller.js';
 import {
   createCommunitySchema,
@@ -17,6 +18,7 @@ import {
   resolveCommunityReportSchema,
   listCommunityReportsQuerySchema,
   communityFeedQuerySchema,
+  inviteFriendsSchema,
 } from './community.validator.js';
 
 const router = Router();
@@ -29,6 +31,7 @@ router.get(
   validateQuery(communityFeedQuerySchema),
   communityController.feed,
 );
+router.get('/invites', authenticate, communityController.listInvitations);
 router.get('/:groupId', authenticate, communityController.get);
 router.put('/:groupId', authenticate, validate(updateCommunitySchema), communityController.update);
 router.delete('/:groupId', authenticate, communityController.archive);
@@ -101,5 +104,22 @@ router.get(
 // Linked Chat Routes
 router.post('/:groupId/join-chat', authenticate, communityController.joinChat);
 router.delete('/:groupId/link-chat', authenticate, communityController.unlinkChat);
+
+// Community Invitation Routes
+router.post(
+  '/:groupId/invites',
+  authenticate,
+  communityInviteLimiter,
+  validate(inviteFriendsSchema),
+  communityController.invite,
+);
+router.post('/:groupId/invites/accept', authenticate, communityController.acceptInvite);
+router.post('/:groupId/invites/decline', authenticate, communityController.declineInvite);
+
+// Community Invite Link Routes
+router.post('/:groupId/invite-link', authenticate, communityController.getInviteLink);
+router.delete('/:groupId/invite-link', authenticate, communityController.disableInviteLink);
+router.get('/join/:inviteCode', authenticate, communityController.getCommunityByInviteCode);
+router.post('/join/:inviteCode/accept', authenticate, communityController.acceptInviteLink);
 
 export default router;

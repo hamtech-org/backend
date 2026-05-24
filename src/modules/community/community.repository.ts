@@ -21,6 +21,7 @@ import type {
   ICommunityPendingRequest,
   ICommunityModerationLog,
   ICommunityReport,
+  ICommunityInvitation,
 } from './community.types.js';
 
 const GROUPS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Groups`;
@@ -904,5 +905,157 @@ export const communityRepository = {
       items: (result.Items as ICommunityReport[]) ?? [],
       lastEvaluatedKey: result.LastEvaluatedKey as Record<string, unknown> | undefined,
     };
+  },
+
+  getInvitation: async (groupId: string, userId: string): Promise<ICommunityInvitation | null> => {
+    const result = await dynamoClient.send(
+      new GetCommand({
+        TableName: GROUPS_TABLE,
+        Key: { PK: `GROUP#${groupId}`, SK: `INVITE#${userId}` },
+      }),
+    );
+    return (result.Item as ICommunityInvitation | undefined) ?? null;
+  },
+
+  createInvitations: async (invitations: ICommunityInvitation[]): Promise<void> => {
+    if (invitations.length === 0) return;
+    await Promise.all(
+      invitations.map(async (invite) => {
+        await dynamoClient.send(
+          new PutCommand({
+            TableName: GROUPS_TABLE,
+            Item: invite,
+          }),
+        );
+      }),
+    );
+  },
+
+  listInvitationsByUser: async (
+    userId: string,
+    limit: number,
+    exclusiveStartKey?: Record<string, unknown>,
+  ): Promise<PageResult<ICommunityInvitation>> => {
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: GROUPS_TABLE,
+        IndexName: GSI1,
+        KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :prefix)',
+        ExpressionAttributeValues: {
+          ':pk': `USER#${userId}`,
+          ':prefix': 'INVITE#',
+        },
+        Limit: limit,
+        ScanIndexForward: false,
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
+    return {
+      items: (result.Items as ICommunityInvitation[]) ?? [],
+      lastEvaluatedKey: result.LastEvaluatedKey as Record<string, unknown> | undefined,
+    };
+  },
+
+  acceptInvitation: async (
+    invite: ICommunityInvitation,
+    member: ICommunityMember,
+    resolverId: string,
+  ): Promise<void> => {
+    await dynamoClient.send(
+      new TransactWriteCommand({
+        TransactItems: [
+          {
+            Delete: {
+              TableName: GROUPS_TABLE,
+              Key: { PK: `GROUP#${invite.groupId}`, SK: `INVITE#${invite.userId}` },
+            },
+          },
+          {
+            Put: {
+              TableName: GROUPS_TABLE,
+              Item: {
+                PK: `GROUP#${member.groupId}`,
+                SK: `MEMBER#${member.userId}`,
+                GSI1PK: `USER#${member.userId}`,
+                GSI1SK: `JOINED#${padMs(member.joinedAtMs)}#${member.groupId}`,
+                ...member,
+              },
+              ConditionExpression: 'attribute_not_exists(PK) AND attribute_not_exists(SK)',
+            },
+          },
+          {
+            Update: {
+              TableName: GROUPS_TABLE,
+              Key: { PK: `GROUP#${member.groupId}`, SK: 'META' },
+              UpdateExpression: 'SET updatedAt = :now ADD memberCount :one',
+              ExpressionAttributeValues: { ':one': 1, ':now': new Date().toISOString() },
+            },
+          },
+        ],
+      }),
+    );
+  },
+
+  declineInvitation: async (groupId: string, userId: string): Promise<void> => {
+    await dynamoClient.send(
+      new DeleteCommand({
+        TableName: GROUPS_TABLE,
+        Key: { PK: `GROUP#${groupId}`, SK: `INVITE#${userId}` },
+      }),
+    );
+  },
+
+  getCommunityByInviteCode: async (inviteCode: string): Promise<ICommunity | null> => {
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: GROUPS_TABLE,
+        IndexName: GSI2,
+        KeyConditionExpression: 'GSI2PK = :pk AND GSI2SK = :sk',
+        ExpressionAttributeValues: {
+          ':pk': 'INVITECODE',
+          ':sk': inviteCode,
+        },
+      }),
+    );
+    const items = result.Items as ICommunity[] | undefined;
+    return items && items.length > 0 ? items[0] : null;
+  },
+
+  updateCommunityInviteCode: async (
+    groupId: string,
+    inviteCode: string | null,
+    enabled: boolean,
+  ): Promise<void> => {
+    const now = new Date().toISOString();
+    if (inviteCode && enabled) {
+      await dynamoClient.send(
+        new UpdateCommand({
+          TableName: GROUPS_TABLE,
+          Key: { PK: `GROUP#${groupId}`, SK: 'META' },
+          UpdateExpression:
+            'SET inviteCode = :code, inviteCodeEnabled = :enabled, inviteCodeCreatedAt = :now, GSI2PK = :gsi2pk, GSI2SK = :gsi2sk, updatedAt = :now',
+          ExpressionAttributeValues: {
+            ':code': inviteCode,
+            ':enabled': true,
+            ':now': now,
+            ':gsi2pk': 'INVITECODE',
+            ':gsi2sk': inviteCode,
+          },
+        }),
+      );
+    } else {
+      await dynamoClient.send(
+        new UpdateCommand({
+          TableName: GROUPS_TABLE,
+          Key: { PK: `GROUP#${groupId}`, SK: 'META' },
+          UpdateExpression:
+            'SET inviteCodeEnabled = :enabled, updatedAt = :now REMOVE inviteCode, inviteCodeCreatedAt, GSI2PK, GSI2SK',
+          ExpressionAttributeValues: {
+            ':enabled': false,
+            ':now': now,
+          },
+        }),
+      );
+    }
   },
 };

@@ -56,7 +56,11 @@ export interface ICommunity {
   viewerRole?: CommunityMemberRole | null;
   viewerStatus?: CommunityMemberStatus | null;
   joinRequestStatus?: CommunityRequestStatus | null;
+  viewerInviteStatus?: 'pending' | null;
   pinnedPostIds?: string[];
+  inviteCode?: string | null;
+  inviteCodeEnabled?: boolean;
+  inviteCodeCreatedAt?: string;
 }
 
 export interface ICommunityMember {
@@ -252,6 +256,40 @@ export interface ICommunityReport {
 
 export interface ICommunityReportsPage {
   items: ICommunityReport[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+export interface ICommunityInvitation {
+  PK: string; // GROUP#{groupId}
+  SK: string; // INVITE#{userId}
+  groupId: string;
+  communityId: string;
+  userId: string;
+  invitedById: string;
+  status: 'pending';
+  createdAt: string;
+  createdAtMs: number;
+  GSI1PK?: string;
+  GSI1SK?: string;
+  invitedByInfo?: {
+    userId: string;
+    displayName: string;
+    avatar: string | null;
+  };
+  communityInfo?: {
+    groupId: string;
+    name: string;
+    avatar: string | null;
+  };
+}
+
+export interface IInviteFriendsDto {
+  userIds: string[];
+}
+
+export interface ICommunityInvitationsPage {
+  items: ICommunityInvitation[];
   nextCursor: string | null;
   hasMore: boolean;
 }
