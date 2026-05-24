@@ -6,12 +6,13 @@ import { getKafkaProducer } from '@/config/kafka.js';
 import { getRedis } from '@/config/redis.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { logger } from '@/shared/utils/logger.js';
-import { NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
+import { NotFoundError, ForbiddenError, ValidationError, AppError } from '@/shared/utils/errors.js';
 import { extractHashtagsFromText, extractMentionsFromText } from '@/shared/utils/hashtags.js';
 import { getIO } from '@/socket/index.js';
 import { notificationService } from '@/modules/notification/notification.service.js';
 import { communityService } from '@/modules/community/community.service.js';
 import { communityRepository } from '@/modules/community/community.repository.js';
+import { automodService } from '@/modules/community/automod.service.js';
 import type {
   IPost,
   IComment,
@@ -338,6 +339,26 @@ export const newsfeedService = {
       const member = await communityService.assertActiveMember(authorId, groupId);
       memberRole = member.role;
       const community = await communityService.getCommunity(authorId, groupId);
+
+      // Kiểm duyệt nội dung bài viết trước khi tạo
+      const modResult = await automodService.moderateMessage({
+        groupId,
+        conversationId: '',
+        senderId: authorId,
+        content: data.content || '',
+        messageType: 'text',
+      });
+
+      if (!modResult.allowed) {
+        throw new AppError(
+          'Nội dung bài viết vi phạm tiêu chuẩn cộng đồng của nhóm.',
+          403,
+          'POST_BLOCKED_BY_AUTOMOD',
+        );
+      }
+
+      data.content = modResult.content;
+
       if (
         community.isPostApprovalRequired &&
         data.publicationStatus === 'published' &&
@@ -480,6 +501,27 @@ export const newsfeedService = {
     if (!existing) throw new NotFoundError('Bài viết');
     if (existing.authorId !== authorId)
       throw new ForbiddenError('Không có quyền chỉnh sửa bài viết');
+
+    // Kiểm duyệt bài viết thuộc cộng đồng khi chỉnh sửa nội dung
+    if (existing.groupId && data.content !== undefined) {
+      const modResult = await automodService.moderateMessage({
+        groupId: existing.groupId,
+        conversationId: '',
+        senderId: authorId,
+        content: data.content,
+        messageType: 'text',
+      });
+
+      if (!modResult.allowed) {
+        throw new AppError(
+          'Nội dung chỉnh sửa bài viết vi phạm tiêu chuẩn cộng đồng của nhóm.',
+          403,
+          'POST_BLOCKED_BY_AUTOMOD',
+        );
+      }
+
+      data.content = modResult.content;
+    }
 
     const existingPublicationStatus = existing.publicationStatus ?? 'published';
     const nextPublicationStatus = data.publicationStatus ?? existingPublicationStatus;
@@ -743,6 +785,27 @@ export const newsfeedService = {
     // Kiểm tra quyền xem bài (giữ logic đồng nhất với getPostById)
     const visiblePost = await newsfeedService.getPostById(postId, authorId);
     if (!visiblePost) throw new ForbiddenError('Không có quyền bình luận');
+
+    // Kiểm duyệt bình luận nếu bài viết thuộc cộng đồng
+    if (post.groupId && content) {
+      const modResult = await automodService.moderateMessage({
+        groupId: post.groupId,
+        conversationId: '',
+        senderId: authorId,
+        content: content,
+        messageType: 'text',
+      });
+
+      if (!modResult.allowed) {
+        throw new AppError(
+          'Bình luận của bạn vi phạm tiêu chuẩn cộng đồng của nhóm.',
+          403,
+          'COMMENT_BLOCKED_BY_AUTOMOD',
+        );
+      }
+
+      content = modResult.content;
+    }
 
     const now = new Date().toISOString();
     const commentId = uuidv4();
