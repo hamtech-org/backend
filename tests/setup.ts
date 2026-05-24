@@ -1,6 +1,6 @@
 import dotenv from 'dotenv';
 
-dotenv.config({ path: '.env.example' });
+dotenv.config({ path: '.env' });
 
 beforeAll(() => {
   // Thiết lập test environment
