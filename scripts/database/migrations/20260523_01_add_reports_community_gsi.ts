@@ -11,6 +11,17 @@ import {
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function waitTableActive(client: DynamoDBClient, tableName: string): Promise<void> {
+  const isLocal = !process.env.AWS_REGION || process.env.DYNAMODB_ENDPOINT?.includes('localhost');
+
+  if (!isLocal) {
+    console.log(
+      `[Migration] Phát hiện môi trường AWS. Lệnh UpdateTable được thực hiện ngầm. Chờ 5 giây rồi tiếp tục...`,
+    );
+    await sleep(5000);
+    return;
+  }
+
+  console.log(`[Migration] Phát hiện môi trường Local. Bắt đầu đợi GSI đạt trạng thái ACTIVE...`);
   for (;;) {
     const result = await client.send(new DescribeTableCommand({ TableName: tableName }));
     const creatingIndex = result.Table?.GlobalSecondaryIndexes?.find(
