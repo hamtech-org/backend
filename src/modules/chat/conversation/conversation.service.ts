@@ -1,8 +1,16 @@
 import { v4 as uuidv4 } from 'uuid';
 import sharp from 'sharp';
 import { env } from '@/config/env.js';
+import {
+  normalizeGroupConversationAvatarStored,
+  extractMediaIdFromUrl,
+  extractS3KeyFromUrl,
+} from '@/modules/media/mediaUrl.util.js';
 import { conversationRepository } from './conversation.repository.js';
 import { messageUserHideRepository } from '../message/message-user-hide.repository.js';
+import { mediaRepository } from '@/modules/media/media.repository.js';
+import { getObjectStream } from '@/shared/services/s3Media.service.js';
+import type { Readable } from 'node:stream';
 import type {
   IConversation,
   IConversationMember,
@@ -17,7 +25,29 @@ import {
   isConversationNotificationPushMuted,
 } from '../shared/chat.helpers.js';
 import { createAndBroadcastSystemMessage } from '../shared/system-message.factory.js';
+import { emitConversationCreatedToUser } from '../shared/chat.broadcast.js';
+import {
+  buildGroupCreatedContent,
+  buildGroupMemberJoinedContent,
+} from '../shared/group-system-message.js';
 import { createInitialGroupSettings } from '../group/group.service.js';
+
+/** Đẩy hội thoại mới vào sidebar của từng thành viên (web/mobile không cần reload). */
+async function broadcastConversationCreatedToMembers(conversationId: string): Promise<void> {
+  const cid = String(conversationId ?? '').trim();
+  if (!cid) return;
+  const members = await conversationRepository.getConversationMembers(cid);
+  await Promise.all(
+    members.map(async (m) => {
+      try {
+        const conv = await conversationService.getConversationById(cid, m.userId);
+        await emitConversationCreatedToUser(m.userId, conv);
+      } catch {
+        /* best-effort */
+      }
+    }),
+  );
+}
 
 /** Nhóm đã giải tán không hiển thị trong danh sách hội thoại (kể cả khi còn sót bản ghi MEMBER#). */
 function filterDisbandedGroupsFromList(conversations: IConversation[]): IConversation[] {
@@ -107,8 +137,8 @@ export const conversationService = {
 
     const filtered = filterDisbandedGroupsFromList(conversations);
     for (const c of filtered) {
-      if (c.type === 'group' && (!c.avatar || !c.avatar.trim())) {
-        c.avatar = `/api/v1/chat/conversations/${c.conversationId}/avatar`;
+      if (c.type === 'group') {
+        c.avatar = normalizeGroupConversationAvatarStored(c.avatar, c.conversationId);
       }
     }
     return filtered;
@@ -198,7 +228,7 @@ export const conversationService = {
           {
             conversationId,
             senderId: creatorId,
-            content: `${creatorName} đã tạo nhóm${data.name ? ` "${data.name}"` : ''}`,
+            content: buildGroupCreatedContent({ userId: creatorId, name: creatorName }),
           },
           {
             createMessage: conversationRepository.createMessage,
@@ -210,7 +240,36 @@ export const conversationService = {
       }
     }
 
+    try {
+      await broadcastConversationCreatedToMembers(conversationId);
+    } catch {
+      /* ignore socket errors */
+    }
+
+    const fresh = await conversationRepository.getConversationById(conversationId);
+    if (fresh) {
+      if (fresh.type === 'group') {
+        fresh.avatar = normalizeGroupConversationAvatarStored(fresh.avatar, conversationId);
+      }
+      return fresh;
+    }
+
     return conversation;
+  },
+
+  notifyConversationCreatedForUser: async (
+    conversationId: string,
+    userId: string,
+  ): Promise<void> => {
+    const cid = String(conversationId ?? '').trim();
+    const uid = String(userId ?? '').trim();
+    if (!cid || !uid) return;
+    try {
+      const conv = await conversationService.getConversationById(cid, uid);
+      await emitConversationCreatedToUser(uid, conv);
+    } catch {
+      /* best-effort */
+    }
   },
 
   getConversationById: async (conversationId: string, userId: string): Promise<IConversation> => {
@@ -222,8 +281,11 @@ export const conversationService = {
     const me = members.find((m) => m.userId === userId);
     if (!me) throw new ForbiddenError('Bạn không phải thành viên của hội thoại này');
 
-    if (conversation.type === 'group' && (!conversation.avatar || !conversation.avatar.trim())) {
-      conversation.avatar = `/api/v1/chat/conversations/${conversationId}/avatar`;
+    if (conversation.type === 'group') {
+      conversation.avatar = normalizeGroupConversationAvatarStored(
+        conversation.avatar,
+        conversationId,
+      );
     }
 
     return {
@@ -375,7 +437,7 @@ export const conversationService = {
         {
           conversationId,
           senderId: userId,
-          content: `${userName} đã tham gia nhóm`,
+          content: buildGroupMemberJoinedContent({ userId, name: userName }),
         },
         {
           createMessage: conversationRepository.createMessage,
@@ -387,13 +449,15 @@ export const conversationService = {
     }
   },
 
-  getConversationAvatar: async (conversationId: string): Promise<Buffer> => {
+  getConversationAvatar: async (
+    conversationId: string,
+  ): Promise<{ buffer: Buffer; isFallback: boolean }> => {
     const conv = await conversationRepository.getConversationById(conversationId);
     if (!conv) throw new NotFoundError('Hội thoại');
 
     const members = await conversationRepository.getConversationMembers(conversationId);
     if (members.length === 0) {
-      return sharp({
+      const buffer = await sharp({
         create: {
           width: 200,
           height: 200,
@@ -403,11 +467,44 @@ export const conversationService = {
       })
         .png()
         .toBuffer();
+      return { buffer, isFallback: true };
     }
 
-    const memberIds = members.map((m) => m.userId);
+    // Sort members chronologically by joinedAt ascending, but ensure creator/leader is always first
+    const sortedMembers = [...members].sort((a, b) => {
+      const isCreatorA = a.userId === conv.creatorId || a.userId === conv.leaderId;
+      const isCreatorB = b.userId === conv.creatorId || b.userId === conv.leaderId;
+      if (isCreatorA && !isCreatorB) return -1;
+      if (isCreatorB && !isCreatorA) return 1;
+
+      const t1 = a.joinedAt || '';
+      const t2 = b.joinedAt || '';
+      const cmp = t1.localeCompare(t2);
+      if (cmp !== 0) return cmp;
+
+      return a.userId.localeCompare(b.userId);
+    });
+
+    const displayMembers = sortedMembers.slice(0, 4);
+    const memberIds = displayMembers.map((m) => m.userId);
     const users = await userRepository.findByIds(memberIds);
-    const displayUsers = users.slice(0, 4);
+
+    // Maintain chronological order of displayMembers
+    const userMap = new Map(
+      users.map((u) => {
+        const resolvedId = u.userId || (u as any).PK?.replace('USER#', '') || '';
+        return [resolvedId, u];
+      }),
+    );
+    const displayUsers = displayMembers
+      .map((m) => {
+        const u = userMap.get(m.userId);
+        if (u) {
+          u.userId = u.userId || m.userId;
+        }
+        return u;
+      })
+      .filter((u): u is NonNullable<typeof u> => u !== undefined);
 
     const size = 200;
     const baseBg = sharp({
@@ -415,82 +512,108 @@ export const conversationService = {
         width: size,
         height: size,
         channels: 4,
-        background: { r: 240, g: 240, b: 240, alpha: 1 },
+        background: { r: 255, g: 255, b: 255, alpha: 1 }, // White grid dividers
       },
     });
 
-    const composites: any[] = [];
     const N = displayUsers.length;
-    let getLayout: (index: number) => { size: number; x: number; y: number };
+    let getLayout: (index: number) => { width: number; height: number; x: number; y: number };
 
     if (N === 1) {
-      getLayout = () => ({ size: 120, x: 40, y: 40 });
+      getLayout = () => ({ width: 200, height: 200, x: 0, y: 0 });
     } else if (N === 2) {
       getLayout = (i) => {
-        if (i === 0) return { size: 110, x: 10, y: 10 };
-        return { size: 110, x: 80, y: 80 };
+        if (i === 0) return { width: 98, height: 200, x: 0, y: 0 };
+        return { width: 98, height: 200, x: 102, y: 0 };
       };
     } else if (N === 3) {
       getLayout = (i) => {
-        if (i === 0) return { size: 95, x: 52, y: 10 };
-        if (i === 1) return { size: 95, x: 10, y: 95 };
-        return { size: 95, x: 95, y: 95 };
+        if (i === 0) return { width: 200, height: 98, x: 0, y: 0 };
+        if (i === 1) return { width: 98, height: 98, x: 0, y: 102 };
+        return { width: 98, height: 98, x: 102, y: 102 };
       };
     } else {
       getLayout = (i) => {
-        if (i === 0) return { size: 85, x: 10, y: 10 };
-        if (i === 1) return { size: 85, x: 105, y: 10 };
-        if (i === 2) return { size: 85, x: 10, y: 105 };
-        return { size: 85, x: 105, y: 105 };
+        if (i === 0) return { width: 98, height: 98, x: 0, y: 0 };
+        if (i === 1) return { width: 98, height: 98, x: 102, y: 0 };
+        if (i === 2) return { width: 98, height: 98, x: 0, y: 102 };
+        return { width: 98, height: 98, x: 102, y: 102 };
       };
     }
 
-    for (let i = 0; i < N; i++) {
-      const u = displayUsers[i];
+    const compositePromises = displayUsers.map(async (u, i) => {
       const name = u.displayName || 'User';
       const layout = getLayout(i);
       let avatarBuf: Buffer;
 
       if (u.avatar) {
         try {
-          let avatarUrl = u.avatar.trim();
-          if (avatarUrl.startsWith('/')) {
-            avatarUrl = `${env.API_PUBLIC_ORIGIN}${avatarUrl}`;
-          }
-          const res = await fetch(avatarUrl);
-          if (res.ok) {
-            const arrayBuf = await res.arrayBuffer();
-            avatarBuf = Buffer.from(arrayBuf);
+          const avatarUrl = u.avatar.trim();
+          const s3Key = extractS3KeyFromUrl(avatarUrl);
+          if (s3Key) {
+            const { stream } = await getObjectStream(s3Key);
+            avatarBuf = await streamToBuffer(stream);
           } else {
-            throw new Error('Fetch failed');
+            const mediaId = extractMediaIdFromUrl(avatarUrl);
+            if (mediaId) {
+              const media = await mediaRepository.findById(mediaId);
+              if (media?.s3Key) {
+                const { stream } = await getObjectStream(media.s3Key);
+                avatarBuf = await streamToBuffer(stream);
+              } else {
+                throw new Error('Local media s3Key missing');
+              }
+            } else {
+              let externalUrl = avatarUrl;
+              if (externalUrl.startsWith('/')) {
+                externalUrl = `${env.API_PUBLIC_ORIGIN}${externalUrl}`;
+              }
+              const res = await fetch(externalUrl, { signal: AbortSignal.timeout(1500) });
+              if (res.ok) {
+                const arrayBuf = await res.arrayBuffer();
+                avatarBuf = Buffer.from(arrayBuf);
+              } else {
+                throw new Error('Fetch failed');
+              }
+            }
           }
         } catch {
-          avatarBuf = generateSvgAvatar(name, layout.size);
+          avatarBuf = generateSvgAvatar(name, layout.width, layout.height);
         }
       } else {
-        avatarBuf = generateSvgAvatar(name, layout.size);
+        avatarBuf = generateSvgAvatar(name, layout.width, layout.height);
       }
 
-      const circleMask = Buffer.from(
-        `<svg width="${layout.size}" height="${layout.size}"><circle cx="${layout.size / 2}" cy="${layout.size / 2}" r="${layout.size / 2}" fill="white"/></svg>`,
-      );
-      const circularBuf = await sharp(avatarBuf)
-        .resize(layout.size, layout.size)
-        .composite([{ input: circleMask, blend: 'dest-in' }])
+      // Resize and crop to fill the layout cell exactly
+      const partBuf = await sharp(avatarBuf)
+        .resize(layout.width, layout.height, {
+          fit: 'cover',
+          position: 'center',
+        })
         .png()
         .toBuffer();
 
-      composites.push({
-        input: circularBuf,
+      return {
+        input: partBuf,
         top: layout.y,
         left: layout.x,
-      });
-    }
+      };
+    });
 
-    return baseBg.composite(composites).png().toBuffer();
+    const composites = await Promise.all(compositePromises);
+
+    const buffer = await baseBg.composite(composites).png().toBuffer();
+    return { buffer, isFallback: N < 2 };
   },
 };
 
+async function streamToBuffer(stream: Readable): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+  }
+  return Buffer.concat(chunks);
+}
 function getRandomColor(name: string): string {
   const colors = [
     '#f44336',
@@ -519,13 +642,14 @@ function getInitials(name: string): string {
   return (words[0].charAt(0) + words[words.length - 1].charAt(0)).toUpperCase();
 }
 
-function generateSvgAvatar(name: string, size: number): Buffer {
+function generateSvgAvatar(name: string, width: number, height: number): Buffer {
   const initials = getInitials(name);
   const color = getRandomColor(name);
+  const minDim = Math.min(width, height);
   const svg = `
-    <svg width="${size}" height="${size}">
+    <svg width="${width}" height="${height}">
       <rect width="100%" height="100%" fill="${color}" />
-      <text x="50%" y="55%" text-anchor="middle" dy=".3em" fill="white" font-family="Arial" font-size="${Math.floor(size / 2.2)}px" font-weight="bold">${initials}</text>
+      <text x="50%" y="50%" text-anchor="middle" dy=".35em" fill="white" font-family="Arial" font-size="${Math.floor(minDim / 2.2)}px" font-weight="bold">${initials}</text>
     </svg>
   `;
   return Buffer.from(svg);

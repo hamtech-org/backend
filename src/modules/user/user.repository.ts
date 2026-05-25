@@ -22,9 +22,14 @@ export const userRepository = {
       new GetCommand({
         TableName: TABLE_NAME,
         Key: { PK: `USER#${userId}`, SK: 'PROFILE' },
+        ConsistentRead: true,
       }),
     );
-    return (result.Item as IUser) ?? null;
+    const item = result.Item as IUser | undefined;
+    if (item && !item.userId && (item as any).PK) {
+      item.userId = (item as any).PK.replace('USER#', '');
+    }
+    return item ?? null;
   },
 
   update: async (userId: string, data: IUpdateProfileDto): Promise<IUser> => {
@@ -80,12 +85,19 @@ export const userRepository = {
         RequestItems: {
           [TABLE_NAME]: {
             Keys: keys,
+            ConsistentRead: true,
           },
         },
       }),
     );
 
-    return (result.Responses?.[TABLE_NAME] as IUser[]) || [];
+    const items = (result.Responses?.[TABLE_NAME] as IUser[]) || [];
+    return items.map((item: any) => {
+      if (!item.userId && item.PK) {
+        item.userId = item.PK.replace('USER#', '');
+      }
+      return item;
+    });
   },
 
   findByIds: async (userIds: string[]): Promise<IUser[]> => {

@@ -77,9 +77,15 @@ export const conversationController = {
 
   getConversationAvatar: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const buffer = await conversationService.getConversationAvatar(req.params.conversationId);
+      const { buffer, isFallback } = await conversationService.getConversationAvatar(
+        req.params.conversationId,
+      );
       res.setHeader('Content-Type', 'image/png');
-      res.setHeader('Cache-Control', 'public, max-age=3600');
+      if (isFallback) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      } else {
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+      }
       res.send(buffer);
     } catch (error) {
       next(error);
