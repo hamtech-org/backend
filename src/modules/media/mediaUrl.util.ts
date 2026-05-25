@@ -62,6 +62,28 @@ export function extractMediaIdFromUrl(urlStr: string | null | undefined): string
   );
 }
 
+/** Trích xuất S3 key từ URL (hỗ trợ public/avatars/ và các key public khác) */
+export function extractS3KeyFromUrl(urlStr: string | null | undefined): string | null {
+  if (!urlStr?.trim()) return null;
+  const trimmed = urlStr.trim();
+  try {
+    if (trimmed.startsWith('public/avatars/')) {
+      return trimmed.split('?')[0];
+    }
+    const u = /^https?:\/\//i.test(trimmed)
+      ? new URL(trimmed)
+      : new URL(trimmed, 'http://local.invalid');
+    const pathname = decodeURIComponent(u.pathname);
+    const index = pathname.indexOf('public/avatars/');
+    if (index !== -1) {
+      return pathname.slice(index);
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 const GROUP_CONVERSATION_AVATAR_PATH = /\/(?:api\/v\d+\/)?chat\/conversations\/([^/]+)\/avatar$/i;
 
 /**

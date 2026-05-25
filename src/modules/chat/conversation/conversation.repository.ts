@@ -158,6 +158,7 @@ export const conversationRepository = {
       new QueryCommand({
         TableName: CONVERSATIONS_TABLE,
         KeyConditionExpression: 'PK = :pk AND begins_with(SK, :memberPrefix)',
+        ConsistentRead: true,
         ExpressionAttributeValues: {
           ':pk': `CONV#${conversationId}`,
           ':memberPrefix': 'MEMBER#',
@@ -322,6 +323,7 @@ export const conversationRepository = {
     const result = await dynamoClient.send(
       new GetCommand({
         TableName: CONVERSATIONS_TABLE,
+        ConsistentRead: true,
         Key: { PK: `CONV#${conversationId}`, SK: `MEMBER#${userId}` },
       }),
     );
