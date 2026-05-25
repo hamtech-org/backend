@@ -4,6 +4,7 @@ import { logger } from '@/shared/utils/logger.js';
 import { messageService } from '@/modules/chat/message/message.service.js';
 import { broadcastMessageNew } from '@/modules/chat/shared/chat.broadcast.js';
 import { conversationRepository } from '@/modules/chat/conversation/conversation.repository.js';
+import { notificationService } from '@/modules/notification/notification.service.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import type {
   CallInitiatePayload,
@@ -112,6 +113,7 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
         const incomingPayload = {
           callerId: userId,
           callerName: socket.data.displayName ?? userId,
+          callerAvatar: socket.data.avatar ?? null,
           type: data.type,
           channelName,
           conversationId: data.conversationId,
@@ -124,6 +126,36 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
         for (const m of members) {
           if (m.userId === userId) continue;
           io.to(`user:${m.userId}`).emit('call:incoming', incomingPayload);
+
+          // Gửi Push Notification cuộc gọi nhóm đến từng thành viên khác ngầm/chạy nền
+          void notificationService
+            .dispatch({
+              type: 'message',
+              userId: m.userId,
+              title: conv.name?.trim() || 'Cuộc gọi nhóm',
+              body: `${socket.data.displayName ?? userId} đang gọi nhóm...`,
+              skipPush: false,
+              data: {
+                route: 'call',
+                id: channelName,
+                entityType: 'call',
+                entityId: channelName,
+                deepLink: `/call?channel=${channelName}&type=${data.type}&conversationId=${data.conversationId}&scope=group&hostId=${userId}&sessionId=${sessionId}`,
+                conversationId: data.conversationId,
+                callScope: 'group',
+                channelName,
+                callType: data.type,
+                callStatus: 'incoming',
+                callerId: userId,
+                callerName: socket.data.displayName ?? userId,
+                callerAvatar: socket.data.avatar ?? null,
+                hostId: userId,
+                sessionId,
+              },
+            })
+            .catch((err) => {
+              logger.error(`Gửi push notification cuộc gọi nhóm đến ${m.userId} thất bại:`, err);
+            });
         }
 
         emitToMemberUsers(io, memberIds, 'call:group-active', {
@@ -142,7 +174,7 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
           sessionId,
         });
         logger.info(
-          `Call group: ${userId} -> conv=${data.conversationId} (${data.type}) channel=${channelName}`,
+          `Call group: ${userId} -> conv=${data.conversationId} (${data.type}) channel=${channelName} callerAvatar=${socket.data.avatar}`,
         );
       } catch (e) {
         logger.error('call:initiate group failed:', e);
@@ -194,18 +226,50 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
     io.to(`user:${data.calleeId}`).emit('call:incoming', {
       callerId: userId,
       callerName: socket.data.displayName ?? userId,
+      callerAvatar: socket.data.avatar ?? null,
       type: data.type,
       channelName,
       conversationId: data.conversationId,
       scope: 'direct',
     });
 
+    // Gửi Push Notification cuộc gọi 1-1 cho người nhận ngầm/chạy nền
+    void notificationService
+      .dispatch({
+        type: 'message',
+        userId: data.calleeId,
+        title: socket.data.displayName ?? userId,
+        body: data.type === 'video' ? 'Cuộc gọi video đến' : 'Cuộc gọi thoại đến',
+        skipPush: false,
+        data: {
+          route: 'call',
+          id: channelName,
+          entityType: 'call',
+          entityId: channelName,
+          deepLink: `/call?channel=${channelName}&type=${data.type}&conversationId=${data.conversationId}&scope=direct&callerId=${userId}`,
+          conversationId: data.conversationId,
+          callScope: 'direct',
+          channelName,
+          callType: data.type,
+          callStatus: 'incoming',
+          callerId: userId,
+          callerName: socket.data.displayName ?? userId,
+          callerAvatar: socket.data.avatar ?? null,
+          hostId: userId,
+        },
+      })
+      .catch((err) => {
+        logger.error(`Gửi push notification cuộc gọi 1-1 đến ${data.calleeId} thất bại:`, err);
+      });
+
     socket.emit('call:channel-ready', {
       channelName,
       conversationId: data.conversationId,
       scope: 'direct',
     });
-    logger.info(`Call: ${userId} -> ${data.calleeId} (${data.type}) channel=${channelName}`);
+    logger.info(
+      `Call: ${userId} -> ${data.calleeId} (${data.type}) channel=${channelName} callerAvatar=${socket.data.avatar}`,
+    );
   });
 
   socket.on('call:accept', (data: CallAcceptPayload) => {
@@ -305,6 +369,34 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
     } catch (e) {
       logger.error('Create call log (end) failed:', e);
     }
+
+    if (logKind === 'cancelled' || logKind === 'missed') {
+      try {
+        await notificationService.dispatch({
+          type: 'call_missed',
+          userId: data.peerId,
+          title: socket.data.displayName ?? userId,
+          body: data.type === 'video' ? 'Cuộc gọi video bị nhỡ' : 'Cuộc gọi thoại bị nhỡ',
+          skipPush: false,
+          data: {
+            route: 'chat',
+            id: data.conversationId,
+            entityType: 'call_missed',
+            entityId: data.channelName,
+            conversationId: data.conversationId,
+            callScope: 'direct',
+            channelName: data.channelName,
+            callType: data.type,
+            callStatus: 'missed',
+            callerId: userId,
+            callerName: socket.data.displayName ?? userId,
+            callerAvatar: socket.data.avatar ?? null,
+          },
+        });
+      } catch (err) {
+        logger.error('Failed to send missed call notification on cancel/timeout:', err);
+      }
+    }
   });
 
   socket.on('call:missed', async (data: CallMissedPayload) => {
@@ -332,6 +424,32 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
     } catch (e) {
       logger.error('Create call log (missed) failed:', e);
     }
+
+    try {
+      await notificationService.dispatch({
+        type: 'call_missed',
+        userId: data.peerId,
+        title: socket.data.displayName ?? userId,
+        body: data.type === 'video' ? 'Cuộc gọi video bị nhỡ' : 'Cuộc gọi thoại bị nhỡ',
+        skipPush: false,
+        data: {
+          route: 'chat',
+          id: data.conversationId,
+          entityType: 'call_missed',
+          entityId: data.channelName,
+          conversationId: data.conversationId,
+          callScope: 'direct',
+          channelName: data.channelName,
+          callType: data.type,
+          callStatus: 'missed',
+          callerId: userId,
+          callerName: socket.data.displayName ?? userId,
+          callerAvatar: socket.data.avatar ?? null,
+        },
+      });
+    } catch (err) {
+      logger.error('Failed to send missed call notification on timeout:', err);
+    }
   });
 
   socket.on('call:group-missed', async (data: CallGroupMissedPayload) => {
@@ -341,6 +459,8 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
       return;
     }
     try {
+      const conv = await conversationRepository.getConversationById(data.conversationId);
+      if (!conv) return;
       const members = await conversationRepository.getConversationMembers(data.conversationId);
       const ids = members.map((m) => m.userId);
       const sessionId = meta.sessionId;
@@ -371,6 +491,37 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
         }),
       });
       await broadcastMessageNew(message);
+
+      for (const m of members) {
+        if (m.userId === userId) continue;
+        void notificationService
+          .dispatch({
+            type: 'call_missed',
+            userId: m.userId,
+            title: conv.name?.trim() || 'Cuộc gọi nhóm',
+            body: `Cuộc gọi nhỡ từ ${socket.data.displayName ?? userId}`,
+            skipPush: false,
+            data: {
+              route: 'chat',
+              id: data.conversationId,
+              entityType: 'call_missed',
+              entityId: data.channelName,
+              conversationId: data.conversationId,
+              callScope: 'group',
+              channelName: data.channelName,
+              callType: data.type,
+              callStatus: 'missed',
+              callerId: userId,
+              callerName: socket.data.displayName ?? userId,
+              callerAvatar: socket.data.avatar ?? null,
+              conversationName: conv.name?.trim() || 'Cuộc gọi nhóm',
+              conversationAvatar: conv.avatar || null,
+            },
+          })
+          .catch((err) => {
+            logger.error(`Gửi notification cuộc gọi nhóm nhỡ đến ${m.userId} thất bại:`, err);
+          });
+      }
     } catch (e) {
       logger.error('call:group-missed failed:', e);
     }

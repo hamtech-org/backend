@@ -623,8 +623,9 @@ export const messageService = {
 
     const senders = await userRepository.findByIds([senderId]);
     const senderDisplayName = senders[0]?.displayName?.trim() ?? null;
+    const senderAvatar = senders[0]?.avatar ?? null;
 
-    const withSenderName: IMessage = { ...message, senderDisplayName };
+    const withSenderName: IMessage = { ...message, senderDisplayName, senderAvatar };
     const hiddenForSender = await messageUserHideRepository.queryHiddenMessageIdsForConversation(
       senderId,
       conversationId,
@@ -678,6 +679,24 @@ export const messageService = {
     const pushRecipientIds = otherMembers
       .filter((m) => !isConversationNotificationPushMuted(m))
       .map((m) => m.userId);
+    const isGroupConversation = conversation.type === 'group';
+    const conversationName = conversation.name?.trim() || (isGroupConversation ? 'chat' : null);
+    const displayConversationName =
+      isGroupConversation && conversationName
+        ? conversationName.startsWith('Nhóm:')
+          ? conversationName
+          : `Nhóm: ${conversationName}`
+        : conversationName;
+    const conversationAvatar = conversation.avatar?.trim() || null;
+    const notificationPreview = lastPreviewContent.slice(0, 100) || 'Bạn có tin nhắn mới';
+    const notificationTitle =
+      isGroupConversation && displayConversationName
+        ? displayConversationName
+        : senderDisplayName || 'Tin nhắn mới';
+    const notificationBody =
+      isGroupConversation && senderDisplayName
+        ? `${senderDisplayName}: ${notificationPreview}`
+        : notificationPreview;
 
     await Promise.all([
       // Tăng unread cho members khác
@@ -687,8 +706,8 @@ export const messageService = {
       kafkaProducer.send(KAFKA_TOPICS.NOTIFICATION_EVENTS, {
         type: 'message',
         recipientIds: pushRecipientIds,
-        title: senderDisplayName ?? 'Tin nhắn mới',
-        body: lastPreviewContent.slice(0, 100) || 'Bạn có tin nhắn mới',
+        title: notificationTitle,
+        body: notificationBody,
         data: {
           route: 'chat',
           id: conversationId,
@@ -697,13 +716,41 @@ export const messageService = {
           deepLink: `/chat/${conversationId}`,
           actorId: senderId,
           actorName: senderDisplayName ?? undefined,
-          actorAvatar: senders[0]?.avatar ?? null,
+          actorAvatar: senderAvatar,
+          senderId,
+          senderName: senderDisplayName ?? undefined,
+          senderAvatar,
+          messageId,
+          messagePreview: notificationPreview,
+          conversationType: conversation.type,
+          chatScope: conversation.type,
+          conversationName: displayConversationName,
+          conversationAvatar,
+          ...(isGroupConversation
+            ? {
+                groupName: displayConversationName,
+                groupAvatar: conversationAvatar,
+              }
+            : {}),
           extra: {
             messageId,
             senderId,
+            senderName: senderDisplayName,
+            senderAvatar,
             actorId: senderId,
             actorName: senderDisplayName,
-            actorAvatar: senders[0]?.avatar ?? null,
+            actorAvatar: senderAvatar,
+            messagePreview: notificationPreview,
+            conversationType: conversation.type,
+            chatScope: conversation.type,
+            conversationName: displayConversationName,
+            conversationAvatar,
+            ...(isGroupConversation
+              ? {
+                  groupName: displayConversationName,
+                  groupAvatar: conversationAvatar,
+                }
+              : {}),
           },
         },
       }),

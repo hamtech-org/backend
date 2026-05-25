@@ -116,6 +116,8 @@ export interface IMessage extends TimestampFields {
   conversationId: string;
   senderId: string;
   senderDisplayName?: string | null;
+  /** Avatar người gửi — client dùng cho push / thông báo hệ thống. */
+  senderAvatar?: string | null;
   type: MessageType;
   content: string;
   encryptedContent: string | null;
