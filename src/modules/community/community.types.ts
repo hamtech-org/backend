@@ -317,3 +317,26 @@ export interface ModerateMessageResult {
   action?: 'censor' | 'block';
   matchedKeywords?: string[];
 }
+
+export interface ICommunityAnalyticsPoint {
+  date: string;
+  newMembers: number;
+  leftMembers: number;
+  netGrowth: number;
+  posts: number;
+  comments: number;
+  messages: number;
+}
+
+export interface ICommunityAnalyticsDashboard {
+  groupId: string;
+  summary: {
+    totalMembers: number;
+    totalPosts: number;
+    totalComments: number;
+    totalMessages: number;
+    activeInteractionsCount: number;
+  };
+  trend: ICommunityAnalyticsPoint[];
+  topPosts: IPost[];
+}

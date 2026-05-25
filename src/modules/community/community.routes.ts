@@ -132,4 +132,7 @@ router.put(
   communityController.updateAutoModSettings,
 );
 
+// Analytics Routes
+router.get('/:groupId/analytics', authenticate, communityController.getAnalytics);
+
 export default router;

@@ -98,7 +98,6 @@ const decodeDynamoCursor = (cursor?: string): Record<string, unknown> | undefine
     return undefined;
   }
 };
-
 const emitPostIndexEvent = async (event: ISearchIndexEvent): Promise<void> => {
   try {
     const producer = getKafkaProducer();
@@ -121,6 +120,29 @@ const emitPostIndexEvent = async (event: ISearchIndexEvent): Promise<void> => {
   }
 };
 
+const emitAnalyticsEvent = async (
+  type: 'POST_CREATED' | 'POST_DELETED' | 'COMMENT_CREATED' | 'COMMENT_DELETED',
+  groupId: string,
+): Promise<void> => {
+  try {
+    const producer = getKafkaProducer();
+    await producer.send({
+      topic: KAFKA_TOPICS.ANALYTICS_EVENTS,
+      messages: [
+        {
+          key: groupId,
+          value: JSON.stringify({
+            type,
+            groupId,
+            timestamp: Date.now(),
+          }),
+        },
+      ],
+    });
+  } catch (error) {
+    logger.error(`Emit analytics event failed for group ${groupId}, type ${type}:`, error);
+  }
+};
 const comparePostsDesc = (a: IPost, b: IPost): number => {
   const createdDiff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
   if (createdDiff !== 0) return createdDiff;
@@ -422,6 +444,7 @@ export const newsfeedService = {
           now,
           nowDate.getTime(),
         );
+        void emitAnalyticsEvent('POST_CREATED', groupId);
       }
     }
 
@@ -621,6 +644,7 @@ export const newsfeedService = {
         postId,
         new Date(existing.createdAt).getTime(),
       );
+      void emitAnalyticsEvent('POST_DELETED', existing.groupId);
 
       if (isModeratorDelete) {
         const postSnippet = existing.content ? existing.content.substring(0, 100) : 'Bài viết';
@@ -825,6 +849,10 @@ export const newsfeedService = {
     await newsfeedRepository.createComment(postId, comment);
     const nextCommentsCount = (post.commentsCount ?? 0) + 1;
     await newsfeedRepository.updatePost(postId, { commentsCount: nextCommentsCount });
+
+    if (post.groupId) {
+      void emitAnalyticsEvent('COMMENT_CREATED', post.groupId);
+    }
 
     // Increment parent's repliesCount when this is a reply
     if (parentId) {

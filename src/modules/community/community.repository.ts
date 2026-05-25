@@ -1034,7 +1034,6 @@ export const communityRepository = {
     const items = result.Items as ICommunity[] | undefined;
     return items && items.length > 0 ? items[0] : null;
   },
-
   updateCommunityInviteCode: async (
     groupId: string,
     inviteCode: string | null,
@@ -1071,5 +1070,50 @@ export const communityRepository = {
         }),
       );
     }
+  },
+
+  incrementAnalyticsCounter: async (
+    groupId: string,
+    date: string,
+    field: 'newMembersCount' | 'leftMembersCount' | 'postsCount' | 'commentsCount',
+    value: number,
+  ): Promise<void> => {
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: GROUPS_TABLE,
+        Key: { PK: `GROUP#${groupId}#ANALYTICS`, SK: `DATE#${date}` },
+        UpdateExpression:
+          'ADD #field :val SET updatedAt = :now, groupId = :groupId, #dateAttr = :date',
+        ExpressionAttributeNames: {
+          '#field': field,
+          '#dateAttr': 'date',
+        },
+        ExpressionAttributeValues: {
+          ':val': value,
+          ':now': new Date().toISOString(),
+          ':groupId': groupId,
+          ':date': date,
+        },
+      }),
+    );
+  },
+
+  getAnalyticsTrend: async (
+    groupId: string,
+    fromDate: string,
+    toDate: string,
+  ): Promise<Record<string, any>[]> => {
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: GROUPS_TABLE,
+        KeyConditionExpression: 'PK = :pk AND SK BETWEEN :startSK AND :endSK',
+        ExpressionAttributeValues: {
+          ':pk': `GROUP#${groupId}#ANALYTICS`,
+          ':startSK': `DATE#${fromDate}`,
+          ':endSK': `DATE#${toDate}`,
+        },
+      }),
+    );
+    return result.Items ?? [];
   },
 };

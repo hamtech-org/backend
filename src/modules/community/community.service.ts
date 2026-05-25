@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { dynamoClient } from '@/config/database.js';
 import { env } from '@/config/env.js';
+import { esClient } from '@/config/elasticsearch.js';
 import { TransactWriteCommand, GetCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { conversationService } from '@/modules/chat/conversation/conversation.service.js';
 import { conversationRepository } from '@/modules/chat/conversation/conversation.repository.js';
@@ -50,6 +51,8 @@ import type {
   IInviteFriendsDto,
   ICommunityInvitation,
   ICommunityInvitationsPage,
+  ICommunityAnalyticsPoint,
+  ICommunityAnalyticsDashboard,
 } from './community.types.js';
 
 type ISearchIndexEvent = {
@@ -132,6 +135,36 @@ const emitCommunityIndexEvent = async (event: ISearchIndexEvent): Promise<void> 
     });
   } catch (error) {
     logger.error(`Emit search.index event failed for community ${event.documentId}:`, error);
+  }
+};
+
+const emitAnalyticsEvent = async (
+  type:
+    | 'MEMBER_JOINED'
+    | 'MEMBER_LEFT'
+    | 'POST_CREATED'
+    | 'POST_DELETED'
+    | 'COMMENT_CREATED'
+    | 'COMMENT_DELETED',
+  groupId: string,
+): Promise<void> => {
+  try {
+    const producer = getKafkaProducer();
+    await producer.send({
+      topic: KAFKA_TOPICS.ANALYTICS_EVENTS,
+      messages: [
+        {
+          key: groupId,
+          value: JSON.stringify({
+            type,
+            groupId,
+            timestamp: Date.now(),
+          }),
+        },
+      ],
+    });
+  } catch (error) {
+    logger.error(`Emit analytics event failed for group ${groupId}, type ${type}:`, error);
   }
 };
 
@@ -734,6 +767,7 @@ export const communityService = {
         await communityRepository.putOpenMember(
           buildMember(groupId, userId, 'member', joinedAt, joinedAtMs),
         );
+        void emitAnalyticsEvent('MEMBER_JOINED', groupId);
       } catch (error) {
         if (isConditionalFailure(error)) {
           return {
@@ -806,6 +840,7 @@ export const communityService = {
       throw new ValidationError('Owner phải chuyển quyền trước khi rời cộng đồng');
     }
     await communityRepository.leaveCommunity(groupId, userId);
+    void emitAnalyticsEvent('MEMBER_LEFT', groupId);
 
     try {
       const producer = getKafkaProducer();
@@ -878,6 +913,7 @@ export const communityService = {
           'member',
           targetName,
         );
+        void emitAnalyticsEvent('MEMBER_JOINED', groupId);
       } catch (error) {
         if (!isConditionalFailure(error)) throw error;
       }
@@ -936,6 +972,7 @@ export const communityService = {
     const targetName = targetUser?.displayName ?? targetUserId;
 
     await communityRepository.banMember(groupId, targetUserId);
+    void emitAnalyticsEvent('MEMBER_LEFT', groupId);
     await communityService.writeModerationLog(
       actorId,
       groupId,
@@ -2205,6 +2242,7 @@ export const communityService = {
 
     // Chấp nhận và xóa invite
     await communityRepository.acceptInvitation(invite, member, userId);
+    void emitAnalyticsEvent('MEMBER_JOINED', groupId);
 
     // Ghi Moderation Log
     const targetUser = await userRepository.findById(userId);
@@ -2324,6 +2362,7 @@ export const communityService = {
 
     // Sử dụng putOpenMember (hoặc hàm ghi trực tiếp của repository)
     await communityRepository.putOpenMember(member);
+    void emitAnalyticsEvent('MEMBER_JOINED', groupId);
 
     // Ghi Moderation Log
     const targetUser = await userRepository.findById(userId);
@@ -2426,5 +2465,150 @@ export const communityService = {
     });
 
     return attachViewerState(updated, actorId);
+  },
+
+  getCommunityAnalytics: async (
+    actorId: string,
+    groupId: string,
+    daysRange: number = 30,
+  ): Promise<ICommunityAnalyticsDashboard> => {
+    await communityService.assertCommunityRole(actorId, groupId, ['owner', 'admin', 'moderator']);
+    const community = await requireActiveCommunity(groupId);
+
+    // Calculate dates range
+    const toDate = new Date();
+    const fromDate = new Date();
+    fromDate.setDate(toDate.getDate() - (daysRange - 1));
+
+    const formatDateLocal = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+    const toStr = formatDateLocal(toDate);
+    const fromStr = formatDateLocal(fromDate);
+
+    // Fetch DynamoDB Trend Points
+    const dynamoTrend = await communityRepository.getAnalyticsTrend(groupId, fromStr, toStr);
+
+    // Query messages from Elasticsearch using Date Histogram Aggregation
+    const messageCountsByDate: Record<string, number> = {};
+    if (community.conversationId) {
+      try {
+        const fromIso = new Date(fromDate.setHours(0, 0, 0, 0)).toISOString();
+        const toIso = new Date(toDate.setHours(23, 59, 59, 999)).toISOString();
+
+        const messagesRes = await esClient.search({
+          index: 'messages',
+          size: 0,
+          query: {
+            bool: {
+              filter: [
+                { term: { conversationId: community.conversationId } },
+                { range: { createdAt: { gte: fromIso, lte: toIso } } },
+              ],
+            },
+          },
+          aggs: {
+            messages_by_day: {
+              date_histogram: {
+                field: 'createdAt',
+                calendar_interval: 'day',
+                min_doc_count: 0,
+              },
+            },
+          },
+        });
+
+        const aggs = messagesRes.aggregations as any;
+        const buckets = aggs?.messages_by_day?.buckets ?? [];
+        for (const bucket of buckets) {
+          const dateKey = bucket.key_as_string
+            ? bucket.key_as_string.split('T')[0]
+            : new Date(bucket.key).toISOString().split('T')[0];
+          messageCountsByDate[dateKey] = bucket.doc_count;
+        }
+      } catch (err) {
+        logger.error(`Failed to aggregate messages from ES for community ${groupId}:`, err);
+      }
+    }
+
+    // Fetch 50 most recent posts from content index and pick top 5 based on engagement
+    let topPosts: IPost[] = [];
+    try {
+      const page = await communityRepository.listContentIndex(groupId, 'post', 50);
+      const rawPosts = await Promise.all(
+        page.items.map((item: ICommunityContentIndex) =>
+          newsfeedRepository.getPostById(item.contentId),
+        ),
+      );
+      const validPosts = rawPosts.filter((item): item is IPost => !!item);
+      const enrichedPosts = await enrichPosts(validPosts, actorId);
+
+      const scoredPosts = enrichedPosts.map((post) => {
+        const reactions = Object.values(post.reactionsCount ?? {}).reduce(
+          (a: number, b: number) => a + b,
+          0,
+        );
+        const comments = post.commentsCount ?? 0;
+        const score = reactions + comments * 2;
+        return { post, score };
+      });
+
+      scoredPosts.sort((a, b) => b.score - a.score);
+      topPosts = scoredPosts.slice(0, 5).map((sp) => sp.post);
+    } catch (err) {
+      logger.error(`Failed to fetch top posts for community ${groupId}:`, err);
+    }
+
+    // Merge databases, ES and do gap filling for days without any activity
+    const trendMap = new Map<string, any>();
+    for (const item of dynamoTrend) {
+      trendMap.set(item.date, item);
+    }
+
+    const trend: ICommunityAnalyticsPoint[] = [];
+    let totalComments = 0;
+    let totalMessages = 0;
+    let totalPosts = 0;
+
+    const currentDate = new Date(fromDate);
+    while (currentDate <= toDate) {
+      const dateStr = formatDateLocal(currentDate);
+      const dbPoint = trendMap.get(dateStr) || {};
+
+      const newMembers = dbPoint.newMembersCount ?? 0;
+      const leftMembers = dbPoint.leftMembersCount ?? 0;
+      const posts = dbPoint.postsCount ?? 0;
+      const comments = dbPoint.commentsCount ?? 0;
+      const messages = messageCountsByDate[dateStr] ?? 0;
+
+      totalPosts += posts;
+      totalComments += comments;
+      totalMessages += messages;
+
+      trend.push({
+        date: dateStr,
+        newMembers,
+        leftMembers,
+        netGrowth: newMembers - leftMembers,
+        posts,
+        comments,
+        messages,
+      });
+
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+
+    return {
+      groupId,
+      summary: {
+        totalMembers: community.memberCount ?? 0,
+        totalPosts: community.postCount ?? 0,
+        totalComments,
+        totalMessages,
+        activeInteractionsCount: totalPosts + totalComments + totalMessages,
+      },
+      trend,
+      topPosts,
+    };
   },
 };

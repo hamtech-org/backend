@@ -435,4 +435,18 @@ export const communityController = {
       next(error);
     }
   },
+
+  getAnalytics: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const days = req.query.days ? Number(req.query.days) : 30;
+      const dashboard = await communityService.getCommunityAnalytics(
+        req.user!.userId,
+        req.params.groupId,
+        days,
+      );
+      sendSuccess(res, dashboard);
+    } catch (error) {
+      next(error);
+    }
+  },
 };

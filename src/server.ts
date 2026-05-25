@@ -9,8 +9,8 @@ import { ensureCollectionExists } from '@/shared/utils/rekognition.js';
 import { startSearchConsumer } from './modules/search/search.consumer.js';
 import { startNotificationConsumer } from './modules/notification/notification.consumer.js';
 import { startCommunityConsumer } from './modules/community/community.consumer.js';
+import { startAnalyticsConsumer } from './modules/community/analytics.consumer.js';
 import { startTaskDueReminderJob } from '@/modules/chat/task/task.reminder.job.js';
-
 import { elasticsearchUtils } from '@/shared/utils/elasticsearch.js';
 
 const server = http.createServer(app);
@@ -23,6 +23,7 @@ const startServer = async (): Promise<void> => {
     await startSearchConsumer();
     await startNotificationConsumer();
     await startCommunityConsumer();
+    await startAnalyticsConsumer();
     await ensureCollectionExists();
     initializeSocket(server);
     startTaskDueReminderJob();
