@@ -196,6 +196,9 @@ async function assertMemberGroupPermission(
   const c = await conversationRepository.getConversationById(conversationId);
   if (!c) throw new NotFoundError('Hội thoại');
   if (c.type !== 'group') return;
+  if (c.groupId && c.chatEnabled === false) {
+    throw new ForbiddenError('Trò chuyện đã bị tắt bởi quản trị viên Cộng đồng');
+  }
   const member = await conversationRepository.getMember(conversationId, userId);
   if (!member) throw new ForbiddenError('Bạn không phải thành viên nhóm');
 
@@ -280,6 +283,12 @@ export const groupService = {
       throw new ForbiddenError('Bạn không phải thành viên của nhóm này');
     }
 
+    if (conversation.groupId && (data.name !== undefined || data.avatar !== undefined)) {
+      throw new ForbiddenError(
+        'Không thể cập nhật tên hoặc ảnh đại diện của nhóm chat cộng đồng. Vui lòng cập nhật từ phần cài đặt cộng đồng.',
+      );
+    }
+
     if (data.name !== undefined || data.avatar !== undefined) {
       await assertMemberGroupPermission(requesterId, conversationId, 'changeNameAvatar');
     }
@@ -340,6 +349,11 @@ export const groupService = {
     const conversation = await conversationRepository.getConversationById(conversationId);
     if (!conversation) throw new NotFoundError('Nhóm');
     if (conversation.type !== 'group') throw new ForbiddenError('Đây không phải nhóm chat');
+    if (conversation.groupId) {
+      throw new ForbiddenError(
+        'Không thể giải tán nhóm chat cộng đồng trực tiếp. Vui lòng tắt tính năng chat hoặc lưu trữ cộng đồng trong phần cài đặt cộng đồng.',
+      );
+    }
     const requesterMember = await conversationRepository.getMember(conversationId, requesterId);
     if (!requesterMember) throw new ForbiddenError('Bạn không phải thành viên nhóm');
     const disbandRole = resolveMemberRole(requesterMember, conversation);
@@ -380,19 +394,17 @@ export const groupService = {
   ): Promise<{ memberCount: number }> => {
     const member = await conversationRepository.getMember(conversationId, userId);
     if (!member) throw new NotFoundError('Thành viên nhóm');
-
     const conv = await conversationRepository.getConversationById(conversationId);
     if (!conv || conv.type !== 'group') throw new NotFoundError('Nhóm');
 
     const allMembers = await conversationRepository.getConversationMembers(conversationId);
     const currentCount = allMembers.length;
     const afterLeave = currentCount - 1;
-    if (afterLeave < MIN_GROUP_MEMBERS) {
+    if (!conv.groupId && afterLeave < MIN_GROUP_MEMBERS) {
       throw new ValidationError(
         `Nhóm cần tối thiểu ${MIN_GROUP_MEMBERS} thành viên. Hiện có ${currentCount} người — không thể rời nhóm (mời thêm thành viên hoặc dùng giải tán nhóm).`,
       );
     }
-
     const leaverRole = resolveMemberRole(member, conv);
     if (leaverRole !== 'owner') {
       let leaverLabel = resolveChatMemberLabel(userId, null);
@@ -545,6 +557,14 @@ export const groupService = {
     conversationId: string,
     data: IAddMembersDto,
   ): Promise<{ memberCount: number; autoJoinedUserIds: string[] }> => {
+    const convMeta = await conversationRepository.getConversationById(conversationId);
+    if (!convMeta || convMeta.type !== 'group') throw new NotFoundError('Nhóm');
+    if (convMeta.groupId) {
+      throw new ForbiddenError(
+        'Không thể thêm thành viên trực tiếp vào nhóm chat cộng đồng. Thành viên phải tham gia cộng đồng trước.',
+      );
+    }
+
     const member = await conversationRepository.getMember(conversationId, requesterId);
     if (!member || !['owner', 'admin', 'member'].includes(member.role)) {
       throw new ForbiddenError('Bạn không có quyền thêm thành viên');
@@ -575,7 +595,6 @@ export const groupService = {
       return { memberCount: memberCountBefore, autoJoinedUserIds: [] };
     }
 
-    const convMeta = await conversationRepository.getConversationById(conversationId);
     const mergedSettings = mergeGroupSettings(convMeta?.groupSettings);
 
     await Promise.all(
@@ -640,15 +659,15 @@ export const groupService = {
       throw new ForbiddenError('Chỉ Admin/Owner mới có quyền xóa thành viên');
     }
 
+    const conversation = await conversationRepository.getConversationById(conversationId);
+    if (!conversation || conversation.type !== 'group') throw new NotFoundError('Nhóm');
+
     const allMembers = await conversationRepository.getConversationMembers(conversationId);
-    if (allMembers.length <= MIN_GROUP_MEMBERS) {
+    if (!conversation.groupId && allMembers.length <= MIN_GROUP_MEMBERS) {
       throw new ValidationError(
         `Nhóm cần tối thiểu ${MIN_GROUP_MEMBERS} thành viên — không thể mời thành viên ra khi nhóm chỉ còn ${allMembers.length} người.`,
       );
     }
-
-    const conversation = await conversationRepository.getConversationById(conversationId);
-    if (!conversation || conversation.type !== 'group') throw new NotFoundError('Nhóm');
 
     const trimmedTarget = targetUserId.trim();
     const resolved = await conversationRepository.resolveMemberForRemoval(
@@ -759,6 +778,11 @@ export const groupService = {
     const conversation = await conversationRepository.getConversationById(conversationId);
     if (!conversation) throw new NotFoundError('Nhóm');
     if (conversation.type !== 'group') throw new ForbiddenError('Đây không phải nhóm chat');
+    if (conversation.groupId) {
+      throw new ForbiddenError(
+        'Không thể thay đổi vai trò thành viên nhóm chat cộng đồng trực tiếp. Vui lòng cập nhật vai trò từ phần cài đặt thành viên cộng đồng.',
+      );
+    }
 
     const requesterMember = await conversationRepository.getMember(conversationId, requesterId);
     const requesterRole = resolveMemberRole(requesterMember, conversation);
@@ -852,6 +876,11 @@ export const groupService = {
     if (!conversation) throw new NotFoundError('Nhóm');
     if (conversation.type !== 'group') throw new ForbiddenError('Đây không phải nhóm chat');
     if (conversation.isDeleted) throw new ForbiddenError('Nhóm đã được giải tán');
+    if (conversation.groupId) {
+      throw new ForbiddenError(
+        'Không thể chuyển quyền trưởng nhóm chat cộng đồng trực tiếp. Vui lòng chuyển quyền sở hữu cộng đồng từ phần cài đặt cộng đồng.',
+      );
+    }
 
     const requester = await conversationRepository.getMember(conversationId, requesterId);
     if (!requester || resolveMemberRole(requester, conversation) !== 'owner') {

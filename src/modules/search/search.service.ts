@@ -1,6 +1,7 @@
 import { esClient } from '@/config/elasticsearch.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { conversationRepository } from '@/modules/chat/conversation/conversation.repository.js';
+import { communityRepository } from '@/modules/community/community.repository.js';
 import type {
   ISearchResult,
   ISearchOptions,
@@ -315,24 +316,89 @@ export const searchService = {
               },
             ],
             minimum_should_match: 1,
+            filter: [{ term: { isActive: true } }, { term: { status: 'active' } }],
           },
         },
-        _source: ['groupId', 'name', 'description', 'memberCount', 'type'],
+        _source: [
+          'groupId',
+          'communityId',
+          'name',
+          'description',
+          'slug',
+          'avatar',
+          'coverUrl',
+          'category',
+          'memberCount',
+          'type',
+        ],
         track_total_hits: true,
       });
 
+      // Extract unique groupIds of all private communities in the search hits to check membership
+      const privateGroupIds = options.userId
+        ? Array.from(
+            new Set(
+              result.hits.hits
+                .map((hit) => hit._source as ISearchGroupResult)
+                .filter((source) => {
+                  const isCommunity = !!source.communityId || !!source.slug;
+                  return isCommunity && source.type === 'private';
+                })
+                .map((source) => source.groupId),
+            ),
+          )
+        : [];
+
+      const joinedPrivateCommunityIds = new Set<string>();
+      if (options.userId && privateGroupIds.length > 0) {
+        try {
+          const memberItems = await communityRepository.batchGetMembers(
+            privateGroupIds,
+            options.userId,
+          );
+          for (const m of memberItems) {
+            if (m.status === 'active') {
+              joinedPrivateCommunityIds.add(m.groupId);
+            }
+          }
+        } catch (err) {
+          console.error('Error batch getting community memberships in search service:', err);
+        }
+      }
+
       let items: ISearchGroupResult[] = result.hits.hits
-        .map((hit) => {
+        .map((hit): ISearchGroupResult | null => {
           const source = hit._source as ISearchGroupResult;
-          if (options.userId && !visibleGroupById.has(source.groupId)) return null;
+          const isCommunity = !!source.communityId || !!source.slug;
+
+          if (isCommunity) {
+            // For communities:
+            // - Public communities are visible to everyone.
+            // - Private communities are only visible to active members.
+            if (source.type === 'private') {
+              if (!options.userId || !joinedPrivateCommunityIds.has(source.groupId)) {
+                return null;
+              }
+            }
+          } else {
+            // For standard chat groups (if any ever get indexed):
+            // Must belong to the group chat conversation to see it.
+            if (options.userId && !visibleGroupById.has(source.groupId)) return null;
+          }
+
           const visible = visibleGroupById.get(source.groupId);
           return {
             groupId: source.groupId,
+            communityId: source.communityId,
             name: visible?.name ?? source.name,
             description:
               typeof (visible as { description?: unknown } | undefined)?.description === 'string'
                 ? ((visible as { description?: string }).description ?? null)
                 : source.description || null,
+            slug: source.slug,
+            avatar: source.avatar ?? null,
+            coverUrl: source.coverUrl ?? null,
+            category: source.category,
             memberCount: visible?.memberCount ?? source.memberCount,
             type: visible?.type ?? source.type,
           };

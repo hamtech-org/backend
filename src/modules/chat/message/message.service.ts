@@ -18,7 +18,9 @@ import { logger } from '@/shared/utils/logger.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { mediaService } from '@/modules/media/media.service.js';
 import { groupService } from '../group/group.service.js';
+import { automodService } from '@/modules/community/automod.service.js';
 import { groupRecapSessionService } from '../recap/recap-session.service.js';
+
 import {
   isMessageHiddenFromViewer,
   syncConversationLastMessageMeta,
@@ -524,6 +526,37 @@ export const messageService = {
       }
     }
 
+    let moderationMetadata: any = null;
+
+    // Tích hợp Auto-Mod cho phòng chat liên kết Cộng đồng
+    if (conversation.groupId) {
+      const modResult = await automodService.moderateMessage({
+        groupId: conversation.groupId,
+        conversationId,
+        senderId,
+        content: data.content,
+        messageType: data.type,
+      });
+
+      if (!modResult.allowed) {
+        throw new AppError(
+          'Tin nhắn của bạn vi phạm tiêu chuẩn cộng đồng của nhóm.',
+          403,
+          'MESSAGE_BLOCKED_BY_AUTOMOD',
+        );
+      }
+
+      // Ghi đè nội dung sạch
+      data.content = modResult.content;
+
+      if (modResult.action === 'censor') {
+        moderationMetadata = {
+          autoModerated: true,
+          action: 'censor',
+        };
+      }
+    }
+
     const now = new Date().toISOString();
     const messageId = uuidv4();
 
@@ -575,6 +608,7 @@ export const messageService = {
       createdAt: now,
       updatedAt: now,
       ...(conversation.type === 'direct' ? { outboundStatus: 'sent' as MessageStatus } : {}),
+      ...(moderationMetadata ? { moderation: moderationMetadata } : {}),
     };
 
     await conversationRepository.createMessage(message);
@@ -784,9 +818,32 @@ export const messageService = {
       throw new ForbiddenError('Chỉ có thể sửa tin nhắn dạng chữ');
     }
 
+    const conversation = await conversationRepository.getConversationById(conversationId);
+    let finalContent = content;
+
+    if (conversation && conversation.groupId) {
+      const modResult = await automodService.moderateMessage({
+        groupId: conversation.groupId,
+        conversationId,
+        senderId,
+        content,
+        messageType: message.type,
+      });
+
+      if (!modResult.allowed) {
+        throw new AppError(
+          'Tin nhắn chỉnh sửa của bạn vi phạm tiêu chuẩn cộng đồng.',
+          403,
+          'MESSAGE_BLOCKED_BY_AUTOMOD',
+        );
+      }
+
+      finalContent = modResult.content;
+    }
+
     const sortKey = `MSG#${message.createdAt}#${messageId}`;
     await conversationRepository.updateMessage(conversationId, messageId, sortKey, {
-      content,
+      content: finalContent,
       isEdited: true,
     });
     await emitMessageSearchIndexEvent({
@@ -796,7 +853,7 @@ export const messageService = {
         messageId,
         conversationId,
         senderId,
-        content: content.trim(),
+        content: finalContent.trim(),
         createdAt: message.createdAt,
       },
     });

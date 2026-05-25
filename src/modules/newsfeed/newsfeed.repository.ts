@@ -621,7 +621,7 @@ export const newsfeedRepository = {
 
   createReport: async (report: {
     reportId: string;
-    entityType: 'REEL' | 'POST';
+    entityType: 'REEL' | 'POST' | 'GROUP';
     entityId: string;
     reporterId: string;
     reason: string;

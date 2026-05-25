@@ -6,6 +6,8 @@ import type {
   MessageStatus,
 } from '@/shared/types/chat.types.js';
 
+export type { MemberRole };
+
 /** Cài đặt nhóm (META conversation type group). */
 export interface IGroupMemberPermissions {
   changeNameAvatar: boolean;
@@ -55,6 +57,10 @@ export interface IConversation extends TimestampFields {
   groupStatus?: GroupAdminStatus;
   /** META: số tin đang ghim trong hội thoại (đồng bộ khi ghim/bỏ ghim/thu hồi tin). */
   pinnedMessageCount?: number;
+  /** ID của cộng đồng (community/group) liên kết nếu có */
+  groupId?: string | null;
+  /** Cho biết tính năng chat của cộng đồng liên kết có đang bật không */
+  chatEnabled?: boolean;
   /**
    * Trường gộp từ bản ghi MEMBER# của user đang gọi API (danh sách hội thoại / preferences).
    * Không lưu trên META.
@@ -139,6 +145,10 @@ export interface IMessage extends TimestampFields {
    * Chỉ trên tin của chính viewer: ai đã đọc (so `MEMBER.lastReadAt` với `createdAt` của tin).
    */
   readBy?: { userId: string; displayName?: string | null }[];
+  moderation?: {
+    autoModerated: boolean;
+    action: 'censor' | 'block';
+  };
 }
 
 /** Cursor-based paginated response for message loading (oldest → newest). */

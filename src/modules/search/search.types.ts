@@ -38,8 +38,13 @@ export interface ISearchPostResult {
 
 export interface ISearchGroupResult {
   groupId: string;
+  communityId?: string;
   name: string;
   description: string | null;
+  slug?: string;
+  avatar?: string | null;
+  coverUrl?: string | null;
+  category?: string;
   memberCount: number;
   type: string;
 }

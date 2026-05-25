@@ -25,6 +25,10 @@ echo "[3/5] Initializing tables..."
 npx tsx scripts/database/setup-database.ts
 echo ""
 
+echo "[3.5/5] Running database migrations..."
+npm run db:migrate
+echo ""
+
 # echo "[4/5] Seeding data..."
 # npx tsx scripts/database/insert-data.ts
 # echo ""
@@ -35,6 +39,10 @@ echo ""
 
 echo "[5/5] Syncing users to Elasticsearch..." 
 npx tsx scripts/database/sync-users-to-es.ts
+echo ""
+
+echo "[5.5/6] Syncing groups/communities to Elasticsearch..."
+npx tsx scripts/database/sync-groups-to-es.ts
 echo ""
 
 echo "[6/6] Syncing messages to Elasticsearch..."

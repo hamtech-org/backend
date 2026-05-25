@@ -13,6 +13,16 @@ export type NotificationType =
   | 'comment_reply'
   | 'ai_job_done'
   | 'stats_milestone'
+  | 'post_approved'
+  | 'post_rejected'
+  | 'community_chat_enabled'
+  | 'community_invite'
+  | 'community_invite_accepted'
+  | 'community_join_request'
+  | 'community_request_resolved'
+  | 'community_member_kicked'
+  | 'community_role_changed'
+  | 'community_ownership_transferred'
   | 'call_missed';
 
 export type NotificationRoute =
@@ -21,6 +31,7 @@ export type NotificationRoute =
   | 'reel'
   | 'friends'
   | 'profile'
+  | 'community'
   | 'notifications'
   | 'call'
   | 'live'

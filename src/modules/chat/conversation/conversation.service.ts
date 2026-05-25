@@ -7,6 +7,7 @@ import type {
   IConversation,
   IConversationMember,
   ICreateConversationDto,
+  MemberRole,
 } from '../shared/chat.types.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
 import { MAX_PINNED_CHATS_TO_TOP } from '../shared/chat.constants.js';
@@ -332,6 +333,58 @@ export const conversationService = {
     if (Object.keys(updates).length === 0) return;
 
     await conversationRepository.updateMemberPreferences(conversationId, userId, updates);
+  },
+
+  updateGroupId: async (conversationId: string, groupId: string | null): Promise<void> => {
+    await conversationRepository.updateGroupId(conversationId, groupId);
+  },
+
+  addMemberIfNotExist: async (
+    conversationId: string,
+    userId: string,
+    role?: MemberRole,
+  ): Promise<void> => {
+    const existing = await conversationRepository.getMember(conversationId, userId);
+    if (existing) return;
+
+    const now = new Date().toISOString();
+    await conversationRepository.addConversationMember({
+      conversationId,
+      userId,
+      role: role || 'member',
+      joinedAt: now,
+      unreadCount: 0,
+      isMuted: false,
+      isPinnedToTop: false,
+    });
+
+    const members = await conversationRepository.getConversationMembers(conversationId);
+    await conversationRepository.updateConversation(conversationId, {
+      memberCount: members.length,
+    });
+
+    try {
+      let userName = 'Ai đó';
+      try {
+        const users = await userRepository.findByIds([userId]);
+        userName = users[0]?.displayName || 'Ai đó';
+      } catch {
+        // ignore
+      }
+      await createAndBroadcastSystemMessage(
+        {
+          conversationId,
+          senderId: userId,
+          content: `${userName} đã tham gia nhóm`,
+        },
+        {
+          createMessage: conversationRepository.createMessage,
+          updateConversationLastMessage: conversationRepository.updateConversationLastMessage,
+        },
+      );
+    } catch {
+      // ignore
+    }
   },
 
   getConversationAvatar: async (conversationId: string): Promise<Buffer> => {

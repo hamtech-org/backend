@@ -6,10 +6,13 @@ import { getKafkaProducer } from '@/config/kafka.js';
 import { getRedis } from '@/config/redis.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { logger } from '@/shared/utils/logger.js';
-import { NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
+import { NotFoundError, ForbiddenError, ValidationError, AppError } from '@/shared/utils/errors.js';
 import { extractHashtagsFromText, extractMentionsFromText } from '@/shared/utils/hashtags.js';
 import { getIO } from '@/socket/index.js';
 import { notificationService } from '@/modules/notification/notification.service.js';
+import { communityService } from '@/modules/community/community.service.js';
+import { communityRepository } from '@/modules/community/community.repository.js';
+import { automodService } from '@/modules/community/automod.service.js';
 import type {
   IPost,
   IComment,
@@ -95,7 +98,6 @@ const decodeDynamoCursor = (cursor?: string): Record<string, unknown> | undefine
     return undefined;
   }
 };
-
 const emitPostIndexEvent = async (event: ISearchIndexEvent): Promise<void> => {
   try {
     const producer = getKafkaProducer();
@@ -118,6 +120,29 @@ const emitPostIndexEvent = async (event: ISearchIndexEvent): Promise<void> => {
   }
 };
 
+const emitAnalyticsEvent = async (
+  type: 'POST_CREATED' | 'POST_DELETED' | 'COMMENT_CREATED' | 'COMMENT_DELETED',
+  groupId: string,
+): Promise<void> => {
+  try {
+    const producer = getKafkaProducer();
+    await producer.send({
+      topic: KAFKA_TOPICS.ANALYTICS_EVENTS,
+      messages: [
+        {
+          key: groupId,
+          value: JSON.stringify({
+            type,
+            groupId,
+            timestamp: Date.now(),
+          }),
+        },
+      ],
+    });
+  } catch (error) {
+    logger.error(`Emit analytics event failed for group ${groupId}, type ${type}:`, error);
+  }
+};
 const comparePostsDesc = (a: IPost, b: IPost): number => {
   const createdDiff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
   if (createdDiff !== 0) return createdDiff;
@@ -174,6 +199,31 @@ export const newsfeedService = {
           userId: p.authorId,
           displayName: u.displayName ?? p.authorId,
           avatar: u.avatar ?? null,
+        },
+      };
+    });
+  },
+
+  attachCommunityInfo: async (posts: IPost[]): Promise<IPost[]> => {
+    const groupIds = Array.from(
+      new Set(posts.map((p) => p.groupId || p.communityId).filter((id): id is string => !!id)),
+    );
+    if (groupIds.length === 0) return posts;
+
+    const communities = await communityRepository.batchGetCommunities(groupIds);
+    const communityMap = new Map(communities.map((c) => [c.groupId, c]));
+
+    return posts.map((p) => {
+      const gId = p.groupId || p.communityId;
+      if (!gId) return p;
+      const c = communityMap.get(gId);
+      if (!c) return p;
+      return {
+        ...p,
+        communityInfo: {
+          groupId: c.groupId,
+          name: c.name,
+          avatar: c.avatar ?? null,
         },
       };
     });
@@ -287,7 +337,8 @@ export const newsfeedService = {
       viewerUserId,
     );
     const enrichedSaved = await newsfeedService.attachSavedStatus(enrichedReactions, viewerUserId);
-    const enriched = await newsfeedService.attachSharedFromAuthorInfo(enrichedSaved);
+    const enrichedShared = await newsfeedService.attachSharedFromAuthorInfo(enrichedSaved);
+    const enriched = await newsfeedService.attachCommunityInfo(enrichedShared);
     const lastItem = enriched[enriched.length - 1];
     const nextCursor =
       hasMore && lastItem
@@ -302,12 +353,57 @@ export const newsfeedService = {
   },
 
   createPost: async (authorId: string, data: ICreatePostDto): Promise<IPost> => {
-    const now = new Date().toISOString();
+    const groupId = data.groupId ?? data.communityId;
+    let isPendingApproval = false;
+    let memberRole: string = 'member';
+
+    if (groupId) {
+      const member = await communityService.assertActiveMember(authorId, groupId);
+      memberRole = member.role;
+      const community = await communityService.getCommunity(authorId, groupId);
+
+      // Kiểm duyệt nội dung bài viết trước khi tạo
+      const modResult = await automodService.moderateMessage({
+        groupId,
+        conversationId: '',
+        senderId: authorId,
+        content: data.content || '',
+        messageType: 'text',
+      });
+
+      if (!modResult.allowed) {
+        throw new AppError(
+          'Nội dung bài viết vi phạm tiêu chuẩn cộng đồng của nhóm.',
+          403,
+          'POST_BLOCKED_BY_AUTOMOD',
+        );
+      }
+
+      data.content = modResult.content;
+
+      if (
+        community.isPostApprovalRequired &&
+        data.publicationStatus === 'published' &&
+        !['owner', 'admin', 'moderator'].includes(memberRole)
+      ) {
+        isPendingApproval = true;
+      }
+    }
+
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
     const postId = uuidv4();
+
+    const moderationStatus = isPendingApproval
+      ? 'pending'
+      : data.publicationStatus === 'published'
+        ? 'approved'
+        : 'pending';
 
     const post: IPost = {
       postId,
       authorId,
+      ...(groupId ? { groupId, communityId: groupId } : {}),
       content: data.content,
       mediaUrls: data.mediaUrls ?? [],
       type: data.type,
@@ -319,16 +415,41 @@ export const newsfeedService = {
       commentsCount: 0,
       sharesCount: 0,
       viewsCount: 0,
-      isModerated: data.publicationStatus === 'published',
-      moderationStatus: data.publicationStatus === 'published' ? 'approved' : 'pending',
+      isModerated: !isPendingApproval && data.publicationStatus === 'published',
+      moderationStatus,
       createdAt: now,
       updatedAt: now,
     };
 
     await newsfeedRepository.createPost(post);
 
-    // Chỉ index bài publish để search public hoạt động
-    if (post.publicationStatus === 'published') {
+    if (groupId) {
+      if (isPendingApproval) {
+        // Chỉ lưu vào pending index của group, không cộng postCount của group
+        await communityRepository.addPendingContentIndex({
+          groupId,
+          communityId: groupId,
+          contentType: 'post',
+          contentId: postId,
+          authorId,
+          createdAt: now,
+          createdAtMs: nowDate.getTime(),
+        });
+      } else {
+        await communityService.addContentIndex(
+          groupId,
+          'post',
+          postId,
+          authorId,
+          now,
+          nowDate.getTime(),
+        );
+        void emitAnalyticsEvent('POST_CREATED', groupId);
+      }
+    }
+
+    // Chỉ index bài publish đã approved để search public hoạt động
+    if (post.publicationStatus === 'published' && !isPendingApproval) {
       const doc = {
         postId: post.postId,
         authorId: post.authorId,
@@ -339,6 +460,8 @@ export const newsfeedService = {
         publicationStatus: post.publicationStatus,
         tags: post.tags,
         categories: post.categories,
+        groupId: post.groupId,
+        communityId: post.communityId,
       };
 
       await emitPostIndexEvent({
@@ -364,7 +487,8 @@ export const newsfeedService = {
         viewerUserId,
       );
       const [withShared] = await newsfeedService.attachSharedFromAuthorInfo([withReaction]);
-      return withShared;
+      const [withCommunity] = await newsfeedService.attachCommunityInfo([withShared]);
+      return withCommunity;
     };
 
     const publicationStatus = post.publicationStatus ?? 'published';
@@ -400,6 +524,27 @@ export const newsfeedService = {
     if (!existing) throw new NotFoundError('Bài viết');
     if (existing.authorId !== authorId)
       throw new ForbiddenError('Không có quyền chỉnh sửa bài viết');
+
+    // Kiểm duyệt bài viết thuộc cộng đồng khi chỉnh sửa nội dung
+    if (existing.groupId && data.content !== undefined) {
+      const modResult = await automodService.moderateMessage({
+        groupId: existing.groupId,
+        conversationId: '',
+        senderId: authorId,
+        content: data.content,
+        messageType: 'text',
+      });
+
+      if (!modResult.allowed) {
+        throw new AppError(
+          'Nội dung chỉnh sửa bài viết vi phạm tiêu chuẩn cộng đồng của nhóm.',
+          403,
+          'POST_BLOCKED_BY_AUTOMOD',
+        );
+      }
+
+      data.content = modResult.content;
+    }
 
     const existingPublicationStatus = existing.publicationStatus ?? 'published';
     const nextPublicationStatus = data.publicationStatus ?? existingPublicationStatus;
@@ -474,10 +619,46 @@ export const newsfeedService = {
     }
   },
 
-  deletePost: async (postId: string, authorId: string): Promise<void> => {
+  deletePost: async (postId: string, actorId: string): Promise<void> => {
     const existing = await newsfeedRepository.getPostById(postId);
     if (!existing) throw new NotFoundError('Bài viết');
-    if (existing.authorId !== authorId) throw new ForbiddenError('Không có quyền xóa bài viết');
+
+    let isModeratorDelete = false;
+
+    if (existing.authorId !== actorId) {
+      if (existing.groupId) {
+        await communityService.assertCommunityRole(actorId, existing.groupId, [
+          'owner',
+          'admin',
+          'moderator',
+        ]);
+        isModeratorDelete = true;
+      } else {
+        throw new ForbiddenError('Không có quyền xóa bài viết');
+      }
+    }
+
+    if (existing.groupId) {
+      await communityService.deleteCommunityPost(
+        existing.groupId,
+        postId,
+        new Date(existing.createdAt).getTime(),
+      );
+      void emitAnalyticsEvent('POST_DELETED', existing.groupId);
+
+      if (isModeratorDelete) {
+        const postSnippet = existing.content ? existing.content.substring(0, 100) : 'Bài viết';
+        await communityService.writeModerationLog(
+          actorId,
+          existing.groupId,
+          'delete_post',
+          postId,
+          'post',
+          postSnippet,
+          'Xóa bởi Ban quản trị cộng đồng',
+        );
+      }
+    }
 
     await newsfeedRepository.deleteCommentsByPostId(postId);
     await newsfeedRepository.deleteReactionsByPostId(postId);
@@ -629,6 +810,27 @@ export const newsfeedService = {
     const visiblePost = await newsfeedService.getPostById(postId, authorId);
     if (!visiblePost) throw new ForbiddenError('Không có quyền bình luận');
 
+    // Kiểm duyệt bình luận nếu bài viết thuộc cộng đồng
+    if (post.groupId && content) {
+      const modResult = await automodService.moderateMessage({
+        groupId: post.groupId,
+        conversationId: '',
+        senderId: authorId,
+        content: content,
+        messageType: 'text',
+      });
+
+      if (!modResult.allowed) {
+        throw new AppError(
+          'Bình luận của bạn vi phạm tiêu chuẩn cộng đồng của nhóm.',
+          403,
+          'COMMENT_BLOCKED_BY_AUTOMOD',
+        );
+      }
+
+      content = modResult.content;
+    }
+
     const now = new Date().toISOString();
     const commentId = uuidv4();
 
@@ -647,6 +849,10 @@ export const newsfeedService = {
     await newsfeedRepository.createComment(postId, comment);
     const nextCommentsCount = (post.commentsCount ?? 0) + 1;
     await newsfeedRepository.updatePost(postId, { commentsCount: nextCommentsCount });
+
+    if (post.groupId) {
+      void emitAnalyticsEvent('COMMENT_CREATED', post.groupId);
+    }
 
     // Increment parent's repliesCount when this is a reply
     if (parentId) {
@@ -755,7 +961,8 @@ export const newsfeedService = {
     const hashtags = extractHashtagsFromText(caption);
     const mentions = extractMentionsFromText(caption);
 
-    const now = new Date().toISOString();
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
     const reelId = uuidv4();
     const reel: IReel = {
       reelId,
@@ -1370,12 +1577,13 @@ export const newsfeedService = {
       userId,
     );
     const enrichedWithShared = await newsfeedService.attachSharedFromAuthorInfo(enrichedReactions);
+    const enriched = await newsfeedService.attachCommunityInfo(enrichedWithShared);
 
     const enrichedSaved = validItems.map((s, i) => ({
       userId: s.userId,
       postId: s.postId,
       savedAt: s.savedAt,
-      post: { ...enrichedWithShared[i], isSaved: true },
+      post: { ...enriched[i], isSaved: true },
     }));
 
     const hasMore = Boolean(lastEvaluatedKey);
