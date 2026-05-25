@@ -5,6 +5,7 @@ import {
   ScanCommand,
   UpdateItemCommand,
   type AttributeValue,
+  type ScanCommandOutput,
 } from '@aws-sdk/client-dynamodb';
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -63,7 +64,7 @@ export async function up(client: DynamoDBClient, prefix: string): Promise<void> 
   let backfilledCount = 0;
 
   do {
-    const scanResult = await client.send(
+    const scanResult: ScanCommandOutput = await client.send(
       new ScanCommand({
         TableName: tableName,
         ExclusiveStartKey: lastEvaluatedKey,
