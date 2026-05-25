@@ -12,6 +12,38 @@ interface ExpoPushMessage {
   data?: Record<string, unknown>;
   sound?: 'default' | null;
   image?: string;
+  channelId?: string;
+  categoryId?: string;
+}
+
+function pushChannelId(data: INotificationRouteData & Record<string, unknown>): string {
+  const route = String(data?.route ?? '');
+  if (route === 'call') return 'calls';
+  if (route === 'chat') return 'messages';
+  return 'social';
+}
+
+function enrichPushData(
+  data: INotificationRouteData & Record<string, unknown>,
+): INotificationRouteData & Record<string, unknown> {
+  const enriched: INotificationRouteData & Record<string, unknown> = {
+    ...data,
+    notificationKind:
+      data.notificationKind ??
+      (data.route === 'chat'
+        ? 'chat_message'
+        : data.route === 'call'
+          ? 'chat_call_direct'
+          : 'inbox_social'),
+  };
+  if (data.route === 'chat') {
+    const conversationId = String(data.id ?? data.entityId ?? '').trim();
+    if (conversationId) {
+      enriched.notificationId = enriched.notificationId ?? `chat-${conversationId}`;
+      enriched.categoryIdentifier = enriched.categoryIdentifier ?? 'hamtech_message';
+    }
+  }
+  return enriched;
 }
 
 function normalizeBackendAvatarUrl(url: unknown): string | undefined {
@@ -86,7 +118,7 @@ export async function sendExpoPushToUser(
     const normalizedAvatar = normalizeBackendAvatarUrl(rawAvatar);
     logger.info(`[PushAvatar] rawAvatar: ${rawAvatar}, normalizedAvatar: ${normalizedAvatar}`);
 
-    const enrichedData = { ...data };
+    const enrichedData = enrichPushData(data);
     if (normalizedAvatar) {
       enrichedData.callerAvatar = enrichedData.callerAvatar || normalizedAvatar;
       enrichedData.actorAvatar = enrichedData.actorAvatar || normalizedAvatar;
@@ -97,12 +129,19 @@ export async function sendExpoPushToUser(
       enrichedData.imageUrl = enrichedData.imageUrl || normalizedAvatar;
     }
 
+    const channelId = pushChannelId(enrichedData);
+    const categoryId =
+      typeof enrichedData.categoryIdentifier === 'string'
+        ? enrichedData.categoryIdentifier
+        : undefined;
     const messages: ExpoPushMessage[] = expoTokens.map((to) => ({
       to,
       title,
       body,
       data: enrichedData,
       sound: 'default',
+      channelId,
+      ...(categoryId ? { categoryId } : {}),
       ...(normalizedAvatar ? { image: normalizedAvatar } : {}),
     }));
 

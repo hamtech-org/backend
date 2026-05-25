@@ -4,6 +4,7 @@ import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { contactRepository } from '@/modules/contact/contact.repository.js';
 import { createAndBroadcastSystemMessage } from '../shared/system-message.factory.js';
+import { conversationService } from '../conversation/conversation.service.js';
 import { resolveChatMemberLabel } from '../shared/chat.helpers.js';
 import {
   buildGroupMemberInvitedContent,
@@ -95,6 +96,12 @@ async function addMemberDirectlyInternal(
 
   try {
     await broadcastGroupMemberJoinedNotice(conversationId, trimmedTarget);
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    await conversationService.notifyConversationCreatedForUser(conversationId, trimmedTarget);
   } catch {
     /* ignore */
   }

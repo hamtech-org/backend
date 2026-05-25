@@ -26,6 +26,7 @@ import {
 } from '../shared/group-system-message.js';
 import type { MemberRole } from '@/shared/types/chat.types.js';
 import { MAX_GROUP_ADMINS, MIN_GROUP_MEMBERS } from './group.constants.js';
+import { normalizeGroupConversationAvatarStored } from '@/modules/media/mediaUrl.util.js';
 
 const sysMsgDeps = {
   createMessage: conversationRepository.createMessage,
@@ -294,9 +295,16 @@ export const groupService = {
     }
 
     const oldName = conversation.name || '';
-    const oldAvatar = conversation.avatar || '';
-    const nameChanged = Boolean(data.name && data.name !== oldName);
-    const avatarChanged = Boolean(data.avatar && data.avatar !== oldAvatar);
+    const oldAvatarNorm = normalizeGroupConversationAvatarStored(
+      conversation.avatar,
+      conversationId,
+    );
+    const updatePayload: IUpdateGroupDto = { ...data };
+    if (data.avatar !== undefined) {
+      updatePayload.avatar = normalizeGroupConversationAvatarStored(data.avatar, conversationId);
+    }
+    const nameChanged = Boolean(updatePayload.name && updatePayload.name !== oldName);
+    const avatarChanged = Boolean(updatePayload.avatar && updatePayload.avatar !== oldAvatarNorm);
     let requesterName = '';
     try {
       const users = await userRepository.findByIds([requesterId]);
@@ -305,11 +313,17 @@ export const groupService = {
       requesterName = 'Ai đó';
     }
 
-    await conversationRepository.updateConversation(conversationId, data);
+    await conversationRepository.updateConversation(conversationId, updatePayload);
+    const updatedAt = new Date().toISOString();
     const updatedConversation = {
       ...conversation,
-      ...data,
-      updatedAt: new Date().toISOString(),
+      ...updatePayload,
+      conversationId,
+      avatar: normalizeGroupConversationAvatarStored(
+        updatePayload.avatar ?? conversation.avatar,
+        conversationId,
+      ),
+      updatedAt,
       actorId: requesterId,
       actorName: requesterName,
       changed: {
@@ -327,12 +341,12 @@ export const groupService = {
             senderId: requesterId,
             content: buildGroupProfileUpdatedContent(actor, {
               previousName: nameChanged ? oldName : undefined,
-              newName: nameChanged ? data.name : undefined,
+              newName: nameChanged ? updatePayload.name : undefined,
               nameChanged,
               avatarChanged,
             }),
-            ...(avatarChanged && data.avatar
-              ? { mediaUrl: data.avatar, mediaType: 'image' as const }
+            ...(avatarChanged && updatePayload.avatar
+              ? { mediaUrl: updatePayload.avatar, mediaType: 'image' as const }
               : {}),
           },
           sysMsgDeps,

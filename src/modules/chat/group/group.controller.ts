@@ -7,6 +7,7 @@ import {
   forceUserLeaveConversationRoom,
 } from '../shared/chat.broadcast.js';
 import { syncAssignToAllTasksAndNotify } from '../task/task-membership-sync.js';
+import { memberChangePayloadExtras } from '../shared/group-avatar.util.js';
 
 export const groupController = {
   getGroupMembers: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -74,8 +75,16 @@ export const groupController = {
       try {
         const io = getIO();
         const leftAt = new Date().toISOString();
-        const payload = { groupId, conversationId: groupId, userId, leftAt, memberCount };
-        const profilePayload = { groupId, conversationId: groupId, memberCount };
+        const avatarExtras = await memberChangePayloadExtras(groupId);
+        const payload = {
+          groupId,
+          conversationId: groupId,
+          userId,
+          leftAt,
+          memberCount,
+          ...avatarExtras,
+        };
+        const profilePayload = { groupId, conversationId: groupId, memberCount, ...avatarExtras };
         io.to(`conv:${groupId}`).emit('group:member_left', payload);
         io.to(`conv:${groupId}`).emit('group:updated', profilePayload);
         const members = await groupService.getGroupMembers(groupId);
@@ -121,6 +130,7 @@ export const groupController = {
         const io = getIO();
         if (autoJoinedUserIds.length > 0) {
           const joinedAt = new Date().toISOString();
+          const avatarExtras = await memberChangePayloadExtras(gid);
           for (const uid of autoJoinedUserIds) {
             const joinedPayload = {
               groupId: gid,
@@ -128,6 +138,7 @@ export const groupController = {
               userId: uid,
               memberCount,
               joinedAt,
+              ...avatarExtras,
             };
             io.to(`conv:${gid}`).emit('group:member_joined', joinedPayload);
             const members = await groupService.getGroupMembers(gid);
@@ -141,7 +152,19 @@ export const groupController = {
             conversationId: gid,
             memberIds: autoJoinedUserIds,
             memberCount,
+            ...avatarExtras,
           });
+          const profilePayload = {
+            groupId: gid,
+            conversationId: gid,
+            memberCount,
+            ...avatarExtras,
+          };
+          io.to(`conv:${gid}`).emit('group:updated', profilePayload);
+          const membersAfter = await groupService.getGroupMembers(gid);
+          for (const m of membersAfter) {
+            io.to(`user:${m.userId}`).emit('group:updated', profilePayload);
+          }
         } else {
           await emitToConversationAndMembers(gid, 'group:join_request_new', {
             groupId: gid,
@@ -173,8 +196,15 @@ export const groupController = {
       try {
         const io = getIO();
         const uid = req.params.userId;
-        const payload = { groupId: gid, conversationId: gid, userId: uid, memberCount };
-        const profilePayload = { groupId: gid, conversationId: gid, memberCount };
+        const avatarExtras = await memberChangePayloadExtras(gid);
+        const payload = {
+          groupId: gid,
+          conversationId: gid,
+          userId: uid,
+          memberCount,
+          ...avatarExtras,
+        };
+        const profilePayload = { groupId: gid, conversationId: gid, memberCount, ...avatarExtras };
         await forceUserLeaveConversationRoom(gid, uid);
         io.to(`conv:${gid}`).emit('group:member_removed', payload);
         io.to(`conv:${gid}`).emit('group:updated', profilePayload);

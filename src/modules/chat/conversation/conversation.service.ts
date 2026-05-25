@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import sharp from 'sharp';
 import { env } from '@/config/env.js';
+import { normalizeGroupConversationAvatarStored } from '@/modules/media/mediaUrl.util.js';
 import { conversationRepository } from './conversation.repository.js';
 import { messageUserHideRepository } from '../message/message-user-hide.repository.js';
 import type {
@@ -17,7 +18,29 @@ import {
   isConversationNotificationPushMuted,
 } from '../shared/chat.helpers.js';
 import { createAndBroadcastSystemMessage } from '../shared/system-message.factory.js';
+import { emitConversationCreatedToUser } from '../shared/chat.broadcast.js';
+import {
+  buildGroupCreatedContent,
+  buildGroupMemberJoinedContent,
+} from '../shared/group-system-message.js';
 import { createInitialGroupSettings } from '../group/group.service.js';
+
+/** Đẩy hội thoại mới vào sidebar của từng thành viên (web/mobile không cần reload). */
+async function broadcastConversationCreatedToMembers(conversationId: string): Promise<void> {
+  const cid = String(conversationId ?? '').trim();
+  if (!cid) return;
+  const members = await conversationRepository.getConversationMembers(cid);
+  await Promise.all(
+    members.map(async (m) => {
+      try {
+        const conv = await conversationService.getConversationById(cid, m.userId);
+        await emitConversationCreatedToUser(m.userId, conv);
+      } catch {
+        /* best-effort */
+      }
+    }),
+  );
+}
 
 /** Nhóm đã giải tán không hiển thị trong danh sách hội thoại (kể cả khi còn sót bản ghi MEMBER#). */
 function filterDisbandedGroupsFromList(conversations: IConversation[]): IConversation[] {
@@ -107,8 +130,8 @@ export const conversationService = {
 
     const filtered = filterDisbandedGroupsFromList(conversations);
     for (const c of filtered) {
-      if (c.type === 'group' && (!c.avatar || !c.avatar.trim())) {
-        c.avatar = `/api/v1/chat/conversations/${c.conversationId}/avatar`;
+      if (c.type === 'group') {
+        c.avatar = normalizeGroupConversationAvatarStored(c.avatar, c.conversationId);
       }
     }
     return filtered;
@@ -198,7 +221,7 @@ export const conversationService = {
           {
             conversationId,
             senderId: creatorId,
-            content: `${creatorName} đã tạo nhóm${data.name ? ` "${data.name}"` : ''}`,
+            content: buildGroupCreatedContent({ userId: creatorId, name: creatorName }),
           },
           {
             createMessage: conversationRepository.createMessage,
@@ -210,7 +233,28 @@ export const conversationService = {
       }
     }
 
+    try {
+      await broadcastConversationCreatedToMembers(conversationId);
+    } catch {
+      /* ignore socket errors */
+    }
+
     return conversation;
+  },
+
+  notifyConversationCreatedForUser: async (
+    conversationId: string,
+    userId: string,
+  ): Promise<void> => {
+    const cid = String(conversationId ?? '').trim();
+    const uid = String(userId ?? '').trim();
+    if (!cid || !uid) return;
+    try {
+      const conv = await conversationService.getConversationById(cid, uid);
+      await emitConversationCreatedToUser(uid, conv);
+    } catch {
+      /* best-effort */
+    }
   },
 
   getConversationById: async (conversationId: string, userId: string): Promise<IConversation> => {
@@ -222,8 +266,11 @@ export const conversationService = {
     const me = members.find((m) => m.userId === userId);
     if (!me) throw new ForbiddenError('Bạn không phải thành viên của hội thoại này');
 
-    if (conversation.type === 'group' && (!conversation.avatar || !conversation.avatar.trim())) {
-      conversation.avatar = `/api/v1/chat/conversations/${conversationId}/avatar`;
+    if (conversation.type === 'group') {
+      conversation.avatar = normalizeGroupConversationAvatarStored(
+        conversation.avatar,
+        conversationId,
+      );
     }
 
     return {
@@ -375,7 +422,7 @@ export const conversationService = {
         {
           conversationId,
           senderId: userId,
-          content: `${userName} đã tham gia nhóm`,
+          content: buildGroupMemberJoinedContent({ userId, name: userName }),
         },
         {
           createMessage: conversationRepository.createMessage,
@@ -490,7 +537,6 @@ export const conversationService = {
     return baseBg.composite(composites).png().toBuffer();
   },
 };
-
 function getRandomColor(name: string): string {
   const colors = [
     '#f44336',

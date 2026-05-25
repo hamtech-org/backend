@@ -61,3 +61,35 @@ export function extractMediaIdFromUrl(urlStr: string | null | undefined): string
     parseMediaIdFromObjectUrl(urlStr)
   );
 }
+
+const GROUP_CONVERSATION_AVATAR_PATH = /\/(?:api\/v\d+\/)?chat\/conversations\/([^/]+)\/avatar$/i;
+
+/**
+ * Chuẩn hóa avatar nhóm lưu DB / emit socket — path tương đối, không phụ thuộc host client.
+ */
+export function normalizeGroupConversationAvatarStored(
+  avatar: string | null | undefined,
+  conversationId: string,
+): string {
+  const cid = String(conversationId ?? '').trim();
+  const fallback = cid ? `/api/v1/chat/conversations/${cid}/avatar` : '';
+  const trimmed = (avatar ?? '').trim();
+  if (!trimmed) return fallback;
+
+  const mediaId = extractMediaIdFromUrl(trimmed);
+  if (mediaId) return `/api/v1/media/${mediaId}/download`;
+
+  let pathOnly = trimmed.split('?')[0];
+  try {
+    if (/^https?:\/\//i.test(trimmed)) pathOnly = new URL(trimmed).pathname;
+  } catch {
+    /* keep pathOnly */
+  }
+
+  if (GROUP_CONVERSATION_AVATAR_PATH.test(pathOnly) && cid) {
+    return `/api/v1/chat/conversations/${cid}/avatar`;
+  }
+
+  if (pathOnly.startsWith('/api/')) return pathOnly;
+  return trimmed;
+}

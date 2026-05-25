@@ -1,14 +1,12 @@
 import { getIO } from '@/socket/index.js';
-import type { IMessage } from './chat.types.js';
+import type { IConversation, IMessage } from './chat.types.js';
 
 // Lazy import để tránh circular dependency — conversation.repository import sau khi module load xong.
 let _getConversationMembers: ((id: string) => Promise<{ userId: string }[]>) | null = null;
 
 async function getConversationMembers(conversationId: string) {
   if (!_getConversationMembers) {
-    const { conversationRepository } = await import(
-      '../conversation/conversation.repository.js'
-    );
+    const { conversationRepository } = await import('../conversation/conversation.repository.js');
     _getConversationMembers = conversationRepository.getConversationMembers;
   }
   return _getConversationMembers(conversationId);
@@ -26,7 +24,12 @@ export async function broadcastMessageNew(message: IMessage): Promise<void> {
     return;
   }
   const { conversationId } = message;
-  const { outboundStatus: _ob, status: _st, readBy: _rb, ...publicMessage } = message as IMessage & {
+  const {
+    outboundStatus: _ob,
+    status: _st,
+    readBy: _rb,
+    ...publicMessage
+  } = message as IMessage & {
     outboundStatus?: unknown;
     status?: unknown;
     readBy?: unknown;
@@ -72,6 +75,22 @@ export async function emitToConversationAndMembers(
   payload: unknown,
 ): Promise<void> {
   await emitEventsToConversationAndMembers(conversationId, [{ event, payload }]);
+}
+
+/** Sidebar realtime: thêm/cập nhật hội thoại trên danh sách (tạo nhóm, được mời vào nhóm, …). */
+export async function emitConversationCreatedToUser(
+  userId: string,
+  conversation: IConversation,
+): Promise<void> {
+  const uid = String(userId ?? '').trim();
+  if (!uid) return;
+  let io: ReturnType<typeof getIO>;
+  try {
+    io = getIO();
+  } catch {
+    return;
+  }
+  io.to(`user:${uid}`).emit('conversation:created', { conversation });
 }
 
 /** Kick / rời nhóm: buộc socket rời room hội thoại để không còn nhận tin realtime. */

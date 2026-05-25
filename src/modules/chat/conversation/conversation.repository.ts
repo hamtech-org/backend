@@ -301,6 +301,20 @@ export const conversationRepository = {
     );
   },
 
+  /** Chỉ đổi `updatedAt` — dùng bust cache avatar nhóm ghép tự động. */
+  touchConversationUpdatedAt: async (conversationId: string): Promise<void> => {
+    const cid = String(conversationId ?? '').trim();
+    if (!cid) return;
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${cid}`, SK: 'META' },
+        UpdateExpression: 'SET updatedAt = :now',
+        ExpressionAttributeValues: { ':now': new Date().toISOString() },
+      }),
+    );
+  },
+
   getMember: async (
     conversationId: string,
     userId: string,
