@@ -8,6 +8,7 @@ import {
 import { dynamoClient } from '@/config/database.js';
 import { env } from '@/config/env.js';
 import { v4 as uuidv4 } from 'uuid';
+import type { AiAssistantClientAction } from './ai.types.js';
 
 const TABLE = `${env.DYNAMODB_TABLE_PREFIX}AiAssistant`;
 
@@ -19,6 +20,7 @@ export type AiAssistantStoredMessage = {
   role: AiAssistantMessageRole;
   content: string;
   createdAt: string;
+  actions?: AiAssistantClientAction[];
 };
 
 export type AiAssistantPendingTool = {
@@ -97,6 +99,7 @@ export const aiAssistantRepository = {
     threadId: string,
     role: AiAssistantMessageRole,
     content: string,
+    actions?: AiAssistantClientAction[],
   ): Promise<AiAssistantStoredMessage> => {
     const messageId = uuidv4();
     const createdAt = new Date().toISOString();
@@ -112,10 +115,18 @@ export const aiAssistantRepository = {
           role,
           content: trimmed,
           createdAt,
+          ...(actions && actions.length ? { actions } : {}),
         },
       }),
     );
-    return { messageId, threadId, role, content: trimmed, createdAt };
+    return {
+      messageId,
+      threadId,
+      role,
+      content: trimmed,
+      createdAt,
+      ...(actions && actions.length ? { actions } : {}),
+    };
   },
 
   listRecentMessages: async (
@@ -141,6 +152,7 @@ export const aiAssistantRepository = {
       role?: string;
       content?: string;
       createdAt?: string;
+      actions?: AiAssistantClientAction[];
     }>;
     const out: AiAssistantStoredMessage[] = [];
     for (const it of rows) {
@@ -152,6 +164,7 @@ export const aiAssistantRepository = {
         role: it.role,
         content: it.content,
         createdAt: it.createdAt,
+        ...(Array.isArray(it.actions) && it.actions.length ? { actions: it.actions } : {}),
       });
     }
     out.reverse();
@@ -216,6 +229,29 @@ export const aiAssistantRepository = {
         Key: { PK: threadStatePk(threadId), SK: 'PENDING_TOOL' },
       }),
     );
+  },
+
+  claimPendingTool: async (threadId: string, pendingId: string): Promise<boolean> => {
+    try {
+      await dynamoClient.send(
+        new DeleteCommand({
+          TableName: TABLE,
+          Key: { PK: threadStatePk(threadId), SK: 'PENDING_TOOL' },
+          ConditionExpression: 'pendingId = :pendingId',
+          ExpressionAttributeValues: { ':pendingId': pendingId },
+        }),
+      );
+      return true;
+    } catch (err: unknown) {
+      const name =
+        err && typeof err === 'object' && 'name' in err
+          ? String((err as { name?: string }).name)
+          : '';
+      if (name === 'ConditionalCheckFailedException') {
+        return false;
+      }
+      throw err;
+    }
   },
 
   touchDefaultThread: async (userId: string): Promise<void> => {

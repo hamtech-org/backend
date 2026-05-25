@@ -47,7 +47,9 @@ export interface ISearchGroupResult {
 export interface ISearchMessageResult {
   messageId: string;
   conversationId: string;
+  conversationName?: string | null;
   senderId: string;
+  senderDisplayName?: string | null;
   content: string;
   createdAt: string;
 }

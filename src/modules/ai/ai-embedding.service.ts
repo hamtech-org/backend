@@ -6,9 +6,12 @@ type TitanEmbedV2Response = {
   embedding?: number[];
 };
 
-export async function embedText(text: string): Promise<number[]> {
+export async function embedText(text: string, signal?: AbortSignal): Promise<number[]> {
   const input = text?.trim();
   if (!input) return [];
+  if (signal?.aborted) {
+    throw new DOMException('AI request was cancelled', 'AbortError');
+  }
 
   const modelId = env.BEDROCK_EMBEDDING_MODEL_ID;
   const body = JSON.stringify({ inputText: input });
@@ -20,6 +23,7 @@ export async function embedText(text: string): Promise<number[]> {
       accept: 'application/json',
       body: Buffer.from(body, 'utf-8'),
     }),
+    signal ? { abortSignal: signal } : undefined,
   );
 
   const raw = new TextDecoder().decode(res.body);

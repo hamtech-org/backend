@@ -126,6 +126,9 @@ export const conversationService = {
     // Với direct chat, tìm conv đã tồn tại
     if (data.type === 'direct' && allMemberIds.length === 2) {
       const otherId = allMemberIds.find((id) => id !== creatorId)!;
+      if (await userRepository.hasBlockBetween(creatorId, otherId)) {
+        throw new ForbiddenError('Khong the tao hoi thoai vi mot trong hai ben da chan nhau');
+      }
       const existing = await conversationRepository.findDirectConversation(creatorId, otherId);
       if (existing) return existing;
     }

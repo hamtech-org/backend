@@ -9,7 +9,7 @@ import type {
   ISendMessageDto,
 } from '../shared/chat.types.js';
 import type { MessageStatus } from '@/shared/types/chat.types.js';
-import { NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
+import { AppError, NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
 import { MAX_PINNED_MESSAGES_PER_CONVERSATION } from '../shared/chat.constants.js';
 import { getKafkaProducer } from '@/config/kafka.js';
 import { kafkaProducer } from '@/shared/kafka/producer.js';
@@ -18,6 +18,7 @@ import { logger } from '@/shared/utils/logger.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { mediaService } from '@/modules/media/media.service.js';
 import { groupService } from '../group/group.service.js';
+import { groupRecapSessionService } from '../recap/recap-session.service.js';
 import {
   isMessageHiddenFromViewer,
   syncConversationLastMessageMeta,
@@ -505,6 +506,22 @@ export const messageService = {
     if (!conversation) throw new NotFoundError('Hội thoại');
     if (conversation.type === 'group') {
       await groupService.assertUserMaySendMessage(senderId, conversationId);
+    } else {
+      const members = await conversationRepository.getConversationMembers(conversationId);
+      const receiverId = members.find((member) => member.userId !== senderId)?.userId;
+      if (receiverId) {
+        const blockStatus = await userRepository.getBlockStatusBetween(senderId, receiverId);
+        if (blockStatus === 'blocked_by_me') {
+          throw new AppError(
+            'Ban dang chan nguoi dung nay, vui long go chan de tiep tuc nhan tin.',
+            403,
+            'MESSAGE_BLOCKED_BY_ME',
+          );
+        }
+        if (blockStatus === 'blocked_by_other') {
+          throw new AppError('Ban da bi chan boi nguoi dung nay.', 403, 'MESSAGE_BLOCKED_BY_OTHER');
+        }
+      }
     }
 
     const now = new Date().toISOString();
@@ -561,6 +578,14 @@ export const messageService = {
     };
 
     await conversationRepository.createMessage(message);
+
+    if (conversation.type === 'group') {
+      await groupRecapSessionService.dismissPendingSession(
+        conversationId,
+        senderId,
+        'sent_message',
+      );
+    }
 
     const senders = await userRepository.findByIds([senderId]);
     const senderDisplayName = senders[0]?.displayName?.trim() ?? null;
@@ -837,16 +862,48 @@ export const messageService = {
    * Đánh dấu tin nhắn đã đọc, reset unreadCount.
    */
   markAsRead: async (conversationId: string, userId: string, messageId: string): Promise<void> => {
+    const [conv, member, pivot] = await Promise.all([
+      conversationRepository.getConversationById(conversationId),
+      conversationRepository.getMember(conversationId, userId),
+      conversationRepository.findMessageByMessageId(conversationId, messageId),
+    ]);
+    if (!conv) throw new NotFoundError('Hội thoại');
+    if (!member) throw new ForbiddenError('Bạn không phải là thành viên của hội thoại này');
+
+    if (conv.type === 'group' && (member.unreadCount ?? 0) > 0) {
+      try {
+        // Client can mark-read from a stale cached pivot while fresher unread messages are still loading.
+        // Snapshot against the actual latest server-side message so the unread recap is not lost.
+        const latestGroupMessage =
+          (
+            await conversationRepository.listRecentMessages(conversationId, {
+              limit: 1,
+              minCreatedAtMs: resolveMessageHistoryMinCreatedAtMs(conv, member),
+            })
+          )[0] ?? pivot;
+
+        if (!latestGroupMessage) {
+          throw new Error('No message available to capture group recap');
+        }
+
+        await groupRecapSessionService.captureBeforeMarkRead({
+          conversation: conv,
+          member,
+          userId,
+          conversationId,
+          toMessage: latestGroupMessage,
+        });
+      } catch (error) {
+        logger.warn('[group recap] Không thể chụp recap session trước khi mark read:', error);
+      }
+    }
+
     await Promise.all([
       conversationRepository.updateMessageStatus(messageId, userId, 'read'),
       conversationRepository.resetMemberUnreadCount(conversationId, userId),
     ]);
 
-    const conv = await conversationRepository.getConversationById(conversationId);
-    if (!conv || conv.type !== 'direct') return;
-
-    const pivot = await conversationRepository.findMessageByMessageId(conversationId, messageId);
-    if (!pivot) return;
+    if (conv.type !== 'direct' || !pivot) return;
 
     const members = await conversationRepository.getConversationMembers(conversationId);
     const partnerId = members.find((m) => m.userId !== userId)?.userId;

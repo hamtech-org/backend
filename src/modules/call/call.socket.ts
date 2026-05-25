@@ -5,6 +5,7 @@ import { messageService } from '@/modules/chat/message/message.service.js';
 import { broadcastMessageNew } from '@/modules/chat/shared/chat.broadcast.js';
 import { conversationRepository } from '@/modules/chat/conversation/conversation.repository.js';
 import { notificationService } from '@/modules/notification/notification.service.js';
+import { userRepository } from '@/modules/user/user.repository.js';
 import type {
   CallInitiatePayload,
   CallAcceptPayload,
@@ -183,6 +184,16 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
 
     if (!data.calleeId) {
       logger.warn('call:initiate direct: missing calleeId');
+      return;
+    }
+
+    if (await userRepository.hasBlockBetween(userId, data.calleeId)) {
+      socket.emit('call:blocked', {
+        conversationId: data.conversationId,
+        calleeId: data.calleeId,
+        type: data.type,
+      });
+      logger.info(`Call blocked: ${userId} -> ${data.calleeId} (${data.type})`);
       return;
     }
 
