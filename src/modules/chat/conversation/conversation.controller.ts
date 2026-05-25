@@ -74,4 +74,15 @@ export const conversationController = {
       next(error);
     }
   },
+
+  getConversationAvatar: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const buffer = await conversationService.getConversationAvatar(req.params.conversationId);
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.send(buffer);
+    } catch (error) {
+      next(error);
+    }
+  },
 };
