@@ -7,7 +7,6 @@ import {
   ScanCommand,
   TransactWriteCommand,
   UpdateCommand,
-  type QueryCommandOutput,
 } from '@aws-sdk/lib-dynamodb';
 import { dynamoClient } from '@/config/database.js';
 import { env } from '@/config/env.js';
@@ -36,16 +35,6 @@ type PageResult<T> = {
   items: T[];
   lastEvaluatedKey?: Record<string, unknown>;
 };
-
-const isMissingKeySchemaError = (error: unknown): boolean =>
-  typeof error === 'object' &&
-  error !== null &&
-  'name' in error &&
-  'message' in error &&
-  String((error as { name?: string }).name) === 'ValidationException' &&
-  String((error as { message?: string }).message).includes(
-    'Query condition missed key schema element',
-  );
 
 export const communityRepository = {
   getCommunityById: async (groupId: string): Promise<ICommunity | null> => {
@@ -246,35 +235,20 @@ export const communityRepository = {
     limit: number,
     exclusiveStartKey?: Record<string, unknown>,
   ): Promise<PageResult<ICommunityMember>> => {
-    let result: QueryCommandOutput;
-    try {
-      result = await dynamoClient.send(
-        new QueryCommand({
-          TableName: GROUPS_TABLE,
-          IndexName: GSI1,
-          KeyConditionExpression: 'userId = :userId',
-          ExpressionAttributeValues: { ':userId': userId },
-          Limit: limit,
-          ExclusiveStartKey: exclusiveStartKey,
-        }),
-      );
-    } catch (error) {
-      if (!isMissingKeySchemaError(error)) throw error;
-      result = await dynamoClient.send(
-        new QueryCommand({
-          TableName: GROUPS_TABLE,
-          IndexName: GSI1,
-          KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :prefix)',
-          ExpressionAttributeValues: {
-            ':pk': `USER#${userId}`,
-            ':prefix': 'JOINED#',
-          },
-          Limit: limit,
-          ScanIndexForward: false,
-          ExclusiveStartKey: exclusiveStartKey,
-        }),
-      );
-    }
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: GROUPS_TABLE,
+        IndexName: GSI1,
+        KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :prefix)',
+        ExpressionAttributeValues: {
+          ':pk': `USER#${userId}`,
+          ':prefix': 'JOINED#',
+        },
+        Limit: limit,
+        ScanIndexForward: false,
+        ExclusiveStartKey: exclusiveStartKey,
+      }),
+    );
     return {
       items: ((result.Items as ICommunityMember[]) ?? []).filter(
         (item) => item.status === 'active',
