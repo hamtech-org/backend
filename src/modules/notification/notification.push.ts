@@ -10,7 +10,7 @@ interface ExpoPushMessage {
   title: string;
   body: string;
   data?: Record<string, unknown>;
-  sound?: 'default' | null;
+  sound?: 'default' | 'amthanhnhan' | null;
   image?: string;
   channelId?: string;
   categoryId?: string;
@@ -41,6 +41,17 @@ function enrichPushData(
     if (conversationId) {
       enriched.notificationId = enriched.notificationId ?? `chat-${conversationId}`;
       enriched.categoryIdentifier = enriched.categoryIdentifier ?? 'hamtech_message';
+    }
+  }
+  if (data.route === 'call') {
+    const callScope = String(data.callScope ?? '').trim();
+    const isGroup = callScope === 'group';
+    enriched.notificationKind = isGroup ? 'chat_call_group' : 'chat_call_direct';
+    enriched.categoryIdentifier =
+      enriched.categoryIdentifier ?? (isGroup ? 'hamtech_call_group' : 'hamtech_call_direct');
+    const channelName = String(data.channelName ?? data.entityId ?? data.id ?? '').trim();
+    if (channelName) {
+      enriched.notificationId = enriched.notificationId ?? `call-${channelName}`;
     }
   }
   return enriched;
@@ -134,12 +145,13 @@ export async function sendExpoPushToUser(
       typeof enrichedData.categoryIdentifier === 'string'
         ? enrichedData.categoryIdentifier
         : undefined;
+    const pushSound = channelId === 'calls' ? 'amthanhnhan' : 'default';
     const messages: ExpoPushMessage[] = expoTokens.map((to) => ({
       to,
       title,
       body,
       data: enrichedData,
-      sound: 'default',
+      sound: pushSound,
       channelId,
       ...(categoryId ? { categoryId } : {}),
       ...(normalizedAvatar ? { image: normalizedAvatar } : {}),
