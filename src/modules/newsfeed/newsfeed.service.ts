@@ -352,6 +352,42 @@ export const newsfeedService = {
     };
   },
 
+  getPostsByAuthor: async (
+    authorId: string,
+    viewerUserId: string,
+    limit?: number,
+  ): Promise<IFeedPage> => {
+    const pageSize = Math.max(1, Math.min(limit ?? 20, 50));
+    const isSelf = authorId === viewerUserId;
+    const isFriend = isSelf
+      ? true
+      : (await userRepository.getFriendIds(viewerUserId, 200)).includes(authorId);
+
+    const posts = await newsfeedRepository.getPostsByAuthorId(authorId, pageSize);
+    const visible = posts.filter((post) => {
+      const publicationStatus = post.publicationStatus ?? 'published';
+      if (publicationStatus === 'draft') return isSelf;
+      if (post.visibility === 'private') return isSelf;
+      if (post.visibility === 'friends') return isSelf || isFriend;
+      return true;
+    });
+
+    const enrichedAuthors = await newsfeedService.attachAuthorInfo(visible);
+    const enrichedReactions = await newsfeedService.attachCurrentUserReaction(
+      enrichedAuthors,
+      viewerUserId,
+    );
+    const enrichedSaved = await newsfeedService.attachSavedStatus(enrichedReactions, viewerUserId);
+    const enrichedShared = await newsfeedService.attachSharedFromAuthorInfo(enrichedSaved);
+    const enriched = await newsfeedService.attachCommunityInfo(enrichedShared);
+
+    return {
+      items: enriched,
+      nextCursor: null,
+      hasMore: false,
+    };
+  },
+
   createPost: async (authorId: string, data: ICreatePostDto): Promise<IPost> => {
     const groupId = data.groupId ?? data.communityId;
     let isPendingApproval = false;

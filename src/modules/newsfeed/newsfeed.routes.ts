@@ -21,6 +21,7 @@ const router = Router();
 
 router.get('/feed', authenticate, newsfeedController.getFeed);
 router.post('/posts', authenticate, validate(createPostSchema), newsfeedController.createPost);
+router.get('/posts/by-author/:authorId', authenticate, newsfeedController.getPostsByAuthor);
 router.get('/posts/:postId', authenticate, newsfeedController.getPostById);
 router.put(
   '/posts/:postId',
