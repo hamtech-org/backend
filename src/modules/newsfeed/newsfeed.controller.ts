@@ -35,6 +35,20 @@ export const newsfeedController = {
     }
   },
 
+  getPostsByAuthor: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const limit = req.query.limit ? Number(req.query.limit) : undefined;
+      const page = await newsfeedService.getPostsByAuthor(
+        req.params.authorId,
+        req.user!.userId,
+        limit,
+      );
+      sendSuccess(res, page);
+    } catch (error) {
+      next(error);
+    }
+  },
+
   updatePost: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await newsfeedService.updatePost(req.params.postId, req.user!.userId, req.body);
