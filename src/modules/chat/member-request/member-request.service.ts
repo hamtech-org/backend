@@ -2,7 +2,6 @@ import { conversationRepository } from '../conversation/conversation.repository.
 import { memberRequestRepository } from './member-request.repository.js';
 import { NotFoundError, ForbiddenError } from '@/shared/utils/errors.js';
 import { userRepository } from '@/modules/user/user.repository.js';
-import { contactRepository } from '@/modules/contact/contact.repository.js';
 import { createAndBroadcastSystemMessage } from '../shared/system-message.factory.js';
 import { conversationService } from '../conversation/conversation.service.js';
 import { resolveChatMemberLabel } from '../shared/chat.helpers.js';
@@ -151,22 +150,12 @@ export const memberRequestService = {
     }
     const byId = new Map(users.map((u) => [u.userId, u]));
 
-    // Check friend status
-    let friendSet = new Set<string>();
-    try {
-      const friends = await contactRepository.getFriends(requesterId);
-      friendSet = new Set(friends.map((f) => f.friendId));
-    } catch {
-      friendSet = new Set();
-    }
-
     return pendingRequests.map((r) => {
       const u = byId.get(r.userId);
       return {
         ...r,
         name: u?.displayName ?? u?.email ?? r.userId,
         avatar: u?.avatar ?? null,
-        isFriend: friendSet.has(r.userId),
       };
     });
   },
