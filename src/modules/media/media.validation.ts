@@ -44,7 +44,9 @@ function maxBytesForDeclaredType(mediaType: MediaType): number {
 function declaredTypeMatchesMime(declared: MediaType, mime: string): boolean {
   if (declared === 'image') return mime.startsWith('image/');
   if (declared === 'video') return mime.startsWith('video/');
-  if (declared === 'audio') return mime.startsWith('audio/');
+  if (declared === 'audio') {
+    return mime.startsWith('audio/') || mime === 'video/mp4' || mime === 'video/quicktime';
+  }
   return (
     mime.startsWith('application/') ||
     mime === 'application/zip' ||

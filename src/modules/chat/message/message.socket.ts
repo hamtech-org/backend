@@ -24,15 +24,17 @@ const sendMessageSocketSchema = z
       'poll',
       'schedule',
       'call',
+      'voice',
     ]),
     content: z.string().max(10000),
     mediaUrl: z.string().url().optional(),
     mediaId: z.string().uuid().optional(),
     replyTo: z.string().uuid().optional(),
+    duration: z.number().nonnegative().optional(),
   })
   .refine(
     (data) => {
-      const m = ['image', 'video', 'file', 'audio'] as const;
+      const m = ['image', 'video', 'file', 'audio', 'voice'] as const;
       if (!m.includes(data.type as (typeof m)[number])) return true;
       return !!(data.mediaUrl ?? data.mediaId);
     },

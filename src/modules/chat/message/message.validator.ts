@@ -3,15 +3,28 @@ import { z } from 'zod';
 /** PK `CONV#{id}` — chấp nhận UUID (hội thoại app) và id seed/legacy (ví dụ `seed-conv-alice-bob`). */
 export const conversationIdBodySchema = z.string().min(1).max(128);
 
-const mediaishTypes = ['image', 'video', 'file', 'audio'] as const;
+const mediaishTypes = ['image', 'video', 'file', 'audio', 'voice'] as const;
 
 export const sendMessageSchema = z
   .object({
-    type: z.enum(['text', 'image', 'video', 'file', 'sticker', 'emoji', 'location', 'poll', 'schedule','call']),
+    type: z.enum([
+      'text',
+      'image',
+      'video',
+      'file',
+      'sticker',
+      'emoji',
+      'location',
+      'poll',
+      'schedule',
+      'call',
+      'voice',
+    ]),
     content: z.string().max(10000),
     mediaUrl: z.string().url().optional(),
     mediaId: z.string().uuid().optional(),
     replyTo: z.string().uuid().optional(),
+    duration: z.number().nonnegative().optional(),
   })
   .refine(
     (data) => {
