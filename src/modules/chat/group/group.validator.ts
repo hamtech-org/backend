@@ -1,9 +1,18 @@
 import { z } from 'zod';
 
+const appAvatarPathSchema = z
+  .string()
+  .regex(
+    /^\/api\/v\d+\/(?:media\/[0-9a-f-]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/download|chat\/conversations\/[^/]+\/avatar)$/i,
+    'Avatar không hợp lệ',
+  );
+
+const avatarSchema = z.union([z.string().url(), appAvatarPathSchema]);
+
 export const updateGroupSchema = z
   .object({
     name: z.string().min(1).max(100).optional(),
-    avatar: z.string().url().optional(),
+    avatar: avatarSchema.optional(),
   })
   .refine((data) => data.name !== undefined || data.avatar !== undefined, {
     message: 'Phải cung cấp ít nhất một trường để cập nhật (name hoặc avatar)',
