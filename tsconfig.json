@@ -20,7 +20,6 @@
       "@shared/*": ["./src/shared/*"],
       "@config/*": ["./src/config/*"]
     },
-    "baseUrl": ".",
     "ignoreDeprecations": "5.0"
   },
   "include": ["src/**/*"],

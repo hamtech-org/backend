@@ -1,22 +1,26 @@
 import { contactRepository } from './contact.repository.js';
 import { userRepository } from '../user/user.repository.js';
-import type { IContact, IGroup, ICreateGroupDto } from './contact.types.js';
+import type { IGroup, ICreateGroupDto } from './contact.types.js';
 
 export const contactService = {
-  getFriends: async (userId: string): Promise<Array<{
-    userId: string;
-    friendId: string;
-    contactStatus: string;
-    requestedBy: string;
-    createdAt: string;
-    displayName: string;
-    avatar: string | null;
-    email: string;
-    phone: string | null;
-    status: string;
-  }>> => {
+  getFriends: async (
+    userId: string,
+  ): Promise<
+    Array<{
+      userId: string;
+      friendId: string;
+      contactStatus: string;
+      requestedBy: string;
+      createdAt: string;
+      displayName: string;
+      avatar: string | null;
+      email: string;
+      phone: string | null;
+      status: string;
+    }>
+  > => {
     const contacts = await contactRepository.getFriends(userId);
-    
+
     if (contacts.length === 0) {
       console.log('⚠️ No contacts found');
       return [];
@@ -24,13 +28,13 @@ export const contactService = {
 
     // Extract friend IDs from contacts
     const friendIds = contacts.map((c) => c.friendId);
-    
+
     // Fetch user profiles for all friends
     const friendProfiles = await userRepository.findMultipleById(friendIds);
-    
+
     // Create a map for quick lookup
     const profileMap = new Map(friendProfiles.map((p) => [p.userId, p]));
-    
+
     // Enrich contacts with user profile data
     return contacts.map((contact) => {
       const profile = profileMap.get(contact.friendId);
@@ -47,36 +51,6 @@ export const contactService = {
         status: profile?.status || 'offline', // User presence status (online/offline/away)
       };
     });
-  },
-
-  /**
-   * MVP: Kết bạn ngay lập tức (auto-accept) để phục vụ UI "Kết bạn" trong modal thành viên nhóm.
-   * Nếu muốn quy trình lời mời/duyệt kết bạn chuẩn, có thể mở rộng sau.
-   */
-  sendFriendRequest: async (userId: string, targetUserId: string): Promise<void> => {
-    if (!targetUserId || targetUserId === userId) return;
-    const now = new Date().toISOString();
-    await Promise.all([
-      contactRepository.addFriend({
-        userId,
-        friendId: targetUserId,
-        status: 'accepted' as any,
-        requestedBy: userId,
-        createdAt: now,
-      }),
-      contactRepository.addFriend({
-        userId: targetUserId,
-        friendId: userId,
-        status: 'accepted' as any,
-        requestedBy: userId,
-        createdAt: now,
-      }),
-    ]);
-  },
-
-  acceptFriendRequest: async (_userId: string, _requestId: string): Promise<void> => {
-    // TODO: Chấp nhận kết bạn
-    throw new Error('Chưa triển khai');
   },
 
   removeFriend: async (userId: string, friendId: string): Promise<void> => {
