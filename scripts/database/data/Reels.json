@@ -1,0 +1,28 @@
+[
+  {
+    "PK": "REEL#30000000-0000-4000-8000-000000000001",
+    "SK": "META",
+    "GSI2PK": "REEL",
+    "GSI2SK": "2026-05-19T12:00:00.000Z#30000000-0000-4000-8000-000000000001",
+    "reelId": "30000000-0000-4000-8000-000000000001",
+    "authorId": "seed-user-charlie",
+    "videoUrl": "http://localhost:3000/api/v1/media/10000000-0000-4000-8000-000000000006/download",
+    "thumbnailUrl": "http://localhost:3000/api/v1/media/10000000-0000-4000-8000-000000000007/thumbnail",
+    "caption": "Reel demo seed — vertical video cho admin resources.",
+    "durationMs": 32000,
+    "width": 1080,
+    "height": 1920,
+    "aspectRatio": "9:16",
+    "visibility": "public",
+    "processingStatus": "ready",
+    "hashtags": ["hamtech", "demo"],
+    "mentions": [],
+    "viewsCount": 890,
+    "reactionsCount": { "like": 44 },
+    "commentsCount": 6,
+    "sharesCount": 2,
+    "savesCount": 10,
+    "createdAt": "2026-05-19T12:00:00.000Z",
+    "updatedAt": "2026-05-19T12:00:00.000Z"
+  }
+]

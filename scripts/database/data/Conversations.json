@@ -1,0 +1,175 @@
+[
+  {
+    "PK": "CONV#seed-conv-alice-bob",
+    "SK": "META",
+    "conversationId": "seed-conv-alice-bob",
+    "type": "direct",
+    "creatorId": "seed-user-alice",
+    "memberCount": 2,
+    "isEncrypted": false,
+    "lastMessage": {
+      "messageId": "msg-ab-010",
+      "senderId": "seed-user-bob",
+      "content": "Approved! Ship thôi 🚀",
+      "type": "text",
+      "createdAt": "2026-04-09T11:45:00.000Z"
+    },
+    "lastMessageAt": "2026-04-09T11:45:00.000Z",
+    "createdAt": "2026-04-05T08:00:00.000Z",
+    "updatedAt": "2026-04-09T11:45:00.000Z"
+  },
+  {
+    "PK": "CONV#seed-conv-alice-bob",
+    "SK": "MEMBER#seed-user-alice",
+    "userId": "seed-user-alice",
+    "conversationId": "seed-conv-alice-bob",
+    "role": "owner",
+    "joinedAt": "2026-04-05T08:00:00.000Z",
+    "unreadCount": 0,
+    "isMuted": false
+  },
+  {
+    "PK": "CONV#seed-conv-alice-bob",
+    "SK": "MEMBER#seed-user-bob",
+    "userId": "seed-user-bob",
+    "conversationId": "seed-conv-alice-bob",
+    "role": "member",
+    "joinedAt": "2026-04-05T08:00:00.000Z",
+    "unreadCount": 0,
+    "isMuted": false
+  },
+
+  {
+    "PK": "CONV#seed-conv-alice-charlie",
+    "SK": "META",
+    "conversationId": "seed-conv-alice-charlie",
+    "type": "direct",
+    "creatorId": "seed-user-alice",
+    "memberCount": 2,
+    "isEncrypted": false,
+    "lastMessage": {
+      "messageId": "msg-ac-008",
+      "senderId": "seed-user-alice",
+      "content": "Cảm ơn Charlie! Hôm nay productive quá 😄",
+      "type": "text",
+      "createdAt": "2026-04-09T11:40:00.000Z"
+    },
+    "lastMessageAt": "2026-04-09T11:40:00.000Z",
+    "createdAt": "2026-04-05T08:00:00.000Z",
+    "updatedAt": "2026-04-09T11:40:00.000Z"
+  },
+  {
+    "PK": "CONV#seed-conv-alice-charlie",
+    "SK": "MEMBER#seed-user-alice",
+    "userId": "seed-user-alice",
+    "conversationId": "seed-conv-alice-charlie",
+    "role": "owner",
+    "joinedAt": "2026-04-05T08:00:00.000Z",
+    "unreadCount": 0,
+    "isMuted": false
+  },
+  {
+    "PK": "CONV#seed-conv-alice-charlie",
+    "SK": "MEMBER#seed-user-charlie",
+    "userId": "seed-user-charlie",
+    "conversationId": "seed-conv-alice-charlie",
+    "role": "member",
+    "joinedAt": "2026-04-05T08:00:00.000Z",
+    "unreadCount": 0,
+    "isMuted": false
+  },
+
+  {
+    "PK": "CONV#seed-conv-bob-charlie",
+    "SK": "META",
+    "conversationId": "seed-conv-bob-charlie",
+    "type": "direct",
+    "creatorId": "seed-user-bob",
+    "memberCount": 2,
+    "isEncrypted": false,
+    "createdAt": "2026-04-05T08:00:00.000Z",
+    "updatedAt": "2026-04-05T08:00:00.000Z"
+  },
+  {
+    "PK": "CONV#seed-conv-bob-charlie",
+    "SK": "MEMBER#seed-user-bob",
+    "userId": "seed-user-bob",
+    "conversationId": "seed-conv-bob-charlie",
+    "role": "owner",
+    "joinedAt": "2026-04-05T08:00:00.000Z",
+    "unreadCount": 0,
+    "isMuted": false
+  },
+  {
+    "PK": "CONV#seed-conv-bob-charlie",
+    "SK": "MEMBER#seed-user-charlie",
+    "userId": "seed-user-charlie",
+    "conversationId": "seed-conv-bob-charlie",
+    "role": "member",
+    "joinedAt": "2026-04-05T08:00:00.000Z",
+    "unreadCount": 0,
+    "isMuted": false
+  },
+
+  {
+    "PK": "CONV#seed-conv-group-dev",
+    "SK": "META",
+    "conversationId": "seed-conv-group-dev",
+    "type": "group",
+    "name": "Nhóm Dev Zalogram",
+    "creatorId": "seed-user-alice",
+    "leaderId": "seed-user-alice",
+    "memberCount": 4,
+    "isEncrypted": false,
+    "lastMessage": {
+      "messageId": "msg-gr-012",
+      "senderId": "seed-user-diana",
+      "content": "Tốt lắm mọi người! Sprint này xịn 🚀",
+      "type": "text",
+      "createdAt": "2026-04-09T11:50:00.000Z"
+    },
+    "lastMessageAt": "2026-04-09T11:50:00.000Z",
+    "createdAt": "2026-04-03T08:00:00.000Z",
+    "updatedAt": "2026-04-09T11:50:00.000Z"
+  },
+  {
+    "PK": "CONV#seed-conv-group-dev",
+    "SK": "MEMBER#seed-user-alice",
+    "userId": "seed-user-alice",
+    "conversationId": "seed-conv-group-dev",
+    "role": "owner",
+    "joinedAt": "2026-04-03T08:00:00.000Z",
+    "unreadCount": 0,
+    "isMuted": false
+  },
+  {
+    "PK": "CONV#seed-conv-group-dev",
+    "SK": "MEMBER#seed-user-bob",
+    "userId": "seed-user-bob",
+    "conversationId": "seed-conv-group-dev",
+    "role": "member",
+    "joinedAt": "2026-04-03T08:00:00.000Z",
+    "unreadCount": 0,
+    "isMuted": false
+  },
+  {
+    "PK": "CONV#seed-conv-group-dev",
+    "SK": "MEMBER#seed-user-charlie",
+    "userId": "seed-user-charlie",
+    "conversationId": "seed-conv-group-dev",
+    "role": "member",
+    "joinedAt": "2026-04-03T08:00:00.000Z",
+    "unreadCount": 0,
+    "isMuted": false
+  },
+  {
+    "PK": "CONV#seed-conv-group-dev",
+    "SK": "MEMBER#seed-user-diana",
+    "userId": "seed-user-diana",
+    "conversationId": "seed-conv-group-dev",
+    "role": "member",
+    "joinedAt": "2026-04-03T08:00:00.000Z",
+    "unreadCount": 0,
+    "isMuted": false
+  }
+]
