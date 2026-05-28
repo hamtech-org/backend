@@ -296,4 +296,13 @@ export const newsfeedController = {
       next(error);
     }
   },
+
+  shareReel: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const sharesCount = await newsfeedService.shareReel(req.params.reelId, req.user!.userId);
+      sendSuccess(res, { sharesCount }, 'Chia sẻ reel thành công');
+    } catch (error) {
+      next(error);
+    }
+  },
 };

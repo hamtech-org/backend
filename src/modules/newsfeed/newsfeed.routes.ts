@@ -65,6 +65,7 @@ router.post(
   newsfeedController.recordReelView,
 );
 router.post('/reels/:reelId/save', authenticate, newsfeedController.toggleSaveReel);
+router.post('/reels/:reelId/share', authenticate, newsfeedController.shareReel);
 router.post(
   '/reels/:reelId/report',
   authenticate,

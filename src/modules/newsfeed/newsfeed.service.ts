@@ -1694,4 +1694,25 @@ export const newsfeedService = {
     }
     return summary;
   },
+
+  shareReel: async (reelId: string, userId: string): Promise<number> => {
+    const reel = await newsfeedRepository.getReelById(reelId);
+    if (!reel) throw new NotFoundError('Reel');
+    const canView = await newsfeedService.getReelById(reelId, userId);
+    if (!canView) throw new ForbiddenError('Không có quyền thao tác reel này');
+
+    const nextSharesCount = (reel.sharesCount ?? 0) + 1;
+    await newsfeedRepository.incrementReelCounter(reelId, 'sharesCount', 1);
+
+    try {
+      getIO().to(`reel:${reelId}`).emit('newsfeed:reel_shared', {
+        reelId,
+        sharesCount: nextSharesCount,
+      });
+    } catch (err) {
+      logger.error('Failed to emit newsfeed:reel_shared', err);
+    }
+
+    return nextSharesCount;
+  },
 };
