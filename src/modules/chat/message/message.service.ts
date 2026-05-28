@@ -605,6 +605,7 @@ export const messageService = {
       isRecalled: false,
       isDeleted: false,
       reactions: {},
+      duration: data.duration ?? null,
       createdAt: now,
       updatedAt: now,
       ...(conversation.type === 'direct' ? { outboundStatus: 'sent' as MessageStatus } : {}),
@@ -652,9 +653,11 @@ export const messageService = {
           ? '[Ảnh]'
           : message.type === 'video'
             ? '[Video]'
-            : message.type === 'file'
-              ? message.mediaOriginalName?.trim() || '[File]'
-              : message.content;
+            : message.type === 'voice'
+              ? '[Tin nhắn thoại]'
+              : message.type === 'file'
+                ? message.mediaOriginalName?.trim() || '[File]'
+                : message.content;
 
     // Cập nhật lastMessage trên conversation
     await conversationRepository.updateConversationLastMessage(

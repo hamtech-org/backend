@@ -134,6 +134,7 @@ export interface IMessage extends TimestampFields {
   isRecalled: boolean;
   isDeleted: boolean;
   reactions: Record<string, string[]>;
+  duration?: number | null;
   /**
    * Chat 1-1: tiến trình nhận từ phía người nhận (sent → delivered → read).
    * Chỉ có ý nghĩa trên tin của người gửi; không trả về cho đối phương qua API.
@@ -185,6 +186,7 @@ export interface ISendMessageDto {
   mediaUrl?: string;
   mediaId?: string;
   replyTo?: string;
+  duration?: number;
 }
 
 export interface IReactMessageDto {
