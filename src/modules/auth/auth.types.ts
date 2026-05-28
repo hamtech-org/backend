@@ -12,7 +12,13 @@ export interface ISession extends TimestampFields {
   deviceInfo: {
     userAgent: string;
     os?: string;
+    osVersion?: string;
     browser?: string;
+    deviceName?: string;
+    model?: string;
+    brand?: string;
+    manufacturer?: string;
+    appClient?: string;
   };
 
   ipAddress: string;
@@ -54,6 +60,7 @@ export interface ILoginDto {
 export interface IRequestMeta {
   ipAddress: string;
   userAgent: string;
+  deviceInfo?: Partial<ISession['deviceInfo']>;
 }
 
 export interface IFaceLoginDto {
