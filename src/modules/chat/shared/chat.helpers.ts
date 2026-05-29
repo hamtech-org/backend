@@ -130,10 +130,12 @@ export async function resolveLastVisibleLastMessageSnapshot(
   conversationId: string,
   hiddenForUser: Set<string>,
   getMessages: (convId: string, limit: number) => Promise<IMessage[]>,
+  clearedUntilSK?: string | null,
 ): Promise<ILastMessage | null> {
   const messages = await getMessages(conversationId, 100);
   for (const m of messages) {
     if (isMessageHiddenFromViewer(m, hiddenForUser)) continue;
+    if (clearedUntilSK && m.SK && m.SK <= clearedUntilSK) continue;
     return messageToLastMessageSnapshot(m);
   }
   return null;

@@ -60,4 +60,14 @@ router.patch(
   },
 );
 
+router.delete(
+  '/conversations/:conversationId',
+  (req, res, next) => {
+    void authenticate(req, res, next);
+  },
+  (req, res, next) => {
+    void conversationController.deleteConversation(req, res, next);
+  },
+);
+
 export default router;
