@@ -341,6 +341,40 @@ export function filterCommunityResultActions(
     );
 }
 
+type SearchUserToolSummary = {
+  tool: 'search_users' | 'search_users_contacts';
+  query: string;
+  total: number;
+};
+
+function extractSearchUserToolSummaries(toolText: string): SearchUserToolSummary[] {
+  const summaries: SearchUserToolSummary[] = [];
+  const pattern = /\[(search_users|search_users_contacts)\s+query="([^"]*)"\s+total=(\d+)\]/g;
+  for (const match of toolText.matchAll(pattern)) {
+    const tool = match[1] as SearchUserToolSummary['tool'];
+    const query = decodeJsonStringLoose(match[2] ?? '').trim();
+    const total = Number(match[3] ?? 0);
+    if (!query || !Number.isFinite(total)) continue;
+    summaries.push({ tool, query, total });
+  }
+  return summaries;
+}
+
+export function appendMissingSearchUserNoResultNotes(reply: string, toolText: string): string {
+  const summaries = extractSearchUserToolSummaries(toolText);
+  const missingNoResultQueries = summaries
+    .filter((summary) => summary.total === 0)
+    .filter((summary) => !reply.toLowerCase().includes(summary.query.toLowerCase()))
+    .map((summary) => summary.query);
+
+  if (!missingNoResultQueries.length) return reply;
+
+  const notes = missingNoResultQueries.map(
+    (query) => `Với "${query}", tôi chưa tìm thấy người dùng phù hợp.`,
+  );
+  return [reply.trim(), ...notes].filter(Boolean).join('\n');
+}
+
 export function detectSensitiveUserInput(text: string): string[] {
   const normalized = text.normalize('NFKC');
   const lower = normalized.toLowerCase();
