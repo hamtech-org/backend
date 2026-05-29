@@ -1,5 +1,6 @@
 import { env } from '@/config/env.js';
 import { logger } from '@/shared/utils/logger.js';
+import { getCachedAiRuntimeConfig } from '../../admin/ai-admin.service.js';
 
 const NON_CHAT_MODEL_MARKERS = ['embed', 'titan-embed'];
 
@@ -16,7 +17,11 @@ export function isBedrockTextGenerationModelId(modelId: string): boolean {
 }
 
 export function resolveSecondaryModelId(override?: string): string | undefined {
-  const candidate = (override?.trim() || env.BEDROCK_SECONDARY_MODEL_ID?.trim()) ?? '';
+  const candidate =
+    (override?.trim() ||
+      getCachedAiRuntimeConfig().bedrockSecondaryModelId?.trim() ||
+      env.BEDROCK_SECONDARY_MODEL_ID?.trim()) ??
+    '';
   if (!candidate) return undefined;
   return isTextGenerationModelId(candidate) ? candidate : undefined;
 }
@@ -29,7 +34,9 @@ let warnedMisconfiguredSecondary = false;
 
 export function warnIfSecondaryModelMisconfigured(): void {
   if (warnedMisconfiguredSecondary) return;
-  const raw = env.BEDROCK_SECONDARY_MODEL_ID?.trim();
+  const raw =
+    getCachedAiRuntimeConfig().bedrockSecondaryModelId?.trim() ||
+    env.BEDROCK_SECONDARY_MODEL_ID?.trim();
   if (!raw || isTextGenerationModelId(raw)) return;
   warnedMisconfiguredSecondary = true;
   logger.warn(

@@ -314,6 +314,7 @@ export async function runAiAssistantPipeline(
         temperature: 0.2,
         maxTokens: 500,
         signal,
+        usage: { feature: 'assistant', stage: 'confirm_finalize', userId, threadId },
       });
       return persistAssistantAndBuildResponse(
         summarized.text.trim() || 'Tôi đã thực hiện thao tác theo yêu cầu.',
@@ -403,6 +404,7 @@ export async function runAiAssistantPipeline(
     temperature: isReAsk ? 0.45 : 0.25,
     maxTokens: 900,
     signal,
+    usage: { feature: 'assistant', stage: 'reasoning', userId, threadId },
   });
   throwIfAborted(signal);
   totalTokens += first.tokensUsed ?? 0;
@@ -492,6 +494,7 @@ export async function runAiAssistantPipeline(
         temperature: 0.2,
         maxTokens: 700,
         signal,
+        usage: { feature: 'assistant', stage: 'finalize', userId, threadId },
       });
       throwIfAborted(signal);
       totalTokens += second.tokensUsed ?? 0;
