@@ -25,6 +25,8 @@ const envSchema = z.object({
   AWS_REGION: z.string().default('us-east-1'),
   AWS_ACCESS_KEY_ID: z.string().default(''),
   AWS_SECRET_ACCESS_KEY: z.string().default(''),
+  BEDROCK_ACCESS_KEY_ID: z.string().default(''),
+  BEDROCK_SECRET_ACCESS_KEY: z.string().default(''),
 
   DYNAMODB_ENDPOINT: z.string().optional(),
   DYNAMODB_TABLE_PREFIX: z.string().default('Zalogram_'),
@@ -50,6 +52,8 @@ const envSchema = z.object({
   BEDROCK_EMBEDDING_MODEL_ID: z.string().default('amazon.titan-embed-text-v2:0'),
   /** Optional second Bedrock model for tool `invoke_secondary_model`. */
   BEDROCK_SECONDARY_MODEL_ID: z.string().optional(),
+  /** Optional key for encrypting AI admin secrets stored in DynamoDB. */
+  AI_CONFIG_ENCRYPTION_KEY: z.string().optional(),
 
   S3_BUCKET_NAME: z.string().default('zalogram-media'),
   S3_REGION: z.string().default('us-east-1'),

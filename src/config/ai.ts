@@ -9,6 +9,8 @@ export type AiTextConfig = {
   maxTokens: number;
   temperature: number;
   topP: number;
+  bedrockAccessKeyId?: string;
+  bedrockSecretAccessKey?: string;
   openAiApiKey?: string;
   openAiBaseUrl: string;
 };
@@ -55,6 +57,12 @@ export function getAiTextConfig(overrides: Partial<AiTextConfig> = {}): AiTextCo
     ...(Number.isFinite(envMaxTokens) ? { maxTokens: envMaxTokens! } : {}),
     ...(Number.isFinite(envTemperature) ? { temperature: envTemperature! } : {}),
     ...(Number.isFinite(envTopP) ? { topP: envTopP! } : {}),
+    ...(process.env.BEDROCK_ACCESS_KEY_ID
+      ? { bedrockAccessKeyId: process.env.BEDROCK_ACCESS_KEY_ID }
+      : {}),
+    ...(process.env.BEDROCK_SECRET_ACCESS_KEY
+      ? { bedrockSecretAccessKey: process.env.BEDROCK_SECRET_ACCESS_KEY }
+      : {}),
     ...(process.env.OPENAI_API_KEY ? { openAiApiKey: process.env.OPENAI_API_KEY } : {}),
     ...(process.env.OPENAI_BASE_URL ? { openAiBaseUrl: process.env.OPENAI_BASE_URL } : {}),
     ...overrides,
@@ -67,8 +75,14 @@ export function getBedrockConfig(overrides: Partial<BedrockAiConfig> = {}): Bedr
 
 export function createBedrockRuntimeClient(config: Partial<AiTextConfig> = {}) {
   const resolved = getAiTextConfig({ ...config, provider: 'bedrock' });
-  const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
+  const accessKeyId =
+    resolved.bedrockAccessKeyId ||
+    process.env.BEDROCK_ACCESS_KEY_ID ||
+    process.env.AWS_ACCESS_KEY_ID;
+  const secretAccessKey =
+    resolved.bedrockSecretAccessKey ||
+    process.env.BEDROCK_SECRET_ACCESS_KEY ||
+    process.env.AWS_SECRET_ACCESS_KEY;
 
   return new BedrockRuntimeClient({
     region: resolved.region,
