@@ -15,8 +15,10 @@ import {
 type LiveSocketData = {
   userId: string;
   displayName?: string;
+  avatar?: string | null;
   liveSessionIds?: Set<string>;
   hostPublishingSessionIds?: Set<string>;
+  lastReactionAtMs?: number;
 };
 
 async function broadcastViewersUpdated(sessionId: string): Promise<void> {
@@ -65,6 +67,7 @@ export const registerLiveHandlers = (io: Server, socket: Socket): void => {
   const data = socket.data as LiveSocketData;
   const userId = data.userId;
   const displayName = data.displayName ?? userId;
+  const avatar = data.avatar ?? null;
 
   socket.on('live:join', (payload: { sessionId: string }) => {
     const sid = payload?.sessionId;
@@ -132,7 +135,31 @@ export const registerLiveHandlers = (io: Server, socket: Socket): void => {
       sessionId: sid,
       userId,
       displayName,
+      avatar,
       text,
+      sentAt: new Date().toISOString(),
+    });
+  });
+
+  socket.on('live:reaction', (payload: { sessionId: string; reactionType: string }) => {
+    const sid = payload?.sessionId;
+    const reactionType = payload?.reactionType;
+    if (!sid || typeof sid !== 'string') return;
+    if (typeof reactionType !== 'string') return;
+
+    const allowed = new Set(['like', 'love', 'haha', 'wow', 'sad', 'angry']);
+    if (!allowed.has(reactionType)) return;
+
+    const now = Date.now();
+    const last = data.lastReactionAtMs ?? 0;
+    if (now - last < 200) return; // ~5/s
+    data.lastReactionAtMs = now;
+
+    emitToLiveRoom(sid, 'live:reaction', {
+      sessionId: sid,
+      userId,
+      displayName,
+      reactionType,
       sentAt: new Date().toISOString(),
     });
   });
