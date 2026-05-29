@@ -186,6 +186,7 @@ async function getViewerMessageAccess(
   member: IConversationMember;
   conv: IConversation | null;
   minCreatedAtMs: number | null;
+  clearedUntilSK: string | null;
   hidden: Set<string>;
 }> {
   const [member, conv] = await Promise.all([
@@ -194,12 +195,19 @@ async function getViewerMessageAccess(
   ]);
   if (!member) throw new ForbiddenError('Bạn không phải thành viên của hội thoại này');
 
-  const minCreatedAtMs = resolveMessageHistoryMinCreatedAtMs(conv, member);
+  let minCreatedAtMs = resolveMessageHistoryMinCreatedAtMs(conv, member);
+  if (member.clearedAtMs && typeof member.clearedAtMs === 'number') {
+    if (minCreatedAtMs === null || member.clearedAtMs > minCreatedAtMs) {
+      minCreatedAtMs = member.clearedAtMs;
+    }
+  }
+
+  const clearedUntilSK = member.clearedUntilSK ?? null;
   const hidden = await messageUserHideRepository.queryHiddenMessageIdsForConversation(
     viewerUserId,
     conversationId,
   );
-  return { member, conv, minCreatedAtMs, hidden };
+  return { member, conv, minCreatedAtMs, clearedUntilSK, hidden };
 }
 
 async function enrichMessagesForViewer(
@@ -237,7 +245,7 @@ export const messageService = {
     viewerUserId: string,
     limit?: number,
   ): Promise<IMessage[]> => {
-    const { conv, minCreatedAtMs, hidden } = await getViewerMessageAccess(
+    const { conv, minCreatedAtMs, clearedUntilSK, hidden } = await getViewerMessageAccess(
       conversationId,
       viewerUserId,
     );
@@ -247,6 +255,7 @@ export const messageService = {
     const raw = await conversationRepository.listRecentMessages(conversationId, {
       limit: fetchLimit,
       minCreatedAtMs,
+      clearedUntilSK,
     });
     const filtered = raw
       .filter((m) => !isMessageHiddenFromViewer(m, hidden))
@@ -272,7 +281,7 @@ export const messageService = {
     limit: number,
     cursor?: string,
   ): Promise<IMessagePage> => {
-    const { conv, minCreatedAtMs, hidden } = await getViewerMessageAccess(
+    const { conv, minCreatedAtMs, clearedUntilSK, hidden } = await getViewerMessageAccess(
       conversationId,
       viewerUserId,
     );
@@ -304,6 +313,7 @@ export const messageService = {
       await conversationRepository.listRecentMessagesPaginated(conversationId, {
         limit: fetchLimit,
         minCreatedAtMs,
+        clearedUntilSK,
         exclusiveStartKey,
       });
 
@@ -411,13 +421,17 @@ export const messageService = {
       createdAt: string;
     }>
   > => {
-    const { minCreatedAtMs, hidden } = await getViewerMessageAccess(conversationId, viewerUserId);
+    const { minCreatedAtMs, clearedUntilSK, hidden } = await getViewerMessageAccess(
+      conversationId,
+      viewerUserId,
+    );
 
     const maxOut = Math.min(Math.max(1, limit ?? 80), 200);
     const fetchLimit = Math.min(400, Math.max(maxOut * 4, 120));
     const raw = await conversationRepository.listRecentMessages(conversationId, {
       limit: fetchLimit,
       minCreatedAtMs,
+      clearedUntilSK,
     });
     const visible = raw.filter((m) => !isMessageHiddenFromViewer(m, hidden));
 

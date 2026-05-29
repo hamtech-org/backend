@@ -1591,6 +1591,7 @@ export const communityService = {
     if (meta.conversationId) {
       // Đã có phòng chat, tiến hành add member (idempotent)
       await conversationService.addMemberIfNotExist(meta.conversationId, userId, chatRole);
+      await conversationService.revealConversationForUser(meta.conversationId, userId);
       return meta.conversationId;
     }
 

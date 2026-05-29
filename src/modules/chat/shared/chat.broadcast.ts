@@ -110,3 +110,25 @@ export async function forceUserLeaveConversationRoom(
     void s.leave(room);
   }
 }
+
+/** Phát sự kiện báo cho user đã xóa lịch sử trò chuyện. */
+export async function emitConversationDeletedForMe(
+  userId: string,
+  payload: {
+    conversationId: string;
+    type: string;
+    clearedAt: string;
+    clearedAtMs: number;
+    shouldHideFromList: boolean;
+  },
+): Promise<void> {
+  const uid = String(userId ?? '').trim();
+  if (!uid) return;
+  let io: ReturnType<typeof getIO>;
+  try {
+    io = getIO();
+  } catch {
+    return;
+  }
+  io.to(`user:${uid}`).emit('conversation:deleted_for_me', payload);
+}

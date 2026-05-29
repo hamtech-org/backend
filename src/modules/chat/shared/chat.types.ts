@@ -73,6 +73,13 @@ export interface IConversation extends TimestampFields {
   isMuted?: boolean;
   /** Ghim hội thoại lên đầu danh sách (cá nhân, giống Zalo). */
   isPinnedToTop?: boolean;
+  clearedAt?: string | null;
+  clearedAtMs?: number | null;
+  clearedUntilSK?: string | null;
+  revealedAt?: string | null;
+  revealedAtMs?: number | null;
+  conversationListAt?: string | null;
+  conversationListAtMs?: number | null;
 }
 
 export interface ILastMessage {
@@ -97,6 +104,13 @@ export interface IConversationMember {
   /** Ghim cuộc trò chuyện lên đầu (theo user). */
   isPinnedToTop?: boolean;
   nickname?: string;
+  clearedAt?: string | null;
+  clearedAtMs?: number | null;
+  clearedUntilSK?: string | null;
+  revealedAt?: string | null;
+  revealedAtMs?: number | null;
+  conversationListAt?: string | null;
+  conversationListAtMs?: number | null;
 }
 
 export interface IReplyToDetails {
@@ -112,6 +126,8 @@ export interface IReplyToDetails {
 }
 
 export interface IMessage extends TimestampFields {
+  PK?: string;
+  SK?: string;
   messageId: string;
   conversationId: string;
   senderId: string;
