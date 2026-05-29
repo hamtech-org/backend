@@ -12,5 +12,6 @@ router.post('/sentiment', authenticate, aiController.analyzeSentiment);
 router.post('/generate-post', authenticate, aiController.generatePost);
 router.post('/assistant', authenticate, aiController.aiAssistant);
 router.get('/assistant/thread', authenticate, aiController.getAiAssistantThread);
+router.delete('/assistant/thread', authenticate, aiController.clearAiAssistantThread);
 
 export default router;

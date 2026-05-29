@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { aiService } from './ai.service.js';
-import { aiAssistantRepository } from './ai-assistant.repository.js';
+import { aiAssistantRepository } from './assistant/assistant.repository.js';
 import { sendSuccess } from '@/shared/utils/response.js';
+import { deleteAiAssistantVectors } from './shared/rag/qdrant.client.js';
 import type {
   IAiSuggestRequest,
   IAiChatbotRequest,
@@ -10,7 +11,7 @@ import type {
   IAiGroupSummaryRequest,
   IAiAssistantRequest,
 } from './ai.types.js';
-import { aiAssistantMessageSendSchema } from './ai-assistant.schema.js';
+import { aiAssistantMessageSendSchema } from './assistant/assistant.schema.js';
 
 export const aiController = {
   suggestContent: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -108,6 +109,23 @@ export const aiController = {
       }
       const messages = await aiAssistantRepository.listRecentMessages(threadId, 80);
       sendSuccess(res, { threadId, messages });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  clearAiAssistantThread: async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
+    try {
+      const userId = req.user!.userId;
+      const cleared = await aiAssistantRepository.clearAndResetDefaultThread(userId);
+      if (cleared.previousThreadId) {
+        await deleteAiAssistantVectors({ userId, threadId: cleared.previousThreadId });
+      }
+      sendSuccess(res, { threadId: cleared.threadId });
     } catch (error) {
       next(error);
     }
