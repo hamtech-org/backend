@@ -31,6 +31,7 @@ import {
   filterMessagesByJoinHistoryCutoff,
 } from '../shared/chat.helpers.js';
 import { formatGroupJoinLinkListPreview } from '../shared/group-join-link-message.js';
+import { stripMentionMarkdown } from '@/shared/utils/mentionHelper.js';
 
 async function emitMessageSearchIndexEvent(payload: {
   action: 'index' | 'update' | 'delete';
@@ -571,6 +572,18 @@ export const messageService = {
       }
     }
 
+    // ─── Xử lý & validate mentions (Server-side) ───
+    const members = await conversationRepository.getConversationMembers(conversationId);
+    const otherMembers = members.filter((m) => m.userId !== senderId);
+    const requestedMentionIds = [...new Set(data.mentions ?? [])];
+
+    // Chỉ chấp nhận mention của user là thành viên thực tế trong hội thoại (và không phải chính sender)
+    const validMentionIds = requestedMentionIds.filter((uid) => {
+      if (uid === senderId) return false;
+      if (uid === 'all') return conversation.type === 'group'; // chỉ cho phép @all trong chat nhóm
+      return members.some((m) => m.userId === uid);
+    });
+
     const now = new Date().toISOString();
     const messageId = uuidv4();
 
@@ -622,6 +635,7 @@ export const messageService = {
       duration: data.duration ?? null,
       createdAt: now,
       updatedAt: now,
+      mentions: validMentionIds,
       ...(conversation.type === 'direct' ? { outboundStatus: 'sent' as MessageStatus } : {}),
       ...(moderationMetadata ? { moderation: moderationMetadata } : {}),
     };
@@ -658,11 +672,13 @@ export const messageService = {
     };
 
     const trimmedContent = message.content.trim();
+    // Chuyển đổi định dạng mention markdown thành text thô để preview đẹp mắt
+    const cleanedContent = stripMentionMarkdown(trimmedContent);
     const joinLinkPreview =
-      message.type === 'text' ? formatGroupJoinLinkListPreview(trimmedContent) : null;
+      message.type === 'text' ? formatGroupJoinLinkListPreview(cleanedContent) : null;
     const lastPreviewContent =
-      trimmedContent !== ''
-        ? (joinLinkPreview ?? trimmedContent)
+      cleanedContent !== ''
+        ? (joinLinkPreview ?? cleanedContent)
         : message.type === 'image'
           ? '[Ảnh]'
           : message.type === 'video'
@@ -687,15 +703,32 @@ export const messageService = {
       now,
     );
 
-    // Tăng unreadCount cho các member còn lại
-    const members = await conversationRepository.getConversationMembers(conversationId);
-    const otherMembers = members.filter((m) => m.userId !== senderId);
+    // Xác định người nhận được nhắc tên thực tế (taggedRecipientIds)
+    let taggedRecipientIds: string[] = [];
+    if (validMentionIds.includes('all')) {
+      // Nhắc cả nhóm: tag toàn bộ thành viên khác
+      taggedRecipientIds = otherMembers.map((m) => m.userId);
+    } else {
+      taggedRecipientIds = validMentionIds;
+    }
 
-    // Push notification (FCM/APNs…): chỉ gửi tới thành viên **chưa** tắt thông báo (giống Zalo).
-    // Tin vẫn lưu DB; socket `message:new` vẫn tới mọi thành viên (xem chat.broadcast).
-    const pushRecipientIds = otherMembers
-      .filter((m) => !isConversationNotificationPushMuted(m))
+    // Nhóm nhận thông báo thường (không bị tắt và không nằm trong nhóm được tag để tránh trùng lặp)
+    const normalPushRecipients = otherMembers
+      .filter(
+        (m) => !taggedRecipientIds.includes(m.userId) && !isConversationNotificationPushMuted(m),
+      )
       .map((m) => m.userId);
+
+    // Chống trùng lặp (Deduplication): Gộp danh sách người nhận lại và loại bỏ trùng lặp bằng Set
+    const uniqueRecipientIds = [...new Set([...normalPushRecipients, ...taggedRecipientIds])];
+
+    // Xác định cờ mentionType
+    const mentionType = validMentionIds.includes('all')
+      ? 'all'
+      : validMentionIds.length > 0
+        ? 'user'
+        : null;
+
     const isGroupConversation = conversation.type === 'group';
     const conversationName = conversation.name?.trim() || (isGroupConversation ? 'chat' : null);
     const displayConversationName =
@@ -722,7 +755,9 @@ export const messageService = {
       ),
       kafkaProducer.send(KAFKA_TOPICS.NOTIFICATION_EVENTS, {
         type: 'message',
-        recipientIds: pushRecipientIds,
+        recipientIds: uniqueRecipientIds,
+        taggedRecipientIds, // Truyền sang để consumer phân biệt
+        mentionType, // Phân loại tag: 'user' | 'all' | null
         title: notificationTitle,
         body: notificationBody,
         data: {
@@ -780,6 +815,7 @@ export const messageService = {
           senderId,
           conversationType: conversation.type,
           content: lastPreviewContent.slice(0, 500),
+          mentions: validMentionIds, // Bổ sung mentions vào search index
           createdAt: now,
         },
       }),
