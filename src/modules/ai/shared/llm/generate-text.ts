@@ -1,16 +1,18 @@
 import { ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
-import {
-  aiConfig,
-  bedrockRuntimeClient,
-  type AiTextConfig,
-  type AiTextProvider,
-} from '@/config/ai.js';
+import { createBedrockRuntimeClient, type AiTextConfig, type AiTextProvider } from '@/config/ai.js';
+import { aiAdminService, getEffectiveAiRuntimeConfig } from '../../admin/ai-admin.service.js';
 
 export type AiGenerateTextOptions = Partial<
   Pick<AiTextConfig, 'provider' | 'modelId' | 'maxTokens' | 'temperature' | 'topP'>
 > & {
   systemPrompt?: string;
   signal?: AbortSignal;
+  usage?: {
+    feature?: string;
+    stage?: string;
+    userId?: string;
+    threadId?: string;
+  };
 };
 
 export type AiGenerateTextResult = {
@@ -25,6 +27,11 @@ type ResolvedAiGenerateTextOptions = {
   maxTokens: number;
   temperature: number;
   topP: number;
+  region: string;
+  bedrockAccessKeyId?: string;
+  bedrockSecretAccessKey?: string;
+  openAiApiKey?: string;
+  openAiBaseUrl: string;
   systemPrompt?: string;
   signal?: AbortSignal;
 };
@@ -35,16 +42,18 @@ type TextGenerationAdapter = {
 
 const bedrockTextAdapter: TextGenerationAdapter = {
   async generate(prompt, options) {
-    const res = await bedrockRuntimeClient.send(
+    const client = createBedrockRuntimeClient({
+      provider: 'bedrock',
+      region: options.region,
+      bedrockAccessKeyId: options.bedrockAccessKeyId,
+      bedrockSecretAccessKey: options.bedrockSecretAccessKey,
+    });
+    const res = await client.send(
       new ConverseCommand({
         modelId: options.modelId,
         ...(options.systemPrompt
           ? {
-              system: [
-                {
-                  text: options.systemPrompt,
-                },
-              ],
+              system: [{ text: options.systemPrompt }],
             }
           : {}),
         messages: [
@@ -79,18 +88,18 @@ const bedrockTextAdapter: TextGenerationAdapter = {
 
 const openAiTextAdapter: TextGenerationAdapter = {
   async generate(prompt, options) {
-    if (!aiConfig.openAiApiKey) {
-      throw new Error('OPENAI_API_KEY chưa cấu hình cho AI_TEXT_PROVIDER=openai');
+    if (!options.openAiApiKey) {
+      throw new Error('OPENAI_API_KEY chua cau hinh cho AI_TEXT_PROVIDER=openai');
     }
 
     const messages = [
       ...(options.systemPrompt ? [{ role: 'system', content: options.systemPrompt }] : []),
       { role: 'user', content: prompt },
     ];
-    const response = await fetch(`${aiConfig.openAiBaseUrl.replace(/\/$/, '')}/chat/completions`, {
+    const response = await fetch(`${options.openAiBaseUrl.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${aiConfig.openAiApiKey}`,
+        Authorization: `Bearer ${options.openAiApiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -106,7 +115,7 @@ const openAiTextAdapter: TextGenerationAdapter = {
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
       throw new Error(
-        `OpenAI generateText lỗi ${response.status}: ${detail || response.statusText}`,
+        `OpenAI generateText loi ${response.status}: ${detail || response.statusText}`,
       );
     }
 
@@ -135,28 +144,63 @@ export async function generateText(
   prompt: string,
   options: AiGenerateTextOptions = {},
 ): Promise<AiGenerateTextResult> {
+  const config = await getEffectiveAiRuntimeConfig();
   const input = prompt?.trim();
   if (!input) {
-    return { text: '', model: options.modelId ?? aiConfig.modelId, tokensUsed: 0 };
+    return { text: '', model: options.modelId ?? config.modelId, tokensUsed: 0 };
   }
   if (options.signal?.aborted) {
     throw new DOMException('AI request was cancelled', 'AbortError');
   }
 
-  const provider = options.provider ?? aiConfig.provider;
-  const modelId = options.modelId ?? aiConfig.modelId;
-  const maxTokens = options.maxTokens ?? aiConfig.maxTokens;
-  const temperature = options.temperature ?? aiConfig.temperature;
-  const topP = options.topP ?? aiConfig.topP;
+  const provider = options.provider ?? config.provider;
+  const modelId = options.modelId ?? config.modelId;
+  const maxTokens = options.maxTokens ?? config.maxTokens;
+  const temperature = options.temperature ?? config.temperature;
+  const topP = options.topP ?? config.topP;
   const adapter = TEXT_GENERATION_ADAPTERS[provider];
+  const started = Date.now();
 
-  return adapter.generate(input, {
-    provider,
-    modelId,
-    maxTokens,
-    temperature,
-    topP,
-    systemPrompt: options.systemPrompt,
-    signal: options.signal,
-  });
+  try {
+    const result = await adapter.generate(input, {
+      provider,
+      modelId,
+      maxTokens,
+      temperature,
+      topP,
+      region: config.region,
+      bedrockAccessKeyId: config.bedrockAccessKeyId,
+      bedrockSecretAccessKey: config.bedrockSecretAccessKey,
+      openAiApiKey: config.openAiApiKey,
+      openAiBaseUrl: config.openAiBaseUrl,
+      systemPrompt: options.systemPrompt,
+      signal: options.signal,
+    });
+    await aiAdminService.recordUsage({
+      provider,
+      modelId: result.model || modelId,
+      tokensUsed: result.tokensUsed ?? 0,
+      latencyMs: Date.now() - started,
+      success: true,
+      ...(options.usage?.feature ? { feature: options.usage.feature } : {}),
+      ...(options.usage?.stage ? { stage: options.usage.stage } : {}),
+      ...(options.usage?.userId ? { userId: options.usage.userId } : {}),
+      ...(options.usage?.threadId ? { threadId: options.usage.threadId } : {}),
+    });
+    return result;
+  } catch (error) {
+    await aiAdminService.recordUsage({
+      provider,
+      modelId,
+      tokensUsed: 0,
+      latencyMs: Date.now() - started,
+      success: false,
+      error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+      ...(options.usage?.feature ? { feature: options.usage.feature } : {}),
+      ...(options.usage?.stage ? { stage: options.usage.stage } : {}),
+      ...(options.usage?.userId ? { userId: options.usage.userId } : {}),
+      ...(options.usage?.threadId ? { threadId: options.usage.threadId } : {}),
+    });
+    throw error;
+  }
 }

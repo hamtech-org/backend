@@ -1,6 +1,6 @@
 import { InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
-import { bedrockRuntimeClient } from '@/config/ai.js';
-import { env } from '@/config/env.js';
+import { createBedrockRuntimeClient } from '@/config/ai.js';
+import { getCachedAiRuntimeConfig } from '../../admin/ai-admin.service.js';
 
 type TitanEmbedV2Response = {
   embedding?: number[];
@@ -13,13 +13,18 @@ export async function embedText(text: string, signal?: AbortSignal): Promise<num
     throw new DOMException('AI request was cancelled', 'AbortError');
   }
 
-  const modelId = env.BEDROCK_EMBEDDING_MODEL_ID;
+  const config = getCachedAiRuntimeConfig();
+  const modelId = config.bedrockEmbeddingModelId;
   const body = JSON.stringify({
     inputText: input,
-    dimensions: env.AI_EMBEDDING_DIMENSION,
+    dimensions: config.embeddingDimension,
     normalize: true,
   });
 
+  const bedrockRuntimeClient = createBedrockRuntimeClient({
+    provider: 'bedrock',
+    region: config.region,
+  });
   const res = await bedrockRuntimeClient.send(
     new InvokeModelCommand({
       modelId,
