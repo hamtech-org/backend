@@ -103,8 +103,14 @@ export async function executeAiToolCalls(
             payload: { source: 'search_users', query: q, users: r.items.slice(0, 8) },
           });
         }
+        console.log('search_users result', r.items);
         parts.push(
-          `[search_users query="${q}"]\n${JSON.stringify(r.items, null, 2).slice(0, 4000)}`,
+          [
+            `[search_users query="${q}" total=${r.items.length}]`,
+            r.items.length > 0
+              ? JSON.stringify(r.items, null, 2).slice(0, 4000)
+              : 'Không tìm thấy người dùng nào cho query này.',
+          ].join('\n'),
         );
         continue;
       }
@@ -124,7 +130,12 @@ export async function executeAiToolCalls(
           });
         }
         parts.push(
-          `[search_users_contacts query="${q}"]\n${JSON.stringify(r.items, null, 2).slice(0, 4000)}`,
+          [
+            `[search_users_contacts query="${q}" total=${r.items.length}]`,
+            r.items.length > 0
+              ? JSON.stringify(r.items, null, 2).slice(0, 4000)
+              : 'Không tìm thấy liên hệ/người dùng nào cho query này.',
+          ].join('\n'),
         );
         continue;
       }

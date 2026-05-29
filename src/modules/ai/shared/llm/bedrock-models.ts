@@ -3,17 +3,22 @@ import { logger } from '@/shared/utils/logger.js';
 
 const NON_CHAT_MODEL_MARKERS = ['embed', 'titan-embed'];
 
-/** Model IDs suitable for Bedrock Converse / generateText (not embedding). */
-export function isBedrockTextGenerationModelId(modelId: string): boolean {
+/** Model IDs suitable for text generation, not embedding. */
+export function isTextGenerationModelId(modelId: string): boolean {
   const id = modelId.trim().toLowerCase();
   if (!id) return false;
   return !NON_CHAT_MODEL_MARKERS.some((marker) => id.includes(marker));
 }
 
+/** Backward-compatible alias for existing Bedrock call sites/tests. */
+export function isBedrockTextGenerationModelId(modelId: string): boolean {
+  return isTextGenerationModelId(modelId);
+}
+
 export function resolveSecondaryModelId(override?: string): string | undefined {
   const candidate = (override?.trim() || env.BEDROCK_SECONDARY_MODEL_ID?.trim()) ?? '';
   if (!candidate) return undefined;
-  return isBedrockTextGenerationModelId(candidate) ? candidate : undefined;
+  return isTextGenerationModelId(candidate) ? candidate : undefined;
 }
 
 export function isSecondaryModelConfigured(): boolean {
@@ -25,9 +30,9 @@ let warnedMisconfiguredSecondary = false;
 export function warnIfSecondaryModelMisconfigured(): void {
   if (warnedMisconfiguredSecondary) return;
   const raw = env.BEDROCK_SECONDARY_MODEL_ID?.trim();
-  if (!raw || isBedrockTextGenerationModelId(raw)) return;
+  if (!raw || isTextGenerationModelId(raw)) return;
   warnedMisconfiguredSecondary = true;
   logger.warn(
-    `BEDROCK_SECONDARY_MODEL_ID="${raw}" không phải model chat (Converse). Tool invoke_secondary_model bị ẩn — đặt model chat, ví dụ amazon.nova-lite-v1:0.`,
+    `Bedrock secondary model "${raw}" is not a chat/text-generation model. Tool invoke_secondary_model is hidden; configure BEDROCK_SECONDARY_MODEL_ID with a chat model.`,
   );
 }
