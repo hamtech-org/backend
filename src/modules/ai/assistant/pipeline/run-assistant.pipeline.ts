@@ -16,15 +16,15 @@ import type {
 } from '../../shared/types/assistant.types.js';
 import type { AiAssistantClientAction } from '../../shared/types/assistant.types.js';
 import { aiAssistantRepository } from '../assistant.repository.js';
-import { embedText } from '../../shared/llm/embedding.service.js';
-import { searchSimilarAiChunks, upsertAiMessageVector } from '../../shared/rag/qdrant.client.js';
 import { executeAiToolCalls, type AiToolCall } from '../tools/execute-tools.js';
 import {
   getConfirmActionFromPending,
+  getPendingConfirmedToolCalls,
   isAffirmative,
   isNegative,
   parseConfirmToken,
-  pickFirstConfirmTool,
+  pickConfirmTools,
+  buildPendingConfirmedTools,
 } from '../tools/confirmation.js';
 import { warnIfSecondaryModelMisconfigured } from '../../shared/llm/bedrock-models.js';
 import { planAiToolCalls } from '../tools/tool-call-planner.js';
@@ -34,6 +34,7 @@ import {
   buildAssistantFinalizeSystemPrompt,
   buildAssistantSystemPrompt,
 } from './pipeline.prompts.js';
+import { buildMemoryContextBlock, extractAndStoreTurnMemories } from './memory.js';
 import {
   type LlmJsonShape,
   parseJsonLoose,
@@ -43,16 +44,11 @@ import {
   filterMessageResultActions,
   detectSensitiveUserInput,
   buildSensitiveInputRefusal,
-  truncateText,
   prepareHistoryForTurn,
-  filterRagHitsForTurn,
   buildReAskInstruction,
+  appendMissingSearchUserNoResultNotes,
 } from './pipeline.helpers.js';
-import {
-  type AiAssistantStage,
-  MAX_RAG_CHUNK_CHARS,
-  SENSITIVE_PLACEHOLDER,
-} from './pipeline.constants.js';
+import { type AiAssistantStage, SENSITIVE_PLACEHOLDER } from './pipeline.constants.js';
 
 export type { AiAssistantStage } from './pipeline.constants.js';
 
@@ -240,22 +236,20 @@ export async function runAiAssistantPipeline(
       actions,
     );
     try {
-      // Tạo embedding cho phản hồi của trợ lý để sử dụng trong RAG sau này.
+      // Trích xuất memory dài hạn có ích
       onStage?.('embedding_reply');
-      const vecA = await embedText(reply, signal);
-      if (vecA.length > 0) {
-        await upsertAiMessageVector(assistantRow.messageId, vecA, {
-          userId,
-          threadId,
-          messageId: assistantRow.messageId,
-          role: 'assistant',
-          text: assistantRow.content,
-          createdAt: assistantRow.createdAt,
-        });
-      }
+      await extractAndStoreTurnMemories({
+        userId,
+        threadId,
+        userMessageId: userRow.messageId,
+        assistantMessageId: assistantRow.messageId,
+        userMessage: userRow.content,
+        assistantReply: userFacingReply,
+        signal,
+      });
     } catch (e) {
       if (isAbortLike(e)) throw e;
-      /* embedding là tùy chọn, bỏ qua nếu lỗi */
+      /* memory extraction is optional */
     }
     await aiAssistantRepository.touchDefaultThread(userId);
     onStage?.('completed');
@@ -304,12 +298,9 @@ export async function runAiAssistantPipeline(
           0,
         );
       }
-      // Thực thi công cụ đã được xác nhận.
-      const exec = await executeAiToolCalls(
-        userId,
-        [{ name: pending.toolName, args: pending.toolArgs ?? {} }],
-        { signal },
-      );
+      // Thực thi các công cụ đã được xác nhận.
+      const confirmedCalls = getPendingConfirmedToolCalls(pending);
+      const exec = await executeAiToolCalls(userId, confirmedCalls, { signal });
       throwIfAborted(signal);
       // Tạo prompt để LLM tóm tắt kết quả.
       const followPrompt = [
@@ -360,45 +351,15 @@ export async function runAiAssistantPipeline(
     maxLines: 32,
   });
 
-  let ragBlock = '';
+  let memoryBlock = '';
   try {
-    // Thực hiện RAG: tạo embedding cho câu hỏi và tìm kiếm các đoạn văn bản tương tự.
+    // Tìm memory dài hạn liên quan; không dùng Qdrant cho raw history gần đây.
     throwIfAborted(signal);
     onStage?.('embedding_query');
-    const vec = await embedText(message, signal);
-    if (vec.length > 0) {
-      throwIfAborted(signal);
-      onStage?.('rag_search');
-      const hits = await searchSimilarAiChunks({
-        userId,
-        threadId,
-        vector: vec,
-        limit: 6,
-      });
-      // Lọc các kết quả RAG hữu ích cho lượt hiện tại.
-      const useful = filterRagHitsForTurn(
-        hits.filter((h) => h.text.length > 0),
-        message,
-        isReAsk,
-      );
-      if (useful.length) {
-        ragBlock = `\nĐoạn liên quan (RAG):\n${useful
-          .map((h, i) => `${i + 1}. (${h.role}) ${truncateText(h.text, MAX_RAG_CHUNK_CHARS)}`)
-          .join('\n')}\n`;
-      }
-      // Lưu vector của tin nhắn người dùng để sử dụng trong tương lai.
-      await upsertAiMessageVector(userRow.messageId, vec, {
-        userId,
-        threadId,
-        messageId: userRow.messageId,
-        role: 'user',
-        text: userRow.content,
-        createdAt: userRow.createdAt,
-      });
-    }
+    memoryBlock = await buildMemoryContextBlock({ userId, message, signal });
   } catch (e) {
     if (isAbortLike(e)) throw e;
-    /* RAG / embedding là tùy chọn, bỏ qua nếu lỗi */
+    /* memory search is optional */
   }
 
   const locale = req.locale === 'en' ? 'en' : 'vi';
@@ -413,10 +374,10 @@ export async function runAiAssistantPipeline(
     policyHints,
   });
 
-  // Xây dựng prompt đầu tiên bao gồm lịch sử, RAG và yêu cầu hiện tại.
+  // Xây dựng prompt đầu tiên bao gồm lịch sử, memory và yêu cầu hiện tại.
   const firstPrompt = [
     transcript ? `Lịch sử:\n${transcript}` : '',
-    ragBlock,
+    memoryBlock,
     isReAsk ? buildReAskInstruction(locale) : '',
     `Yêu cầu hiện tại của user: ${message}`,
     locale === 'vi' ? 'Trả về JSON như hướng dẫn.' : 'Return JSON as instructed.',
@@ -484,14 +445,15 @@ export async function runAiAssistantPipeline(
     }
 
     // Kiểm tra xem có công cụ nào cần xác nhận từ người dùng không.
-    const confirmCandidate = pickFirstConfirmTool(extraCalls);
-    if (confirmCandidate) {
+    const confirmCandidates = pickConfirmTools(extraCalls);
+    if (confirmCandidates.length > 0) {
       onStage?.('await_user_confirmation');
       // Lưu công cụ cần xác nhận và yêu cầu người dùng.
+      const pendingTool = buildPendingConfirmedTools(confirmCandidates);
       const pendingRecord = await aiAssistantRepository.setPendingTool(
         threadId,
-        confirmCandidate.name,
-        confirmCandidate.args ?? {},
+        pendingTool.toolName,
+        pendingTool.toolArgs,
       );
       const confirmAction = getConfirmActionFromPending(pendingRecord);
       return persistAssistantAndBuildResponse(
@@ -515,6 +477,8 @@ export async function runAiAssistantPipeline(
       const secondPrompt = [
         `Kết quả công cụ:\n${exec.textForModel}`,
         'Hãy tóm tắt ngắn gọn cho user (tiếng Việt nếu user dùng vi).',
+        'Nếu có nhiều kết quả tool cùng loại nhưng khác query, phải trả lời đủ từng query; query nào không có kết quả thì nói rõ là không tìm thấy.',
+        'Với search_users/search_users_contacts, không được bỏ qua query có total=0; hãy nêu ngắn gọn theo từng tên/từ khóa đã tìm.',
         'Không nhắc UUID/id nội bộ; với người gửi hãy dùng tên hiển thị nếu có.',
         'Ảnh đại diện: dùng ![](url), không dùng [Link ảnh](url).',
         'Nếu có kết quả search_messages, hãy chọn tối đa 5 resultKey thật sự liên quan để hiển thị trên card.',
@@ -533,6 +497,7 @@ export async function runAiAssistantPipeline(
       totalTokens += second.tokensUsed ?? 0;
       parsed = parseJsonLoose(second.text);
       reply = typeof parsed?.reply === 'string' ? parsed.reply.trim() : second.text.trim();
+      reply = appendMissingSearchUserNoResultNotes(reply, exec.textForModel);
       // Lọc các key tin nhắn được chọn để hiển thị trên card kết quả.
       const selectedMessageKeys = Array.isArray(parsed?.messageResultKeys)
         ? parsed.messageResultKeys.map((id) => String(id))
