@@ -14,6 +14,32 @@ import type { IUser } from '@/modules/user/user.types.js';
 const USERS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Users`;
 const SESSIONS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Sessions`;
 
+const deleteSessionBatch = async (sessions: ISession[]): Promise<void> => {
+  if (sessions.length === 0) return;
+
+  const chunks: ISession[][] = [];
+  for (let i = 0; i < sessions.length; i += 25) {
+    chunks.push(sessions.slice(i, i + 25));
+  }
+
+  for (const chunk of chunks) {
+    await dynamoClient.send(
+      new BatchWriteCommand({
+        RequestItems: {
+          [SESSIONS_TABLE]: chunk.map((s) => ({
+            DeleteRequest: {
+              Key: {
+                PK: `SESSION#${s.sessionId}`,
+                SK: `USER#${s.userId}`,
+              },
+            },
+          })),
+        },
+      }),
+    );
+  }
+};
+
 export const authRepository = {
   // ──────────────────────────────────────────────
   // USER operations
@@ -205,36 +231,24 @@ export const authRepository = {
   },
 
   /**
+   * Xóa sessions đã hết hạn của user.
+   * DynamoDB TTL vẫn nên bật ở hạ tầng, hàm này dọn chủ động khi user quay lại app.
+   */
+  deleteExpiredUserSessions: async (userId: string, nowSec: number): Promise<number> => {
+    const sessions = await authRepository.findSessionsByUser(userId);
+    const expired = sessions.filter((s) => s.expiresAt <= nowSec);
+
+    await deleteSessionBatch(expired);
+    return expired.length;
+  },
+
+  /**
    * Xóa tất cả sessions của 1 user (batch delete)
    * Dùng khi đổi mật khẩu / revoke all sessions
    */
   deleteAllUserSessions: async (userId: string): Promise<void> => {
     const sessions = await authRepository.findSessionsByUser(userId);
-
-    if (sessions.length === 0) return;
-
-    // BatchWrite tối đa 25 items/lần
-    const chunks: ISession[][] = [];
-    for (let i = 0; i < sessions.length; i += 25) {
-      chunks.push(sessions.slice(i, i + 25));
-    }
-
-    for (const chunk of chunks) {
-      await dynamoClient.send(
-        new BatchWriteCommand({
-          RequestItems: {
-            [SESSIONS_TABLE]: chunk.map((s) => ({
-              DeleteRequest: {
-                Key: {
-                  PK: `SESSION#${s.sessionId}`,
-                  SK: `USER#${s.userId}`,
-                },
-              },
-            })),
-          },
-        }),
-      );
-    }
+    await deleteSessionBatch(sessions);
   },
 
   // ──────────────────────────────────────────────
