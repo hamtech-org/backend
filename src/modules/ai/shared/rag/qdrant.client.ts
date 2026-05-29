@@ -1,8 +1,9 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
-import { env } from '@/config/env.js';
 import { logger } from '@/shared/utils/logger.js';
+import { getCachedAiRuntimeConfig } from '../../admin/ai-admin.service.js';
 
 let client: QdrantClient | null | undefined;
+let clientKey = '';
 const warnedKeys = new Set<string>();
 const TENANT_FIELD = 'userId';
 
@@ -104,13 +105,16 @@ async function getCollectionVectorSize(qc: QdrantClient, name: string): Promise<
 }
 
 export function getQdrantClient(): QdrantClient | null {
-  const url = env.QDRANT_URL?.trim();
+  const config = getCachedAiRuntimeConfig();
+  const url = config.qdrantUrl?.trim();
   if (!url) return null;
-  if (client === undefined) {
+  const nextKey = `${url}|${config.qdrantApiKey ?? ''}`;
+  if (client === undefined || clientKey !== nextKey) {
     client = new QdrantClient({
       url,
-      apiKey: env.QDRANT_API_KEY?.trim() || undefined,
+      apiKey: config.qdrantApiKey?.trim() || undefined,
     });
+    clientKey = nextKey;
   }
   return client;
 }
@@ -119,7 +123,7 @@ export async function ensureAiAssistantCollection(vectorSize: number): Promise<v
   const qc = getQdrantClient();
   if (!qc) return;
 
-  const name = env.QDRANT_COLLECTION.trim() || 'hamtech_ai_memories';
+  const name = getCachedAiRuntimeConfig().qdrantCollection.trim() || 'hamtech_ai_memories';
   const cols = await qc.getCollections();
   const exists = cols.collections.some((c) => c.name === name);
   if (exists) {
@@ -170,7 +174,7 @@ export async function upsertAiMemoryVector(
   const qc = getQdrantClient();
   if (!qc || vector.length === 0) return;
 
-  const name = env.QDRANT_COLLECTION.trim() || 'hamtech_ai_memories';
+  const name = getCachedAiRuntimeConfig().qdrantCollection.trim() || 'hamtech_ai_memories';
   await ensureAiAssistantCollection(vector.length);
   const existingSize = await getCollectionVectorSize(qc, name);
   if (typeof existingSize === 'number' && existingSize !== vector.length) {
@@ -213,7 +217,7 @@ export async function searchAiMemories(params: {
   const qc = getQdrantClient();
   if (!qc || params.vector.length === 0) return [];
 
-  const name = env.QDRANT_COLLECTION.trim() || 'hamtech_ai_memories';
+  const name = getCachedAiRuntimeConfig().qdrantCollection.trim() || 'hamtech_ai_memories';
   await ensureAiAssistantCollection(params.vector.length);
 
   const existingSize = await getCollectionVectorSize(qc, name);
@@ -264,7 +268,7 @@ export async function deleteAiAssistantMemories(params: {
   const threadId = params.threadId.trim();
   if (!userId || !threadId) return;
 
-  const name = env.QDRANT_COLLECTION.trim() || 'hamtech_ai_memories';
+  const name = getCachedAiRuntimeConfig().qdrantCollection.trim() || 'hamtech_ai_memories';
   try {
     await qc.delete(name, {
       wait: true,
