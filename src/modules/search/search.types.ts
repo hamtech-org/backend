@@ -49,6 +49,11 @@ export interface ISearchGroupResult {
   type: string;
 }
 
+/** Kết quả tìm cộng đồng (luôn có communityId trên document ES). */
+export interface ISearchCommunityResult extends ISearchGroupResult {
+  communityId: string;
+}
+
 export interface ISearchMessageResult {
   messageId: string;
   conversationId: string;
