@@ -103,7 +103,7 @@ export function getPendingConfirmedToolCalls(pending: {
           item.args && typeof item.args === 'object' ? (item.args as Record<string, unknown>) : {},
       };
     })
-    .filter((call) => call.name.length > 0 && requiresToolConfirmation(call.name));
+    .filter((call) => call.name.length > 0);
 }
 
 export function buildConfirmToken(pendingId: string, decision: 'approve' | 'reject'): string {
