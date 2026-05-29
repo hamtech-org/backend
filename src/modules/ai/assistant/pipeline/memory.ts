@@ -171,6 +171,12 @@ export async function extractAndStoreTurnMemories(params: {
     temperature: 0.1,
     maxTokens: 500,
     signal: params.signal,
+    usage: {
+      feature: 'assistant_memory',
+      stage: 'extract',
+      userId: params.userId,
+      threadId: params.threadId,
+    },
   });
   const now = new Date().toISOString();
   const memories = parseExtractedMemories(extraction.text).slice(0, 4);
