@@ -31,12 +31,21 @@ function extractQdrantErrorMessage(error: unknown): string {
   return String(error);
 }
 
-const PAYLOAD_INDEX_FIELDS = ['userId', 'threadId'] as const;
+const PAYLOAD_INDEX_FIELDS = ['userId', 'threadId', 'memoryType'] as const;
 const payloadIndexesReady = new Set<string>();
 
 function isMissingPayloadIndexError(message: string): boolean {
   return /index required but not found/i.test(message);
 }
+
+const MEMORY_TYPES: AiMemoryType[] = [
+  'preference',
+  'project',
+  'interest',
+  'identity',
+  'task',
+  'thread_summary',
+];
 
 async function ensurePayloadIndexes(qc: QdrantClient, collectionName: string): Promise<void> {
   if (payloadIndexesReady.has(collectionName)) return;
@@ -110,7 +119,7 @@ export async function ensureAiAssistantCollection(vectorSize: number): Promise<v
   const qc = getQdrantClient();
   if (!qc) return;
 
-  const name = env.QDRANT_COLLECTION.trim() || 'hamtech_ai_messages';
+  const name = env.QDRANT_COLLECTION.trim() || 'hamtech_ai_memories';
   const cols = await qc.getCollections();
   const exists = cols.collections.some((c) => c.name === name);
   if (exists) {
@@ -132,24 +141,36 @@ export async function ensureAiAssistantCollection(vectorSize: number): Promise<v
   logger.info(`Qdrant: đã tạo collection ${name} (dim=${vectorSize})`);
 }
 
-export type AiQdrantPayload = {
+export type AiMemoryType =
+  | 'preference'
+  | 'project'
+  | 'interest'
+  | 'identity'
+  | 'task'
+  | 'thread_summary';
+
+export type AiMemoryPayload = {
   userId: string;
-  threadId: string;
-  messageId: string;
-  role: 'user' | 'assistant';
+  threadId?: string;
+  memoryId: string;
+  memoryType: AiMemoryType;
   text: string;
+  sourceMessageIds?: string[];
+  confidence?: number;
+  importance?: number;
   createdAt: string;
+  updatedAt: string;
 };
 
-export async function upsertAiMessageVector(
+export async function upsertAiMemoryVector(
   pointId: string,
   vector: number[],
-  payload: AiQdrantPayload,
+  payload: AiMemoryPayload,
 ): Promise<void> {
   const qc = getQdrantClient();
   if (!qc || vector.length === 0) return;
 
-  const name = env.QDRANT_COLLECTION.trim() || 'hamtech_ai_messages';
+  const name = env.QDRANT_COLLECTION.trim() || 'hamtech_ai_memories';
   await ensureAiAssistantCollection(vector.length);
   const existingSize = await getCollectionVectorSize(qc, name);
   if (typeof existingSize === 'number' && existingSize !== vector.length) {
@@ -164,31 +185,35 @@ export async function upsertAiMessageVector(
 async function runFilteredVectorSearch(
   qc: QdrantClient,
   collectionName: string,
-  params: { userId: string; threadId: string; vector: number[]; limit: number },
+  params: { userId: string; threadId?: string; vector: number[]; limit: number },
 ) {
+  const must: Array<Record<string, unknown>> = [
+    { key: TENANT_FIELD, match: { value: params.userId } },
+    { key: 'memoryType', match: { any: MEMORY_TYPES } },
+  ];
+  if (params.threadId) {
+    must.push({ key: 'threadId', match: { value: params.threadId } });
+  }
   return qc.search(collectionName, {
     vector: params.vector,
     limit: params.limit,
     filter: {
-      must: [
-        { key: TENANT_FIELD, match: { value: params.userId } },
-        { key: 'threadId', match: { value: params.threadId } },
-      ],
+      must,
     },
     with_payload: true,
   });
 }
 
-export async function searchSimilarAiChunks(params: {
+export async function searchAiMemories(params: {
   userId: string;
-  threadId: string;
+  threadId?: string;
   vector: number[];
   limit: number;
-}): Promise<Array<{ score: number; text: string; role: string }>> {
+}): Promise<Array<{ score: number; text: string; memoryType: string }>> {
   const qc = getQdrantClient();
   if (!qc || params.vector.length === 0) return [];
 
-  const name = env.QDRANT_COLLECTION.trim() || 'hamtech_ai_messages';
+  const name = env.QDRANT_COLLECTION.trim() || 'hamtech_ai_memories';
   await ensureAiAssistantCollection(params.vector.length);
 
   const existingSize = await getCollectionVectorSize(qc, name);
@@ -198,11 +223,11 @@ export async function searchSimilarAiChunks(params: {
 
   const mapHits = (
     res: Awaited<ReturnType<QdrantClient['search']>>,
-  ): Array<{ score: number; text: string; role: string }> =>
+  ): Array<{ score: number; text: string; memoryType: string }> =>
     res.map((r) => ({
       score: typeof r.score === 'number' ? r.score : 0,
-      text: String((r.payload as AiQdrantPayload | undefined)?.text ?? ''),
-      role: String((r.payload as AiQdrantPayload | undefined)?.role ?? ''),
+      text: String((r.payload as AiMemoryPayload | undefined)?.text ?? ''),
+      memoryType: String((r.payload as AiMemoryPayload | undefined)?.memoryType ?? ''),
     }));
 
   try {
@@ -218,17 +243,17 @@ export async function searchSimilarAiChunks(params: {
         return mapHits(res);
       } catch (retryErr) {
         logger.warn(
-          `Qdrant searchSimilarAiChunks lỗi sau khi tạo index (bỏ qua RAG): ${extractQdrantErrorMessage(retryErr)}`,
+          `Qdrant searchAiMemories lỗi sau khi tạo index (bỏ qua memory): ${extractQdrantErrorMessage(retryErr)}`,
         );
         return [];
       }
     }
-    logger.warn(`Qdrant searchSimilarAiChunks lỗi (bỏ qua RAG): ${msg}`);
+    logger.warn(`Qdrant searchAiMemories lỗi (bỏ qua memory): ${msg}`);
     return [];
   }
 }
 
-export async function deleteAiAssistantVectors(params: {
+export async function deleteAiAssistantMemories(params: {
   userId: string;
   threadId: string;
 }): Promise<void> {
@@ -239,7 +264,7 @@ export async function deleteAiAssistantVectors(params: {
   const threadId = params.threadId.trim();
   if (!userId || !threadId) return;
 
-  const name = env.QDRANT_COLLECTION.trim() || 'hamtech_ai_messages';
+  const name = env.QDRANT_COLLECTION.trim() || 'hamtech_ai_memories';
   try {
     await qc.delete(name, {
       wait: true,
@@ -251,6 +276,6 @@ export async function deleteAiAssistantVectors(params: {
       },
     });
   } catch (e) {
-    logger.warn(`Qdrant deleteAiAssistantVectors lỗi (bỏ qua): ${extractQdrantErrorMessage(e)}`);
+    logger.warn(`Qdrant deleteAiAssistantMemories lỗi (bỏ qua): ${extractQdrantErrorMessage(e)}`);
   }
 }
