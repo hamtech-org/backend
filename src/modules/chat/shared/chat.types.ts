@@ -6,6 +6,8 @@ import type {
   MessageStatus,
 } from '@/shared/types/chat.types.js';
 
+export type { MemberRole };
+
 /** Cài đặt nhóm (META conversation type group). */
 export interface IGroupMemberPermissions {
   changeNameAvatar: boolean;
@@ -22,17 +24,23 @@ export interface IGroupAdminSettings {
   allowJoinLink: boolean;
 }
 
+export type GroupAdminStatus = 'active' | 'locked' | 'archived';
+
 export interface IGroupSettings {
   memberPermissions: IGroupMemberPermissions;
   adminSettings: IGroupAdminSettings;
   /** Hậu tố link tham gia (demo / refresh). */
   joinLinkSuffix?: string;
+  /** Trạng thái quản trị (admin console). */
+  adminStatus?: GroupAdminStatus;
 }
 
 export interface IConversation extends TimestampFields {
   conversationId: string;
   type: ConversationType;
   name?: string;
+  /** Mô tả nhóm (admin / hiển thị). */
+  description?: string;
   avatar?: string;
   /** Historical creator. Do not update this when group ownership changes. */
   creatorId: string;
@@ -45,8 +53,14 @@ export interface IConversation extends TimestampFields {
   isDeleted?: boolean;
   /** Chỉ nhóm; đồng bộ realtime qua socket `group:settings_updated`. */
   groupSettings?: IGroupSettings;
+  /** Trạng thái nhóm (admin) — mirror của groupSettings.adminStatus. */
+  groupStatus?: GroupAdminStatus;
   /** META: số tin đang ghim trong hội thoại (đồng bộ khi ghim/bỏ ghim/thu hồi tin). */
   pinnedMessageCount?: number;
+  /** ID của cộng đồng (community/group) liên kết nếu có */
+  groupId?: string | null;
+  /** Cho biết tính năng chat của cộng đồng liên kết có đang bật không */
+  chatEnabled?: boolean;
   /**
    * Trường gộp từ bản ghi MEMBER# của user đang gọi API (danh sách hội thoại / preferences).
    * Không lưu trên META.
@@ -59,6 +73,13 @@ export interface IConversation extends TimestampFields {
   isMuted?: boolean;
   /** Ghim hội thoại lên đầu danh sách (cá nhân, giống Zalo). */
   isPinnedToTop?: boolean;
+  clearedAt?: string | null;
+  clearedAtMs?: number | null;
+  clearedUntilSK?: string | null;
+  revealedAt?: string | null;
+  revealedAtMs?: number | null;
+  conversationListAt?: string | null;
+  conversationListAtMs?: number | null;
 }
 
 export interface ILastMessage {
@@ -83,6 +104,13 @@ export interface IConversationMember {
   /** Ghim cuộc trò chuyện lên đầu (theo user). */
   isPinnedToTop?: boolean;
   nickname?: string;
+  clearedAt?: string | null;
+  clearedAtMs?: number | null;
+  clearedUntilSK?: string | null;
+  revealedAt?: string | null;
+  revealedAtMs?: number | null;
+  conversationListAt?: string | null;
+  conversationListAtMs?: number | null;
 }
 
 export interface IReplyToDetails {
@@ -98,10 +126,14 @@ export interface IReplyToDetails {
 }
 
 export interface IMessage extends TimestampFields {
+  PK?: string;
+  SK?: string;
   messageId: string;
   conversationId: string;
   senderId: string;
   senderDisplayName?: string | null;
+  /** Avatar người gửi — client dùng cho push / thông báo hệ thống. */
+  senderAvatar?: string | null;
   type: MessageType;
   content: string;
   encryptedContent: string | null;
@@ -118,6 +150,7 @@ export interface IMessage extends TimestampFields {
   isRecalled: boolean;
   isDeleted: boolean;
   reactions: Record<string, string[]>;
+  duration?: number | null;
   /**
    * Chat 1-1: tiến trình nhận từ phía người nhận (sent → delivered → read).
    * Chỉ có ý nghĩa trên tin của người gửi; không trả về cho đối phương qua API.
@@ -129,6 +162,10 @@ export interface IMessage extends TimestampFields {
    * Chỉ trên tin của chính viewer: ai đã đọc (so `MEMBER.lastReadAt` với `createdAt` của tin).
    */
   readBy?: { userId: string; displayName?: string | null }[];
+  moderation?: {
+    autoModerated: boolean;
+    action: 'censor' | 'block';
+  };
 }
 
 /** Cursor-based paginated response for message loading (oldest → newest). */
@@ -165,6 +202,7 @@ export interface ISendMessageDto {
   mediaUrl?: string;
   mediaId?: string;
   replyTo?: string;
+  duration?: number;
 }
 
 export interface IReactMessageDto {

@@ -38,8 +38,13 @@ export interface ISearchPostResult {
 
 export interface ISearchGroupResult {
   groupId: string;
+  communityId?: string;
   name: string;
   description: string | null;
+  slug?: string;
+  avatar?: string | null;
+  coverUrl?: string | null;
+  category?: string;
   memberCount: number;
   type: string;
 }
@@ -47,7 +52,9 @@ export interface ISearchGroupResult {
 export interface ISearchMessageResult {
   messageId: string;
   conversationId: string;
+  conversationName?: string | null;
   senderId: string;
+  senderDisplayName?: string | null;
   content: string;
   createdAt: string;
 }

@@ -7,6 +7,11 @@
     "declarationMap": false,
     "sourceMap": false
   },
-  "include": ["scripts/database/sync-users-to-es.ts"],
+  "include": [
+    "scripts/database/run-migrations.ts",
+    "scripts/database/migrations/**/*.ts",
+    "scripts/database/sync-users-to-es.ts",
+    "scripts/jobs/**/*.ts"
+  ],
   "exclude": ["node_modules", "dist", "tests"]
 }

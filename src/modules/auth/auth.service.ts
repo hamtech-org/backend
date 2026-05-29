@@ -111,24 +111,40 @@ const generateTokens = (payload: {
 /**
  * Parse User-Agent thành device info
  */
-const parseDeviceInfo = (userAgent: string): { userAgent: string; os: string; browser: string } => {
-  let os = 'Unknown';
-  let browser = 'Unknown';
+const parseDeviceInfo = (meta: IRequestMeta): ISession['deviceInfo'] => {
+  const userAgent = meta.userAgent;
+  const mobileInfo = meta.deviceInfo;
+  let os = mobileInfo?.os || 'Unknown';
+  let browser = mobileInfo?.appClient || mobileInfo?.browser || 'Unknown';
 
   // Detect OS
-  if (userAgent.includes('Android')) os = 'Android';
-  else if (userAgent.includes('iPhone') || userAgent.includes('iPad')) os = 'iOS';
-  else if (userAgent.includes('Windows')) os = 'Windows';
-  else if (userAgent.includes('Mac')) os = 'macOS';
-  else if (userAgent.includes('Linux')) os = 'Linux';
+  if (os === 'Unknown') {
+    if (userAgent.includes('Android')) os = 'Android';
+    else if (userAgent.includes('iPhone') || userAgent.includes('iPad')) os = 'iOS';
+    else if (userAgent.includes('Windows')) os = 'Windows';
+    else if (userAgent.includes('Mac')) os = 'macOS';
+    else if (userAgent.includes('Linux')) os = 'Linux';
+  }
 
   // Detect Browser
-  if (userAgent.includes('Edg')) browser = 'Edge';
-  else if (userAgent.includes('Chrome') && !userAgent.includes('Edg')) browser = 'Chrome';
-  else if (userAgent.includes('Firefox')) browser = 'Firefox';
-  else if (userAgent.includes('Safari') && !userAgent.includes('Chrome')) browser = 'Safari';
+  if (browser === 'Unknown') {
+    if (userAgent.includes('Edg')) browser = 'Edge';
+    else if (userAgent.includes('Chrome') && !userAgent.includes('Edg')) browser = 'Chrome';
+    else if (userAgent.includes('Firefox')) browser = 'Firefox';
+    else if (userAgent.includes('Safari') && !userAgent.includes('Chrome')) browser = 'Safari';
+  }
 
-  return { userAgent, os, browser };
+  return {
+    userAgent,
+    os,
+    osVersion: mobileInfo?.osVersion,
+    browser,
+    deviceName: mobileInfo?.deviceName,
+    model: mobileInfo?.model,
+    brand: mobileInfo?.brand,
+    manufacturer: mobileInfo?.manufacturer,
+    appClient: mobileInfo?.appClient,
+  };
 };
 
 /**
@@ -148,21 +164,30 @@ const createNewSession = async (
 ): Promise<void> => {
   const refreshTokenHash = await bcrypt.hash(refreshToken, SALT_ROUNDS);
   const sessionId = extractSessionIdFromToken(refreshToken);
+  const nowSec = Math.floor(Date.now() / 1000);
+
+  const deletedExpired = await authRepository.deleteExpiredUserSessions(user.userId, nowSec);
+  if (deletedExpired > 0) {
+    logger.info(
+      `Deleted ${deletedExpired} expired session(s) before login for user ${user.userId}`,
+    );
+  }
 
   // Lấy location từ IP (non-blocking, timeout 3s)
   const location = await getLocationFromIp(meta.ipAddress);
+  const nowIso = new Date().toISOString();
 
   const session: ISession = {
     sessionId,
     userId: user.userId,
     refreshTokenHash,
-    deviceInfo: parseDeviceInfo(meta.userAgent),
+    deviceInfo: parseDeviceInfo(meta),
     ipAddress: meta.ipAddress,
     location,
-    expiresAt: Math.floor(Date.now() / 1000) + parseExpiryToSeconds(env.JWT_REFRESH_EXPIRY),
+    expiresAt: nowSec + parseExpiryToSeconds(env.JWT_REFRESH_EXPIRY),
     isRevoked: false,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    createdAt: nowIso,
+    updatedAt: nowIso,
   };
 
   await authRepository.createSession(session);
@@ -534,8 +559,14 @@ export const authService = {
     userId: string,
     currentSessionId: string,
   ): Promise<IAuthSessionSummary[]> => {
-    const rows = await authRepository.findSessionsByUser(userId);
     const nowSec = Math.floor(Date.now() / 1000);
+    const deletedExpired = await authRepository.deleteExpiredUserSessions(userId, nowSec);
+    if (deletedExpired > 0) {
+      emitAuthSessionsChanged(userId);
+      logger.info(`Deleted ${deletedExpired} expired session(s) while listing sessions: ${userId}`);
+    }
+
+    const rows = await authRepository.findSessionsByUser(userId);
 
     return rows
       .map((row) => {

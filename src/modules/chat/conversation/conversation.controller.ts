@@ -74,4 +74,33 @@ export const conversationController = {
       next(error);
     }
   },
+
+  getConversationAvatar: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { buffer, isFallback } = await conversationService.getConversationAvatar(
+        req.params.conversationId,
+      );
+      res.setHeader('Content-Type', 'image/png');
+      if (isFallback) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+      } else {
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+      }
+      res.send(buffer);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  deleteConversation: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await conversationService.clearConversationHistoryForUser(
+        req.user!.userId,
+        req.params.conversationId,
+      );
+      sendSuccess(res, result, 'Đã xóa lịch sử trò chuyện');
+    } catch (error) {
+      next(error);
+    }
+  },
 };

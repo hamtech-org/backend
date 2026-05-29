@@ -42,19 +42,6 @@ export const contactRepository = {
     return friends;
   },
 
-  addFriend: async (contact: IContact): Promise<void> => {
-    await dynamoClient.send(
-      new PutCommand({
-        TableName: USERS_TABLE,
-        Item: {
-          PK: `USER#${contact.userId}`,
-          SK: `FRIEND#${contact.friendId}`,
-          ...contact,
-        },
-      }),
-    );
-  },
-
   removeFriend: async (userId: string, friendId: string): Promise<void> => {
     await dynamoClient.send(
       new DeleteCommand({

@@ -28,9 +28,17 @@ export interface IAuthorInfo {
   avatar: string | null;
 }
 
+export interface ICommunityInfo {
+  groupId: string;
+  name: string;
+  avatar: string | null;
+}
+
 export interface IPost extends TimestampFields {
   postId: string;
   authorId: string;
+  groupId?: string;
+  communityId?: string;
   content: string;
   mediaUrls: string[];
   type: PostType;
@@ -48,6 +56,9 @@ export interface IPost extends TimestampFields {
   currentUserReaction?: ReactionType | null; // Enrich ở service
   isSaved?: boolean; // Enrich ở service
   sharedFrom?: ISharedPostInfo; // Bài gốc nếu đây là shared post
+  isPinned?: boolean;
+  pinnedAt?: string | null;
+  communityInfo?: ICommunityInfo; // Enrich ở service
 }
 
 export interface IComment extends TimestampFields {
@@ -99,6 +110,8 @@ export interface IReel {
 
 export interface ICreatePostDto {
   content: string;
+  groupId?: string;
+  communityId?: string;
   type: PostType;
   visibility: PostVisibility;
   publicationStatus: PostPublicationStatus;

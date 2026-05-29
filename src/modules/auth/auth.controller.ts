@@ -8,9 +8,31 @@ import { ValidationError } from '@/shared/utils/errors.js';
 /**
  * Extract IP + User-Agent từ request
  */
+const parseDeviceInfoHeader = (value: unknown): IRequestMeta['deviceInfo'] => {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'string' || !raw.trim() || raw.length > 2048) return undefined;
+
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return {
+      os: typeof parsed.os === 'string' ? parsed.os : undefined,
+      osVersion: typeof parsed.osVersion === 'string' ? parsed.osVersion : undefined,
+      browser: typeof parsed.browser === 'string' ? parsed.browser : undefined,
+      deviceName: typeof parsed.deviceName === 'string' ? parsed.deviceName : undefined,
+      model: typeof parsed.model === 'string' ? parsed.model : undefined,
+      brand: typeof parsed.brand === 'string' ? parsed.brand : undefined,
+      manufacturer: typeof parsed.manufacturer === 'string' ? parsed.manufacturer : undefined,
+      appClient: typeof parsed.appClient === 'string' ? parsed.appClient : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+};
+
 const getRequestMeta = (req: Request): IRequestMeta => ({
   ipAddress: req.ip || req.socket?.remoteAddress || 'unknown',
   userAgent: req.headers['user-agent'] || 'unknown',
+  deviceInfo: parseDeviceInfoHeader(req.headers['x-hamtech-device-info']),
 });
 
 export const authController = {

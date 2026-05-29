@@ -26,6 +26,7 @@ import {
 } from '../shared/group-system-message.js';
 import type { MemberRole } from '@/shared/types/chat.types.js';
 import { MAX_GROUP_ADMINS, MIN_GROUP_MEMBERS } from './group.constants.js';
+import { normalizeGroupConversationAvatarStored } from '@/modules/media/mediaUrl.util.js';
 
 const sysMsgDeps = {
   createMessage: conversationRepository.createMessage,
@@ -54,6 +55,7 @@ export function mergeGroupSettings(
     memberPermissions: { ...DEFAULT_MEMBER_PERMS, ...raw?.memberPermissions },
     adminSettings: { ...DEFAULT_ADMIN, ...raw?.adminSettings },
     joinLinkSuffix: raw?.joinLinkSuffix,
+    adminStatus: raw?.adminStatus ?? 'active',
   };
 }
 
@@ -195,6 +197,9 @@ async function assertMemberGroupPermission(
   const c = await conversationRepository.getConversationById(conversationId);
   if (!c) throw new NotFoundError('Hội thoại');
   if (c.type !== 'group') return;
+  if (c.groupId && c.chatEnabled === false) {
+    throw new ForbiddenError('Trò chuyện đã bị tắt bởi quản trị viên Cộng đồng');
+  }
   const member = await conversationRepository.getMember(conversationId, userId);
   if (!member) throw new ForbiddenError('Bạn không phải thành viên nhóm');
 
@@ -279,14 +284,27 @@ export const groupService = {
       throw new ForbiddenError('Bạn không phải thành viên của nhóm này');
     }
 
+    if (conversation.groupId && (data.name !== undefined || data.avatar !== undefined)) {
+      throw new ForbiddenError(
+        'Không thể cập nhật tên hoặc ảnh đại diện của nhóm chat cộng đồng. Vui lòng cập nhật từ phần cài đặt cộng đồng.',
+      );
+    }
+
     if (data.name !== undefined || data.avatar !== undefined) {
       await assertMemberGroupPermission(requesterId, conversationId, 'changeNameAvatar');
     }
 
     const oldName = conversation.name || '';
-    const oldAvatar = conversation.avatar || '';
-    const nameChanged = Boolean(data.name && data.name !== oldName);
-    const avatarChanged = Boolean(data.avatar && data.avatar !== oldAvatar);
+    const oldAvatarNorm = normalizeGroupConversationAvatarStored(
+      conversation.avatar,
+      conversationId,
+    );
+    const updatePayload: IUpdateGroupDto = { ...data };
+    if (data.avatar !== undefined) {
+      updatePayload.avatar = normalizeGroupConversationAvatarStored(data.avatar, conversationId);
+    }
+    const nameChanged = Boolean(updatePayload.name && updatePayload.name !== oldName);
+    const avatarChanged = Boolean(updatePayload.avatar && updatePayload.avatar !== oldAvatarNorm);
     let requesterName = '';
     try {
       const users = await userRepository.findByIds([requesterId]);
@@ -295,11 +313,17 @@ export const groupService = {
       requesterName = 'Ai đó';
     }
 
-    await conversationRepository.updateConversation(conversationId, data);
+    await conversationRepository.updateConversation(conversationId, updatePayload);
+    const updatedAt = new Date().toISOString();
     const updatedConversation = {
       ...conversation,
-      ...data,
-      updatedAt: new Date().toISOString(),
+      ...updatePayload,
+      conversationId,
+      avatar: normalizeGroupConversationAvatarStored(
+        updatePayload.avatar ?? conversation.avatar,
+        conversationId,
+      ),
+      updatedAt,
       actorId: requesterId,
       actorName: requesterName,
       changed: {
@@ -317,12 +341,12 @@ export const groupService = {
             senderId: requesterId,
             content: buildGroupProfileUpdatedContent(actor, {
               previousName: nameChanged ? oldName : undefined,
-              newName: nameChanged ? data.name : undefined,
+              newName: nameChanged ? updatePayload.name : undefined,
               nameChanged,
               avatarChanged,
             }),
-            ...(avatarChanged && data.avatar
-              ? { mediaUrl: data.avatar, mediaType: 'image' as const }
+            ...(avatarChanged && updatePayload.avatar
+              ? { mediaUrl: updatePayload.avatar, mediaType: 'image' as const }
               : {}),
           },
           sysMsgDeps,
@@ -339,6 +363,11 @@ export const groupService = {
     const conversation = await conversationRepository.getConversationById(conversationId);
     if (!conversation) throw new NotFoundError('Nhóm');
     if (conversation.type !== 'group') throw new ForbiddenError('Đây không phải nhóm chat');
+    if (conversation.groupId) {
+      throw new ForbiddenError(
+        'Không thể giải tán nhóm chat cộng đồng trực tiếp. Vui lòng tắt tính năng chat hoặc lưu trữ cộng đồng trong phần cài đặt cộng đồng.',
+      );
+    }
     const requesterMember = await conversationRepository.getMember(conversationId, requesterId);
     if (!requesterMember) throw new ForbiddenError('Bạn không phải thành viên nhóm');
     const disbandRole = resolveMemberRole(requesterMember, conversation);
@@ -379,19 +408,17 @@ export const groupService = {
   ): Promise<{ memberCount: number }> => {
     const member = await conversationRepository.getMember(conversationId, userId);
     if (!member) throw new NotFoundError('Thành viên nhóm');
-
     const conv = await conversationRepository.getConversationById(conversationId);
     if (!conv || conv.type !== 'group') throw new NotFoundError('Nhóm');
 
     const allMembers = await conversationRepository.getConversationMembers(conversationId);
     const currentCount = allMembers.length;
     const afterLeave = currentCount - 1;
-    if (afterLeave < MIN_GROUP_MEMBERS) {
+    if (!conv.groupId && afterLeave < MIN_GROUP_MEMBERS) {
       throw new ValidationError(
         `Nhóm cần tối thiểu ${MIN_GROUP_MEMBERS} thành viên. Hiện có ${currentCount} người — không thể rời nhóm (mời thêm thành viên hoặc dùng giải tán nhóm).`,
       );
     }
-
     const leaverRole = resolveMemberRole(member, conv);
     if (leaverRole !== 'owner') {
       let leaverLabel = resolveChatMemberLabel(userId, null);
@@ -544,6 +571,14 @@ export const groupService = {
     conversationId: string,
     data: IAddMembersDto,
   ): Promise<{ memberCount: number; autoJoinedUserIds: string[] }> => {
+    const convMeta = await conversationRepository.getConversationById(conversationId);
+    if (!convMeta || convMeta.type !== 'group') throw new NotFoundError('Nhóm');
+    if (convMeta.groupId) {
+      throw new ForbiddenError(
+        'Không thể thêm thành viên trực tiếp vào nhóm chat cộng đồng. Thành viên phải tham gia cộng đồng trước.',
+      );
+    }
+
     const member = await conversationRepository.getMember(conversationId, requesterId);
     if (!member || !['owner', 'admin', 'member'].includes(member.role)) {
       throw new ForbiddenError('Bạn không có quyền thêm thành viên');
@@ -574,7 +609,6 @@ export const groupService = {
       return { memberCount: memberCountBefore, autoJoinedUserIds: [] };
     }
 
-    const convMeta = await conversationRepository.getConversationById(conversationId);
     const mergedSettings = mergeGroupSettings(convMeta?.groupSettings);
 
     await Promise.all(
@@ -639,15 +673,15 @@ export const groupService = {
       throw new ForbiddenError('Chỉ Admin/Owner mới có quyền xóa thành viên');
     }
 
+    const conversation = await conversationRepository.getConversationById(conversationId);
+    if (!conversation || conversation.type !== 'group') throw new NotFoundError('Nhóm');
+
     const allMembers = await conversationRepository.getConversationMembers(conversationId);
-    if (allMembers.length <= MIN_GROUP_MEMBERS) {
+    if (!conversation.groupId && allMembers.length <= MIN_GROUP_MEMBERS) {
       throw new ValidationError(
         `Nhóm cần tối thiểu ${MIN_GROUP_MEMBERS} thành viên — không thể mời thành viên ra khi nhóm chỉ còn ${allMembers.length} người.`,
       );
     }
-
-    const conversation = await conversationRepository.getConversationById(conversationId);
-    if (!conversation || conversation.type !== 'group') throw new NotFoundError('Nhóm');
 
     const trimmedTarget = targetUserId.trim();
     const resolved = await conversationRepository.resolveMemberForRemoval(
@@ -758,6 +792,11 @@ export const groupService = {
     const conversation = await conversationRepository.getConversationById(conversationId);
     if (!conversation) throw new NotFoundError('Nhóm');
     if (conversation.type !== 'group') throw new ForbiddenError('Đây không phải nhóm chat');
+    if (conversation.groupId) {
+      throw new ForbiddenError(
+        'Không thể thay đổi vai trò thành viên nhóm chat cộng đồng trực tiếp. Vui lòng cập nhật vai trò từ phần cài đặt thành viên cộng đồng.',
+      );
+    }
 
     const requesterMember = await conversationRepository.getMember(conversationId, requesterId);
     const requesterRole = resolveMemberRole(requesterMember, conversation);
@@ -851,6 +890,11 @@ export const groupService = {
     if (!conversation) throw new NotFoundError('Nhóm');
     if (conversation.type !== 'group') throw new ForbiddenError('Đây không phải nhóm chat');
     if (conversation.isDeleted) throw new ForbiddenError('Nhóm đã được giải tán');
+    if (conversation.groupId) {
+      throw new ForbiddenError(
+        'Không thể chuyển quyền trưởng nhóm chat cộng đồng trực tiếp. Vui lòng chuyển quyền sở hữu cộng đồng từ phần cài đặt cộng đồng.',
+      );
+    }
 
     const requester = await conversationRepository.getMember(conversationId, requesterId);
     if (!requester || resolveMemberRole(requester, conversation) !== 'owner') {

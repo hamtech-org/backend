@@ -2,6 +2,7 @@ import { PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { dynamoClient } from '@/config/database.js';
 import { env } from '@/config/env.js';
 import type { INotification } from './notification.types.js';
+import { countBellUnread } from './notification.bell.js';
 
 const TABLE_NAME = `${env.DYNAMODB_TABLE_PREFIX}Notifications`;
 
@@ -30,7 +31,7 @@ export const notificationRepository = {
 
   getUnreadCount: async (userId: string): Promise<number> => {
     const items = await notificationRepository.getByUserId(userId, 200);
-    return items.filter((n) => !n.isRead).length;
+    return countBellUnread(items);
   },
 
   create: async (notification: INotification): Promise<INotification> => {

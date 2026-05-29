@@ -10,6 +10,7 @@ import type {
   IAiGroupSummaryRequest,
   IAiAssistantRequest,
 } from './ai.types.js';
+import { aiAssistantMessageSendSchema } from './ai-assistant.schema.js';
 
 export const aiController = {
   suggestContent: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -42,7 +43,10 @@ export const aiController = {
     next: NextFunction,
   ): Promise<void> => {
     try {
-      const result = await aiService.summarizeGroupMessages(req.body as IAiGroupSummaryRequest);
+      const result = await aiService.summarizeGroupMessages({
+        ...(req.body as IAiGroupSummaryRequest),
+        userId: req.user!.userId,
+      });
       sendSuccess(res, result);
     } catch (error) {
       next(error);
@@ -79,12 +83,12 @@ export const aiController = {
 
   aiAssistant: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const body = req.body as { message?: string; threadId?: string; locale?: 'vi' | 'en' };
+      const parsed = aiAssistantMessageSendSchema.parse(req.body ?? {});
       const payload: IAiAssistantRequest = {
         userId: req.user!.userId,
-        message: String(body.message ?? ''),
-        ...(body.threadId ? { threadId: body.threadId } : {}),
-        ...(body.locale ? { locale: body.locale } : {}),
+        message: parsed.message,
+        ...(parsed.threadId ? { threadId: parsed.threadId } : {}),
+        ...(parsed.locale ? { locale: parsed.locale } : {}),
       };
       const result = await aiService.aiAssistant(payload);
       sendSuccess(res, result);

@@ -77,13 +77,15 @@ export const pollService = {
 
   getPolls: async (conversationId: string): Promise<any[]> => {
     const rows = await pollRepository.getPolls(conversationId);
-    const creatorIds = [...new Set(rows.map((p: { creatorId?: string }) => p.creatorId).filter(Boolean))] as string[];
+    const creatorIds = [
+      ...new Set(rows.map((p: { creatorId?: string }) => p.creatorId).filter(Boolean)),
+    ] as string[];
     if (creatorIds.length === 0) return rows;
     const users = await userRepository.findByIds(creatorIds);
     const nameById = new Map(users.map((u) => [u.userId, u.displayName?.trim() || null]));
     return rows.map((p: { creatorId?: string }) => ({
       ...p,
-      creatorDisplayName: p.creatorId ? nameById.get(p.creatorId) ?? null : null,
+      creatorDisplayName: p.creatorId ? (nameById.get(p.creatorId) ?? null) : null,
     }));
   },
 
@@ -131,12 +133,25 @@ export const pollService = {
 
       const optionText = String(poll?.options?.[optionIndex]?.text ?? '').trim();
       const question = String(poll?.question ?? '').trim();
-      const changed = !poll.isMultipleChoice && prevVotedIndexes.length > 0 && !prevVotedIndexes.includes(optionIndex);
-      const prevOptionText = changed && poll?.options?.[prevVotedIndexes[0]]?.text ? String(poll.options[prevVotedIndexes[0]].text) : '';
+      const changed =
+        !poll.isMultipleChoice &&
+        prevVotedIndexes.length > 0 &&
+        !prevVotedIndexes.includes(optionIndex);
+      const prevOptionText =
+        changed && poll?.options?.[prevVotedIndexes[0]]?.text
+          ? String(poll.options[prevVotedIndexes[0]].text)
+          : '';
 
       const payload = {
         kind: changed ? 'poll_vote_changed' : 'poll_voted',
-        poll: { pollId: String(pollId), question, optionIndex, optionText, prevOptionIndex: changed ? prevVotedIndexes[0] : null, prevOptionText: changed ? String(prevOptionText ?? '') : null },
+        poll: {
+          pollId: String(pollId),
+          question,
+          optionIndex,
+          optionText,
+          prevOptionIndex: changed ? prevVotedIndexes[0] : null,
+          prevOptionText: changed ? String(prevOptionText ?? '') : null,
+        },
         actor: { userId, name: actorName },
         createdAt: new Date().toISOString(),
       };
@@ -145,7 +160,9 @@ export const pollService = {
         { conversationId, senderId: userId, content: JSON.stringify(payload) },
         sysMsgDeps,
       );
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   },
 
   unvotePoll: async (
@@ -162,7 +179,9 @@ export const pollService = {
     if (!poll) throw new NotFoundError('Bình chọn');
 
     if (poll.options[optionIndex] && poll.options[optionIndex].voters) {
-      poll.options[optionIndex].voters = poll.options[optionIndex].voters.filter((id: string) => id !== userId);
+      poll.options[optionIndex].voters = poll.options[optionIndex].voters.filter(
+        (id: string) => id !== userId,
+      );
       await pollRepository.updatePollVotes(conversationId, pollId, poll.options);
     }
 
@@ -176,7 +195,12 @@ export const pollService = {
 
       const payload = {
         kind: 'poll_unvoted',
-        poll: { pollId: String(pollId), question: String(poll?.question ?? '').trim(), optionIndex, optionText: String(poll?.options?.[optionIndex]?.text ?? '').trim() },
+        poll: {
+          pollId: String(pollId),
+          question: String(poll?.question ?? '').trim(),
+          optionIndex,
+          optionText: String(poll?.options?.[optionIndex]?.text ?? '').trim(),
+        },
         actor: { userId, name: actorName },
         createdAt: new Date().toISOString(),
       };
@@ -185,7 +209,9 @@ export const pollService = {
         { conversationId, senderId: userId, content: JSON.stringify(payload) },
         sysMsgDeps,
       );
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   },
 
   addPollOption: async (
@@ -226,7 +252,9 @@ export const pollService = {
         { conversationId, senderId: requesterId, content: JSON.stringify(payload) },
         sysMsgDeps,
       );
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   },
 
   closePoll: async (requesterId: string, conversationId: string, pollId: string): Promise<void> => {
@@ -236,6 +264,10 @@ export const pollService = {
     const polls = await pollRepository.getPolls(conversationId);
     const poll = polls.find((p) => p.pollId === pollId);
     if (!poll) throw new NotFoundError('Bình chọn');
+
+    if (String(poll.creatorId ?? '') !== String(requesterId)) {
+      throw new ForbiddenError('Chỉ người tạo mới được khóa bình chọn');
+    }
 
     await pollRepository.updatePoll(conversationId, pollId, { isClosed: true });
 
@@ -257,14 +289,21 @@ export const pollService = {
         { conversationId, senderId: requesterId, content: JSON.stringify(payload) },
         sysMsgDeps,
       );
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   },
 
-  deletePoll: async (requesterId: string, conversationId: string, pollId: string): Promise<void> => {
+  deletePoll: async (
+    requesterId: string,
+    conversationId: string,
+    pollId: string,
+  ): Promise<void> => {
     const polls = await pollRepository.getPolls(conversationId);
     const poll = polls.find((p) => p.pollId === pollId);
     if (!poll) throw new NotFoundError('Bình chọn');
-    if (poll.creatorId !== requesterId) throw new ForbiddenError('Chỉ người tạo mới được xóa bình chọn');
+    if (poll.creatorId !== requesterId)
+      throw new ForbiddenError('Chỉ người tạo mới được xóa bình chọn');
 
     await pollRepository.deletePoll(conversationId, pollId);
   },

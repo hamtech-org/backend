@@ -49,6 +49,10 @@ export type GroupSystemPayload =
       newName?: string;
       nameChanged?: boolean;
       avatarChanged?: boolean;
+    }
+  | {
+      kind: 'group_created';
+      actor: GroupSystemPerson;
     };
 
 export function buildGroupMemberInvitedContent(
@@ -153,6 +157,14 @@ export function buildGroupProfileUpdatedContent(
     ...(opts.newName ? { newName: opts.newName } : {}),
     nameChanged: opts.nameChanged,
     avatarChanged: opts.avatarChanged,
+  };
+  return JSON.stringify(payload);
+}
+
+export function buildGroupCreatedContent(actor: GroupSystemPerson): string {
+  const payload: GroupSystemPayload = {
+    kind: 'group_created',
+    actor,
   };
   return JSON.stringify(payload);
 }

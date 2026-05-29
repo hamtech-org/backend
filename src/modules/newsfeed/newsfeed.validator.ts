@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 export const createPostSchema = z.object({
   content: z.string().max(20000),
+  groupId: z.string().uuid().optional(),
+  communityId: z.string().uuid().optional(),
   type: z.enum(['text', 'image', 'video', 'link']),
   visibility: z.enum(['public', 'friends', 'private']),
   publicationStatus: z.enum(['draft', 'published']),
@@ -21,6 +23,8 @@ export const updatePostSchema = z.object({
 });
 
 export const createReelSchema = z.object({
+  groupId: z.never({ invalid_type_error: 'Community không hỗ trợ reel' }).optional(),
+  communityId: z.never({ invalid_type_error: 'Community không hỗ trợ reel' }).optional(),
   videoUrl: z.string().url(),
   thumbnailUrl: z.string().url().optional().nullable(),
   caption: z.string().max(2200).optional().default(''),

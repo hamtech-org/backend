@@ -35,6 +35,20 @@ export const newsfeedController = {
     }
   },
 
+  getPostsByAuthor: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const limit = req.query.limit ? Number(req.query.limit) : undefined;
+      const page = await newsfeedService.getPostsByAuthor(
+        req.params.authorId,
+        req.user!.userId,
+        limit,
+      );
+      sendSuccess(res, page);
+    } catch (error) {
+      next(error);
+    }
+  },
+
   updatePost: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await newsfeedService.updatePost(req.params.postId, req.user!.userId, req.body);
@@ -292,6 +306,15 @@ export const newsfeedController = {
       const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
       const page = await newsfeedService.getSavedPosts(req.user!.userId, limit, cursor);
       sendSuccess(res, page);
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  shareReel: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const sharesCount = await newsfeedService.shareReel(req.params.reelId, req.user!.userId);
+      sendSuccess(res, { sharesCount }, 'Chia sẻ reel thành công');
     } catch (error) {
       next(error);
     }

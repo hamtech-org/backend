@@ -2,7 +2,10 @@ import { Server, Socket } from 'socket.io';
 import { z } from 'zod';
 import { messageService } from './message.service.js';
 import { conversationRepository } from '../conversation/conversation.repository.js';
-import { broadcastMessageNew, emitEventsToConversationAndMembers } from '../shared/chat.broadcast.js';
+import {
+  broadcastMessageNew,
+  emitEventsToConversationAndMembers,
+} from '../shared/chat.broadcast.js';
 import { logger } from '@/shared/utils/logger.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 
@@ -10,15 +13,28 @@ import { userRepository } from '@/modules/user/user.repository.js';
 const sendMessageSocketSchema = z
   .object({
     conversationId: z.string().uuid(),
-    type: z.enum(['text', 'image', 'video', 'file', 'sticker', 'emoji', 'location', 'poll', 'schedule', 'call']),
+    type: z.enum([
+      'text',
+      'image',
+      'video',
+      'file',
+      'sticker',
+      'emoji',
+      'location',
+      'poll',
+      'schedule',
+      'call',
+      'voice',
+    ]),
     content: z.string().max(10000),
     mediaUrl: z.string().url().optional(),
     mediaId: z.string().uuid().optional(),
     replyTo: z.string().uuid().optional(),
+    duration: z.number().nonnegative().optional(),
   })
   .refine(
     (data) => {
-      const m = ['image', 'video', 'file', 'audio'] as const;
+      const m = ['image', 'video', 'file', 'audio', 'voice'] as const;
       if (!m.includes(data.type as (typeof m)[number])) return true;
       return !!(data.mediaUrl ?? data.mediaId);
     },
@@ -63,7 +79,10 @@ export const registerChatHandlers = (io: Server, socket: Socket): void => {
     try {
       const parsed = sendMessageSocketSchema.safeParse(data);
       if (!parsed.success) {
-        socket.emit('message:error', { error: 'Dữ liệu không hợp lệ', details: parsed.error.flatten() });
+        socket.emit('message:error', {
+          error: 'Dữ liệu không hợp lệ',
+          details: parsed.error.flatten(),
+        });
         return;
       }
 
@@ -158,25 +177,33 @@ export const registerChatHandlers = (io: Server, socket: Socket): void => {
 
   // ─── Thu hồi tin nhắn qua socket ─────────────────────────────────────
 
-  socket.on('message:recall', async (data: { messageId: string; conversationId: string; createdAt: string }) => {
-    try {
-      await messageService.recallMessage(data.messageId, userId, data.conversationId, data.createdAt);
-      const recallPayload = { messageId: data.messageId, conversationId: data.conversationId };
-      await emitEventsToConversationAndMembers(data.conversationId, [
-        { event: 'message:recall', payload: recallPayload },
-        { event: 'message:recalled', payload: recallPayload },
-        {
-          event: 'message:pin_updated',
-          payload: {
-            messageId: data.messageId,
-            conversationId: data.conversationId,
-            isPinned: false,
+  socket.on(
+    'message:recall',
+    async (data: { messageId: string; conversationId: string; createdAt: string }) => {
+      try {
+        await messageService.recallMessage(
+          data.messageId,
+          userId,
+          data.conversationId,
+          data.createdAt,
+        );
+        const recallPayload = { messageId: data.messageId, conversationId: data.conversationId };
+        await emitEventsToConversationAndMembers(data.conversationId, [
+          { event: 'message:recall', payload: recallPayload },
+          { event: 'message:recalled', payload: recallPayload },
+          {
+            event: 'message:pin_updated',
+            payload: {
+              messageId: data.messageId,
+              conversationId: data.conversationId,
+              isPinned: false,
+            },
           },
-        },
-      ]);
-    } catch (error) {
-      logger.error('Socket message:recall lỗi:', error);
-      socket.emit('message:error', { error: 'Thu hồi tin nhắn thất bại' });
-    }
-  });
+        ]);
+      } catch (error) {
+        logger.error('Socket message:recall lỗi:', error);
+        socket.emit('message:error', { error: 'Thu hồi tin nhắn thất bại' });
+      }
+    },
+  );
 };

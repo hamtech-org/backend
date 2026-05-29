@@ -42,3 +42,15 @@ export const reelCreateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+export const communityInviteLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 15, // max 15 requests per 5 minutes per user
+  keyGenerator: (req) => req.user?.userId ?? req.ip ?? 'anonymous',
+  message: {
+    success: false,
+    error: { code: 'RATE_LIMIT', message: 'Bạn đang gửi quá nhiều lời mời, vui lòng thử lại sau.' },
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});

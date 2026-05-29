@@ -9,7 +9,7 @@ import type {
   ISendMessageDto,
 } from '../shared/chat.types.js';
 import type { MessageStatus } from '@/shared/types/chat.types.js';
-import { NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
+import { AppError, NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
 import { MAX_PINNED_MESSAGES_PER_CONVERSATION } from '../shared/chat.constants.js';
 import { getKafkaProducer } from '@/config/kafka.js';
 import { kafkaProducer } from '@/shared/kafka/producer.js';
@@ -18,6 +18,9 @@ import { logger } from '@/shared/utils/logger.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { mediaService } from '@/modules/media/media.service.js';
 import { groupService } from '../group/group.service.js';
+import { automodService } from '@/modules/community/automod.service.js';
+import { groupRecapSessionService } from '../recap/recap-session.service.js';
+
 import {
   isMessageHiddenFromViewer,
   syncConversationLastMessageMeta,
@@ -183,6 +186,7 @@ async function getViewerMessageAccess(
   member: IConversationMember;
   conv: IConversation | null;
   minCreatedAtMs: number | null;
+  clearedUntilSK: string | null;
   hidden: Set<string>;
 }> {
   const [member, conv] = await Promise.all([
@@ -191,12 +195,19 @@ async function getViewerMessageAccess(
   ]);
   if (!member) throw new ForbiddenError('Bạn không phải thành viên của hội thoại này');
 
-  const minCreatedAtMs = resolveMessageHistoryMinCreatedAtMs(conv, member);
+  let minCreatedAtMs = resolveMessageHistoryMinCreatedAtMs(conv, member);
+  if (member.clearedAtMs && typeof member.clearedAtMs === 'number') {
+    if (minCreatedAtMs === null || member.clearedAtMs > minCreatedAtMs) {
+      minCreatedAtMs = member.clearedAtMs;
+    }
+  }
+
+  const clearedUntilSK = member.clearedUntilSK ?? null;
   const hidden = await messageUserHideRepository.queryHiddenMessageIdsForConversation(
     viewerUserId,
     conversationId,
   );
-  return { member, conv, minCreatedAtMs, hidden };
+  return { member, conv, minCreatedAtMs, clearedUntilSK, hidden };
 }
 
 async function enrichMessagesForViewer(
@@ -234,7 +245,7 @@ export const messageService = {
     viewerUserId: string,
     limit?: number,
   ): Promise<IMessage[]> => {
-    const { conv, minCreatedAtMs, hidden } = await getViewerMessageAccess(
+    const { conv, minCreatedAtMs, clearedUntilSK, hidden } = await getViewerMessageAccess(
       conversationId,
       viewerUserId,
     );
@@ -244,6 +255,7 @@ export const messageService = {
     const raw = await conversationRepository.listRecentMessages(conversationId, {
       limit: fetchLimit,
       minCreatedAtMs,
+      clearedUntilSK,
     });
     const filtered = raw
       .filter((m) => !isMessageHiddenFromViewer(m, hidden))
@@ -269,7 +281,7 @@ export const messageService = {
     limit: number,
     cursor?: string,
   ): Promise<IMessagePage> => {
-    const { conv, minCreatedAtMs, hidden } = await getViewerMessageAccess(
+    const { conv, minCreatedAtMs, clearedUntilSK, hidden } = await getViewerMessageAccess(
       conversationId,
       viewerUserId,
     );
@@ -301,6 +313,7 @@ export const messageService = {
       await conversationRepository.listRecentMessagesPaginated(conversationId, {
         limit: fetchLimit,
         minCreatedAtMs,
+        clearedUntilSK,
         exclusiveStartKey,
       });
 
@@ -408,13 +421,17 @@ export const messageService = {
       createdAt: string;
     }>
   > => {
-    const { minCreatedAtMs, hidden } = await getViewerMessageAccess(conversationId, viewerUserId);
+    const { minCreatedAtMs, clearedUntilSK, hidden } = await getViewerMessageAccess(
+      conversationId,
+      viewerUserId,
+    );
 
     const maxOut = Math.min(Math.max(1, limit ?? 80), 200);
     const fetchLimit = Math.min(400, Math.max(maxOut * 4, 120));
     const raw = await conversationRepository.listRecentMessages(conversationId, {
       limit: fetchLimit,
       minCreatedAtMs,
+      clearedUntilSK,
     });
     const visible = raw.filter((m) => !isMessageHiddenFromViewer(m, hidden));
 
@@ -505,6 +522,53 @@ export const messageService = {
     if (!conversation) throw new NotFoundError('Hội thoại');
     if (conversation.type === 'group') {
       await groupService.assertUserMaySendMessage(senderId, conversationId);
+    } else {
+      const members = await conversationRepository.getConversationMembers(conversationId);
+      const receiverId = members.find((member) => member.userId !== senderId)?.userId;
+      if (receiverId) {
+        const blockStatus = await userRepository.getBlockStatusBetween(senderId, receiverId);
+        if (blockStatus === 'blocked_by_me') {
+          throw new AppError(
+            'Ban dang chan nguoi dung nay, vui long go chan de tiep tuc nhan tin.',
+            403,
+            'MESSAGE_BLOCKED_BY_ME',
+          );
+        }
+        if (blockStatus === 'blocked_by_other') {
+          throw new AppError('Ban da bi chan boi nguoi dung nay.', 403, 'MESSAGE_BLOCKED_BY_OTHER');
+        }
+      }
+    }
+
+    let moderationMetadata: any = null;
+
+    // Tích hợp Auto-Mod cho phòng chat liên kết Cộng đồng
+    if (conversation.groupId) {
+      const modResult = await automodService.moderateMessage({
+        groupId: conversation.groupId,
+        conversationId,
+        senderId,
+        content: data.content,
+        messageType: data.type,
+      });
+
+      if (!modResult.allowed) {
+        throw new AppError(
+          'Tin nhắn của bạn vi phạm tiêu chuẩn cộng đồng của nhóm.',
+          403,
+          'MESSAGE_BLOCKED_BY_AUTOMOD',
+        );
+      }
+
+      // Ghi đè nội dung sạch
+      data.content = modResult.content;
+
+      if (modResult.action === 'censor') {
+        moderationMetadata = {
+          autoModerated: true,
+          action: 'censor',
+        };
+      }
     }
 
     const now = new Date().toISOString();
@@ -555,17 +619,28 @@ export const messageService = {
       isRecalled: false,
       isDeleted: false,
       reactions: {},
+      duration: data.duration ?? null,
       createdAt: now,
       updatedAt: now,
       ...(conversation.type === 'direct' ? { outboundStatus: 'sent' as MessageStatus } : {}),
+      ...(moderationMetadata ? { moderation: moderationMetadata } : {}),
     };
 
     await conversationRepository.createMessage(message);
 
+    if (conversation.type === 'group') {
+      await groupRecapSessionService.dismissPendingSession(
+        conversationId,
+        senderId,
+        'sent_message',
+      );
+    }
+
     const senders = await userRepository.findByIds([senderId]);
     const senderDisplayName = senders[0]?.displayName?.trim() ?? null;
+    const senderAvatar = senders[0]?.avatar ?? null;
 
-    const withSenderName: IMessage = { ...message, senderDisplayName };
+    const withSenderName: IMessage = { ...message, senderDisplayName, senderAvatar };
     const hiddenForSender = await messageUserHideRepository.queryHiddenMessageIdsForConversation(
       senderId,
       conversationId,
@@ -592,9 +667,11 @@ export const messageService = {
           ? '[Ảnh]'
           : message.type === 'video'
             ? '[Video]'
-            : message.type === 'file'
-              ? message.mediaOriginalName?.trim() || '[File]'
-              : message.content;
+            : message.type === 'voice'
+              ? '[Tin nhắn thoại]'
+              : message.type === 'file'
+                ? message.mediaOriginalName?.trim() || '[File]'
+                : message.content;
 
     // Cập nhật lastMessage trên conversation
     await conversationRepository.updateConversationLastMessage(
@@ -619,6 +696,24 @@ export const messageService = {
     const pushRecipientIds = otherMembers
       .filter((m) => !isConversationNotificationPushMuted(m))
       .map((m) => m.userId);
+    const isGroupConversation = conversation.type === 'group';
+    const conversationName = conversation.name?.trim() || (isGroupConversation ? 'chat' : null);
+    const displayConversationName =
+      isGroupConversation && conversationName
+        ? conversationName.startsWith('Nhóm:')
+          ? conversationName
+          : `Nhóm: ${conversationName}`
+        : conversationName;
+    const conversationAvatar = conversation.avatar?.trim() || null;
+    const notificationPreview = lastPreviewContent.slice(0, 100) || 'Bạn có tin nhắn mới';
+    const notificationTitle =
+      isGroupConversation && displayConversationName
+        ? displayConversationName
+        : senderDisplayName || 'Tin nhắn mới';
+    const notificationBody =
+      isGroupConversation && senderDisplayName
+        ? `${senderDisplayName}: ${notificationPreview}`
+        : notificationPreview;
 
     await Promise.all([
       // Tăng unread cho members khác
@@ -628,8 +723,8 @@ export const messageService = {
       kafkaProducer.send(KAFKA_TOPICS.NOTIFICATION_EVENTS, {
         type: 'message',
         recipientIds: pushRecipientIds,
-        title: senderDisplayName ?? 'Tin nhắn mới',
-        body: lastPreviewContent.slice(0, 100) || 'Bạn có tin nhắn mới',
+        title: notificationTitle,
+        body: notificationBody,
         data: {
           route: 'chat',
           id: conversationId,
@@ -638,13 +733,41 @@ export const messageService = {
           deepLink: `/chat/${conversationId}`,
           actorId: senderId,
           actorName: senderDisplayName ?? undefined,
-          actorAvatar: senders[0]?.avatar ?? null,
+          actorAvatar: senderAvatar,
+          senderId,
+          senderName: senderDisplayName ?? undefined,
+          senderAvatar,
+          messageId,
+          messagePreview: notificationPreview,
+          conversationType: conversation.type,
+          chatScope: conversation.type,
+          conversationName: displayConversationName,
+          conversationAvatar,
+          ...(isGroupConversation
+            ? {
+                groupName: displayConversationName,
+                groupAvatar: conversationAvatar,
+              }
+            : {}),
           extra: {
             messageId,
             senderId,
+            senderName: senderDisplayName,
+            senderAvatar,
             actorId: senderId,
             actorName: senderDisplayName,
-            actorAvatar: senders[0]?.avatar ?? null,
+            actorAvatar: senderAvatar,
+            messagePreview: notificationPreview,
+            conversationType: conversation.type,
+            chatScope: conversation.type,
+            conversationName: displayConversationName,
+            conversationAvatar,
+            ...(isGroupConversation
+              ? {
+                  groupName: displayConversationName,
+                  groupAvatar: conversationAvatar,
+                }
+              : {}),
           },
         },
       }),
@@ -712,9 +835,32 @@ export const messageService = {
       throw new ForbiddenError('Chỉ có thể sửa tin nhắn dạng chữ');
     }
 
+    const conversation = await conversationRepository.getConversationById(conversationId);
+    let finalContent = content;
+
+    if (conversation && conversation.groupId) {
+      const modResult = await automodService.moderateMessage({
+        groupId: conversation.groupId,
+        conversationId,
+        senderId,
+        content,
+        messageType: message.type,
+      });
+
+      if (!modResult.allowed) {
+        throw new AppError(
+          'Tin nhắn chỉnh sửa của bạn vi phạm tiêu chuẩn cộng đồng.',
+          403,
+          'MESSAGE_BLOCKED_BY_AUTOMOD',
+        );
+      }
+
+      finalContent = modResult.content;
+    }
+
     const sortKey = `MSG#${message.createdAt}#${messageId}`;
     await conversationRepository.updateMessage(conversationId, messageId, sortKey, {
-      content,
+      content: finalContent,
       isEdited: true,
     });
     await emitMessageSearchIndexEvent({
@@ -724,7 +870,7 @@ export const messageService = {
         messageId,
         conversationId,
         senderId,
-        content: content.trim(),
+        content: finalContent.trim(),
         createdAt: message.createdAt,
       },
     });
@@ -790,16 +936,48 @@ export const messageService = {
    * Đánh dấu tin nhắn đã đọc, reset unreadCount.
    */
   markAsRead: async (conversationId: string, userId: string, messageId: string): Promise<void> => {
+    const [conv, member, pivot] = await Promise.all([
+      conversationRepository.getConversationById(conversationId),
+      conversationRepository.getMember(conversationId, userId),
+      conversationRepository.findMessageByMessageId(conversationId, messageId),
+    ]);
+    if (!conv) throw new NotFoundError('Hội thoại');
+    if (!member) throw new ForbiddenError('Bạn không phải là thành viên của hội thoại này');
+
+    if (conv.type === 'group' && (member.unreadCount ?? 0) > 0) {
+      try {
+        // Client can mark-read from a stale cached pivot while fresher unread messages are still loading.
+        // Snapshot against the actual latest server-side message so the unread recap is not lost.
+        const latestGroupMessage =
+          (
+            await conversationRepository.listRecentMessages(conversationId, {
+              limit: 1,
+              minCreatedAtMs: resolveMessageHistoryMinCreatedAtMs(conv, member),
+            })
+          )[0] ?? pivot;
+
+        if (!latestGroupMessage) {
+          throw new Error('No message available to capture group recap');
+        }
+
+        await groupRecapSessionService.captureBeforeMarkRead({
+          conversation: conv,
+          member,
+          userId,
+          conversationId,
+          toMessage: latestGroupMessage,
+        });
+      } catch (error) {
+        logger.warn('[group recap] Không thể chụp recap session trước khi mark read:', error);
+      }
+    }
+
     await Promise.all([
       conversationRepository.updateMessageStatus(messageId, userId, 'read'),
       conversationRepository.resetMemberUnreadCount(conversationId, userId),
     ]);
 
-    const conv = await conversationRepository.getConversationById(conversationId);
-    if (!conv || conv.type !== 'direct') return;
-
-    const pivot = await conversationRepository.findMessageByMessageId(conversationId, messageId);
-    if (!pivot) return;
+    if (conv.type !== 'direct' || !pivot) return;
 
     const members = await conversationRepository.getConversationMembers(conversationId);
     const partnerId = members.find((m) => m.userId !== userId)?.userId;

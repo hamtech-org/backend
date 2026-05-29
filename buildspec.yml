@@ -6,6 +6,12 @@ env:
     IMAGE_TAG: latest
     RUN_DB_SETUP: 'true'
     DYNAMODB_TABLE_PREFIX: Hamtech_Prod_
+    JWT_PRIVATE_KEY: 'dummy-key'
+    JWT_PUBLIC_KEY: 'dummy-key'
+    JWT_ACCESS_SECRET: 'dummy-secret'
+    JWT_REFRESH_SECRET: 'dummy-secret'
+    AGORA_APP_ID: 'dummy-id'
+    AGORA_APP_CERTIFICATE: 'dummy-certificate'
 
 phases:
   install:

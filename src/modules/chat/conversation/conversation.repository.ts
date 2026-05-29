@@ -61,6 +61,13 @@ export const conversationRepository = {
         isMuted: boolean;
         isPinnedToTop: boolean;
         notificationsMutedUntil: string | null | undefined;
+        clearedAt?: string | null;
+        clearedAtMs?: number | null;
+        clearedUntilSK?: string | null;
+        revealedAt?: string | null;
+        revealedAtMs?: number | null;
+        conversationListAt?: string | null;
+        conversationListAtMs?: number | null;
       }
     >();
     for (const item of result.Items) {
@@ -79,6 +86,22 @@ export const conversationRepository = {
         isMuted,
         isPinnedToTop: !!(item as { isPinnedToTop?: boolean }).isPinnedToTop,
         notificationsMutedUntil,
+        clearedAt: (item as { clearedAt?: string }).clearedAt ?? null,
+        clearedAtMs:
+          typeof (item as { clearedAtMs?: number }).clearedAtMs === 'number'
+            ? (item as { clearedAtMs?: number }).clearedAtMs
+            : null,
+        clearedUntilSK: (item as { clearedUntilSK?: string }).clearedUntilSK ?? null,
+        revealedAt: (item as { revealedAt?: string }).revealedAt ?? null,
+        revealedAtMs:
+          typeof (item as { revealedAtMs?: number }).revealedAtMs === 'number'
+            ? (item as { revealedAtMs?: number }).revealedAtMs
+            : null,
+        conversationListAt: (item as { conversationListAt?: string }).conversationListAt ?? null,
+        conversationListAtMs:
+          typeof (item as { conversationListAtMs?: number }).conversationListAtMs === 'number'
+            ? (item as { conversationListAtMs?: number }).conversationListAtMs
+            : null,
       });
     }
 
@@ -94,12 +117,22 @@ export const conversationRepository = {
       .map((c) => {
         const p = prefsByConvId.get(c.conversationId);
         if (!p) return c;
+        const lastMsgAtMs = c.lastMessageAt ? Date.parse(c.lastMessageAt) : 0;
+        const listAtMs = Math.max(lastMsgAtMs, p.conversationListAtMs || 0);
+        const listAt = listAtMs > 0 ? new Date(listAtMs).toISOString() : c.lastMessageAt;
         return {
           ...c,
           unreadCount: p.unreadCount,
           isMuted: p.isMuted,
           isPinnedToTop: p.isPinnedToTop,
           notificationsMutedUntil: p.notificationsMutedUntil ?? undefined,
+          clearedAt: p.clearedAt,
+          clearedAtMs: p.clearedAtMs,
+          clearedUntilSK: p.clearedUntilSK,
+          revealedAt: p.revealedAt,
+          revealedAtMs: p.revealedAtMs,
+          conversationListAt: listAt,
+          conversationListAtMs: listAtMs,
         };
       });
   },
@@ -158,6 +191,7 @@ export const conversationRepository = {
       new QueryCommand({
         TableName: CONVERSATIONS_TABLE,
         KeyConditionExpression: 'PK = :pk AND begins_with(SK, :memberPrefix)',
+        ConsistentRead: true,
         ExpressionAttributeValues: {
           ':pk': `CONV#${conversationId}`,
           ':memberPrefix': 'MEMBER#',
@@ -301,6 +335,20 @@ export const conversationRepository = {
     );
   },
 
+  /** Chỉ đổi `updatedAt` — dùng bust cache avatar nhóm ghép tự động. */
+  touchConversationUpdatedAt: async (conversationId: string): Promise<void> => {
+    const cid = String(conversationId ?? '').trim();
+    if (!cid) return;
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${cid}`, SK: 'META' },
+        UpdateExpression: 'SET updatedAt = :now',
+        ExpressionAttributeValues: { ':now': new Date().toISOString() },
+      }),
+    );
+  },
+
   getMember: async (
     conversationId: string,
     userId: string,
@@ -308,10 +356,34 @@ export const conversationRepository = {
     const result = await dynamoClient.send(
       new GetCommand({
         TableName: CONVERSATIONS_TABLE,
+        ConsistentRead: true,
         Key: { PK: `CONV#${conversationId}`, SK: `MEMBER#${userId}` },
       }),
     );
     return (result.Item as IConversationMember) ?? null;
+  },
+
+  revealConversationForUser: async (
+    conversationId: string,
+    userId: string,
+    nowIso: string,
+    nowMs: number,
+  ): Promise<void> => {
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: CONVERSATIONS_TABLE,
+        Key: { PK: `CONV#${conversationId}`, SK: `MEMBER#${userId}` },
+        UpdateExpression:
+          'SET revealedAt = :rAt, revealedAtMs = :rAtMs, conversationListAt = :cAt, conversationListAtMs = :cAtMs',
+        ConditionExpression: 'attribute_exists(PK) AND attribute_exists(SK)',
+        ExpressionAttributeValues: {
+          ':rAt': nowIso,
+          ':rAtMs': nowMs,
+          ':cAt': nowIso,
+          ':cAtMs': nowMs,
+        },
+      }),
+    );
   },
 
   removeMember: async (conversationId: string, userId: string): Promise<void> => {
@@ -605,6 +677,9 @@ export const conversationRepository = {
       isMuted?: boolean;
       isPinnedToTop?: boolean;
       notificationsMutedUntil?: string | null;
+      clearedAt?: string | null;
+      clearedAtMs?: number | null;
+      clearedUntilSK?: string | null;
     },
   ): Promise<void> => {
     const names: Record<string, string> = {};
@@ -632,6 +707,39 @@ export const conversationRepository = {
       } else {
         names[`#s${i}`] = 'notificationsMutedUntil';
         values[`:s${i}`] = prefs.notificationsMutedUntil;
+        setTokens.push(`#s${i} = :s${i}`);
+        i++;
+      }
+    }
+    if (prefs.clearedAt !== undefined) {
+      if (prefs.clearedAt === null) {
+        names['#rmClearedAt'] = 'clearedAt';
+        removeTokens.push('#rmClearedAt');
+      } else {
+        names[`#s${i}`] = 'clearedAt';
+        values[`:s${i}`] = prefs.clearedAt;
+        setTokens.push(`#s${i} = :s${i}`);
+        i++;
+      }
+    }
+    if (prefs.clearedAtMs !== undefined) {
+      if (prefs.clearedAtMs === null) {
+        names['#rmClearedAtMs'] = 'clearedAtMs';
+        removeTokens.push('#rmClearedAtMs');
+      } else {
+        names[`#s${i}`] = 'clearedAtMs';
+        values[`:s${i}`] = prefs.clearedAtMs;
+        setTokens.push(`#s${i} = :s${i}`);
+        i++;
+      }
+    }
+    if (prefs.clearedUntilSK !== undefined) {
+      if (prefs.clearedUntilSK === null) {
+        names['#rmClearedUntilSK'] = 'clearedUntilSK';
+        removeTokens.push('#rmClearedUntilSK');
+      } else {
+        names[`#s${i}`] = 'clearedUntilSK';
+        values[`:s${i}`] = prefs.clearedUntilSK;
         setTokens.push(`#s${i} = :s${i}`);
         i++;
       }
@@ -752,17 +860,39 @@ export const conversationRepository = {
     return (result.Items as IMessage[]) ?? [];
   },
 
+  listMessagesInSortKeyRange: async (
+    conversationId: string,
+    opts: { fromSortKey: string; toSortKey: string; limit: number },
+  ): Promise<IMessage[]> => {
+    const limit = Math.min(Math.max(1, opts.limit), 500);
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: MESSAGES_TABLE,
+        KeyConditionExpression: 'PK = :pk AND SK BETWEEN :from AND :to',
+        ExpressionAttributeValues: {
+          ':pk': `CONV#${conversationId}`,
+          ':from': opts.fromSortKey,
+          ':to': opts.toSortKey,
+        },
+        Limit: limit,
+        ScanIndexForward: true,
+      }),
+    );
+    return (result.Items as IMessage[]) ?? [];
+  },
+
   /**
    * Tin gần đây (mới → cũ), phân trang Dynamo.
    * `minCreatedAtMs`: bỏ qua tin cũ hơn mốc (dùng khi tắt đọc tin trước khi vào nhóm).
    */
   listRecentMessages: async (
     conversationId: string,
-    opts: { limit: number; minCreatedAtMs?: number | null },
+    opts: { limit: number; minCreatedAtMs?: number | null; clearedUntilSK?: string | null },
   ): Promise<IMessage[]> => {
     const limit = Math.min(Math.max(1, opts.limit), 500);
     const minMs = opts.minCreatedAtMs;
     const hasCutoff = minMs != null && Number.isFinite(minMs);
+    const clearedUntilSK = opts.clearedUntilSK;
     const collected: IMessage[] = [];
     let exclusiveStartKey: Record<string, unknown> | undefined;
     const PAGE = 64;
@@ -786,6 +916,10 @@ export const conversationRepository = {
 
       let reachedHistoryCutoff = false;
       for (const m of items) {
+        if (clearedUntilSK && m.SK && m.SK <= clearedUntilSK) {
+          reachedHistoryCutoff = true;
+          continue;
+        }
         if (hasCutoff) {
           const t = Date.parse(m.createdAt);
           if (Number.isFinite(t) && t < minMs!) {
@@ -814,12 +948,14 @@ export const conversationRepository = {
     opts: {
       limit: number;
       minCreatedAtMs?: number | null;
+      clearedUntilSK?: string | null;
       exclusiveStartKey?: Record<string, unknown>;
     },
   ): Promise<{ items: IMessage[]; lastEvaluatedKey?: Record<string, unknown> }> => {
     const limit = Math.min(Math.max(1, opts.limit), 100);
     const minMs = opts.minCreatedAtMs;
     const hasCutoff = minMs != null && Number.isFinite(minMs);
+    const clearedUntilSK = opts.clearedUntilSK;
     const collected: IMessage[] = [];
     let exclusiveStartKey = opts.exclusiveStartKey;
     const PAGE = Math.min(limit + 10, 100);
@@ -847,6 +983,10 @@ export const conversationRepository = {
 
       let reachedHistoryCutoff = false;
       for (const m of items) {
+        if (clearedUntilSK && m.SK && m.SK <= clearedUntilSK) {
+          reachedHistoryCutoff = true;
+          continue;
+        }
         if (hasCutoff) {
           const t = Date.parse(m.createdAt);
           if (Number.isFinite(t) && t < minMs!) {
@@ -1080,5 +1220,32 @@ export const conversationRepository = {
       (result.Item as { conversationId?: string })?.conversationId ?? '',
     ).trim();
     return conversationId || null;
+  },
+
+  updateGroupId: async (conversationId: string, groupId: string | null): Promise<void> => {
+    if (groupId) {
+      await dynamoClient.send(
+        new UpdateCommand({
+          TableName: CONVERSATIONS_TABLE,
+          Key: { PK: `CONV#${conversationId}`, SK: 'META' },
+          UpdateExpression: 'SET groupId = :groupId, updatedAt = :now',
+          ExpressionAttributeValues: {
+            ':groupId': groupId,
+            ':now': new Date().toISOString(),
+          },
+        }),
+      );
+    } else {
+      await dynamoClient.send(
+        new UpdateCommand({
+          TableName: CONVERSATIONS_TABLE,
+          Key: { PK: `CONV#${conversationId}`, SK: 'META' },
+          UpdateExpression: 'REMOVE groupId SET updatedAt = :now',
+          ExpressionAttributeValues: {
+            ':now': new Date().toISOString(),
+          },
+        }),
+      );
+    }
   },
 };

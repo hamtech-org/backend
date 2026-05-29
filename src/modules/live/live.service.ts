@@ -1,6 +1,9 @@
 import { randomUUID } from 'crypto';
 import { ForbiddenError, NotFoundError } from '@/shared/utils/errors.js';
 import { userRepository } from '@/modules/user/user.repository.js';
+import { notificationService } from '@/modules/notification/notification.service.js';
+import { getIO } from '@/socket/index.js';
+import { logger } from '@/shared/utils/logger.js';
 import { emitToLiveRoom } from './live.broadcast.js';
 import { buildLiveChannelName, liveRepository } from './live.repository.js';
 import { getLiveViewerUserIds } from './live.presence.js';
@@ -23,6 +26,55 @@ const toPublicSession = (meta: ILiveSessionMeta): LiveSessionPublic => ({
   coverImageUrl: meta.coverImageUrl,
   coverColor: meta.coverColor,
 });
+
+/** Thông báo bạn bè khi host bắt đầu phiên live (inbox + socket + push). */
+async function notifyFollowersLiveStarted(
+  hostUserId: string,
+  session: LiveSessionPublic,
+): Promise<void> {
+  try {
+    const followerIds = await userRepository.getFriendIds(hostUserId, 200);
+    if (followerIds.length === 0) return;
+
+    const host = await userRepository.findById(hostUserId);
+    const hostName = host?.displayName ?? 'Ai đó';
+    const sessionTitle = session.title?.trim() || 'Live';
+    const body = `${hostName} đang phát live: ${sessionTitle}`;
+
+    const io = getIO();
+    for (const followerId of followerIds) {
+      if (followerId === hostUserId) continue;
+
+      io.to(`user:${followerId}`).emit('live:started', {
+        sessionId: session.sessionId,
+        hostUserId,
+        title: sessionTitle,
+      });
+
+      void notificationService
+        .dispatch({
+          type: 'live_started',
+          userId: followerId,
+          title: 'Đang phát live',
+          body,
+          data: {
+            route: 'live',
+            id: session.sessionId,
+            entityType: 'live',
+            entityId: session.sessionId,
+            deepLink: `/live/${session.sessionId}`,
+            actorId: hostUserId,
+            actorName: hostName,
+            actorAvatar: host?.avatar ?? null,
+            extra: { hostUserId, sessionTitle },
+          },
+        })
+        .catch((e) => logger.error('live_started notification failed', e));
+    }
+  } catch (err) {
+    logger.error('Failed to notify live_started', err);
+  }
+}
 
 export const liveAgoraService = {
   assertPublisherToken: async (channelName: string, userId: string): Promise<void> => {
@@ -72,7 +124,9 @@ export const liveService = {
     };
 
     await liveRepository.putMeta(meta);
-    return toPublicSession(meta);
+    const session = toPublicSession(meta);
+    void notifyFollowersLiveStarted(userId, session);
+    return session;
   },
 
   listActiveSessions: async (): Promise<LiveSessionListItem[]> => {

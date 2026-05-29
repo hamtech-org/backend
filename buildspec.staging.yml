@@ -6,6 +6,12 @@ env:
     IMAGE_TAG: staging-latest
     RUN_DB_SETUP: 'true'
     DYNAMODB_TABLE_PREFIX: Hamtech_Staging_
+    JWT_PRIVATE_KEY: 'dummy-key'
+    JWT_PUBLIC_KEY: 'dummy-key'
+    JWT_ACCESS_SECRET: 'dummy-secret'
+    JWT_REFRESH_SECRET: 'dummy-secret'
+    AGORA_APP_ID: 'dummy-id'
+    AGORA_APP_CERTIFICATE: 'dummy-certificate'
 
 phases:
   install:
@@ -20,7 +26,7 @@ phases:
       - echo "Running checks for staging"
       - npm run lint || echo "Lint errors found, skip fail on staging"
       - npm run typecheck
-      - npm test || echo "Tests failed, skip fail on staging"
+      - npm test
       - |
         if [ "${RUN_DB_SETUP}" = "true" ]; then
           echo "Running DynamoDB setup for staging"
