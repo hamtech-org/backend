@@ -451,7 +451,7 @@ export async function runAiAssistantPipeline(
     if (confirmCandidates.length > 0) {
       onStage?.('await_user_confirmation');
       // Lưu công cụ cần xác nhận và yêu cầu người dùng.
-      const pendingTool = buildPendingConfirmedTools(confirmCandidates);
+      const pendingTool = buildPendingConfirmedTools(extraCalls);
       const pendingRecord = await aiAssistantRepository.setPendingTool(
         threadId,
         pendingTool.toolName,
