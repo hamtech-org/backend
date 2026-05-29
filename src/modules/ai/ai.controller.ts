@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { aiService } from './ai.service.js';
 import { aiAssistantRepository } from './assistant/assistant.repository.js';
 import { sendSuccess } from '@/shared/utils/response.js';
-import { deleteAiAssistantVectors } from './shared/rag/qdrant.client.js';
+import { deleteAiAssistantMemories } from './shared/rag/qdrant.client.js';
 import type {
   IAiSuggestRequest,
   IAiChatbotRequest,
@@ -123,7 +123,7 @@ export const aiController = {
       const userId = req.user!.userId;
       const cleared = await aiAssistantRepository.clearAndResetDefaultThread(userId);
       if (cleared.previousThreadId) {
-        await deleteAiAssistantVectors({ userId, threadId: cleared.previousThreadId });
+        await deleteAiAssistantMemories({ userId, threadId: cleared.previousThreadId });
       }
       sendSuccess(res, { threadId: cleared.threadId });
     } catch (error) {

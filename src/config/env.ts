@@ -41,10 +41,10 @@ const envSchema = z.object({
   ELASTICSEARCH_USERNAME: z.string().default(''),
   ELASTICSEARCH_PASSWORD: z.string().default(''),
 
-  /** Qdrant vector DB (optional — AI RAG disabled if empty). */
+  /** Qdrant vector DB (optional - AI long-term memory disabled if empty). */
   QDRANT_URL: z.string().default(''),
   QDRANT_API_KEY: z.string().default(''),
-  QDRANT_COLLECTION: z.string().default('hamtech_ai_messages'),
+  QDRANT_COLLECTION: z.string().default('hamtech_ai_memories'),
   /** Titan v2 default 1024. */
   AI_EMBEDDING_DIMENSION: z.coerce.number().default(1024),
   BEDROCK_EMBEDDING_MODEL_ID: z.string().default('amazon.titan-embed-text-v2:0'),
