@@ -18,6 +18,7 @@ export interface CallIncomingPayload {
   conversationId: string;
   scope?: CallScope;
   hostId?: string;
+  sessionId?: string;
 }
 
 export interface CallAcceptPayload {
@@ -25,6 +26,7 @@ export interface CallAcceptPayload {
   callerId: string;
   conversationId: string;
   type: CallType;
+  sessionId?: string;
 }
 
 export interface CallRejectPayload {
@@ -32,6 +34,7 @@ export interface CallRejectPayload {
   callerId: string;
   conversationId: string;
   type: CallType;
+  sessionId?: string;
 }
 
 export interface CallEndPayload {
@@ -39,6 +42,7 @@ export interface CallEndPayload {
   peerId: string;
   conversationId: string;
   type: CallType;
+  sessionId?: string;
   durationSec?: number;
   result?: 'completed' | 'missed' | 'rejected' | 'cancelled';
 }
@@ -48,6 +52,7 @@ export interface CallMissedPayload {
   peerId: string;
   conversationId: string;
   type: CallType;
+  sessionId?: string;
 }
 
 export interface CallUpgradeRequestPayload {
@@ -80,6 +85,7 @@ export interface CallGroupMissedPayload {
   channelName: string;
   conversationId: string;
   type: CallType;
+  sessionId?: string;
 }
 
 /** Client báo không còn ai trong kênh Agora (phiên nhóm kết thúc tự nhiên). */

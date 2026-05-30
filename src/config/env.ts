@@ -69,6 +69,9 @@ const envSchema = z.object({
   SES_FROM_EMAIL: z.string().default('noreply@zalogram.vn'),
   SES_REGION: z.string().default('us-east-1'),
   SNS_REGION: z.string().default('us-east-1'),
+  FIREBASE_PROJECT_ID: z.string().default(''),
+  FIREBASE_CLIENT_EMAIL: z.string().default(''),
+  FIREBASE_PRIVATE_KEY: z.string().default(''),
 
   REKOGNITION_COLLECTION_ID: z.string().default('zalogram-faces'),
   REKOGNITION_FACE_MATCH_THRESHOLD: z.coerce.number().default(95),
