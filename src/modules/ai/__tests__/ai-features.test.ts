@@ -1,7 +1,7 @@
 import { aiService } from '../ai.service.js';
-import { generateText } from '../ai-generate-text.js';
+import { generateText } from '../shared/llm/generate-text.js';
 
-jest.mock('../ai-generate-text.js', () => ({
+jest.mock('../shared/llm/generate-text.js', () => ({
   generateText: jest.fn(),
 }));
 
