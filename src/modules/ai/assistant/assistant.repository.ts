@@ -1,4 +1,5 @@
 import {
+  BatchWriteCommand,
   DeleteCommand,
   GetCommand,
   PutCommand,
@@ -8,7 +9,7 @@ import {
 import { dynamoClient } from '@/config/database.js';
 import { env } from '@/config/env.js';
 import { v4 as uuidv4 } from 'uuid';
-import type { AiAssistantClientAction } from './ai.types.js';
+import type { AiAssistantClientAction } from '../shared/types/assistant.types.js';
 
 const TABLE = `${env.DYNAMODB_TABLE_PREFIX}AiAssistant`;
 
@@ -28,6 +29,7 @@ export type AiAssistantPendingTool = {
   threadId: string;
   toolName: string;
   toolArgs: Record<string, unknown>;
+  assistantReply?: string;
   requestedAt: string;
 };
 
@@ -183,6 +185,7 @@ export const aiAssistantRepository = {
       threadId?: string;
       toolName?: string;
       toolArgs?: Record<string, unknown>;
+      assistantReply?: string;
       requestedAt?: string;
     } | null;
     if (!row?.pendingId || !row.threadId || !row.toolName || !row.requestedAt) return null;
@@ -191,6 +194,9 @@ export const aiAssistantRepository = {
       threadId: row.threadId,
       toolName: row.toolName,
       toolArgs: row.toolArgs ?? {},
+      ...(typeof row.assistantReply === 'string' && row.assistantReply.trim()
+        ? { assistantReply: row.assistantReply.trim() }
+        : {}),
       requestedAt: row.requestedAt,
     };
   },
@@ -199,14 +205,17 @@ export const aiAssistantRepository = {
     threadId: string,
     toolName: string,
     toolArgs: Record<string, unknown>,
+    assistantReply?: string,
   ): Promise<AiAssistantPendingTool> => {
     const pendingId = uuidv4();
     const requestedAt = new Date().toISOString();
+    const trimmedAssistantReply = assistantReply?.trim();
     const item: AiAssistantPendingTool = {
       pendingId,
       threadId,
       toolName,
       toolArgs,
+      ...(trimmedAssistantReply ? { assistantReply: trimmedAssistantReply } : {}),
       requestedAt,
     };
     await dynamoClient.send(
@@ -264,5 +273,67 @@ export const aiAssistantRepository = {
         ExpressionAttributeValues: { ':t': now },
       }),
     );
+  },
+
+  clearAndResetDefaultThread: async (
+    userId: string,
+  ): Promise<{ previousThreadId: string | null; threadId: string; deletedMessages: number }> => {
+    const previousThreadId = await aiAssistantRepository.getDefaultThreadId(userId);
+
+    // Always create a new thread id so client can safely re-join.
+    const threadId = uuidv4();
+    const now = new Date().toISOString();
+
+    // 1) Delete old thread messages + state (best-effort; safe if null)
+    let deletedMessages = 0;
+    if (previousThreadId) {
+      // delete pending tool state
+      await aiAssistantRepository.clearPendingTool(previousThreadId);
+
+      // delete messages in batches of 25
+      let lastKey: Record<string, unknown> | undefined;
+      do {
+        const res = await dynamoClient.send(
+          new QueryCommand({
+            TableName: TABLE,
+            KeyConditionExpression: 'PK = :pk',
+            ExpressionAttributeValues: { ':pk': threadMsgPk(previousThreadId) },
+            ExclusiveStartKey: lastKey as any,
+          }),
+        );
+        lastKey = res.LastEvaluatedKey as any;
+        const items = (res.Items ?? []) as Array<{ PK?: string; SK?: string }>;
+        const keys = items
+          .filter((it) => typeof it.PK === 'string' && typeof it.SK === 'string')
+          .map((it) => ({ PK: it.PK as string, SK: it.SK as string }));
+        deletedMessages += keys.length;
+
+        for (let i = 0; i < keys.length; i += 25) {
+          const chunk = keys.slice(i, i + 25);
+          await dynamoClient.send(
+            new BatchWriteCommand({
+              RequestItems: {
+                [TABLE]: chunk.map((Key) => ({ DeleteRequest: { Key } })),
+              },
+            }),
+          );
+        }
+      } while (lastKey);
+    }
+
+    // 2) Upsert/overwrite DEFAULT mapping with new threadId
+    await dynamoClient.send(
+      new PutCommand({
+        TableName: TABLE,
+        Item: {
+          ...userDefaultKey(userId),
+          threadId,
+          createdAt: now,
+          updatedAt: now,
+        },
+      }),
+    );
+
+    return { previousThreadId, threadId, deletedMessages };
   },
 };

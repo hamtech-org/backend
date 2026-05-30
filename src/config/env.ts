@@ -25,6 +25,8 @@ const envSchema = z.object({
   AWS_REGION: z.string().default('us-east-1'),
   AWS_ACCESS_KEY_ID: z.string().default(''),
   AWS_SECRET_ACCESS_KEY: z.string().default(''),
+  BEDROCK_ACCESS_KEY_ID: z.string().default(''),
+  BEDROCK_SECRET_ACCESS_KEY: z.string().default(''),
 
   DYNAMODB_ENDPOINT: z.string().optional(),
   DYNAMODB_TABLE_PREFIX: z.string().default('Zalogram_'),
@@ -41,15 +43,17 @@ const envSchema = z.object({
   ELASTICSEARCH_USERNAME: z.string().default(''),
   ELASTICSEARCH_PASSWORD: z.string().default(''),
 
-  /** Qdrant vector DB (optional — AI RAG disabled if empty). */
+  /** Qdrant vector DB (optional - AI long-term memory disabled if empty). */
   QDRANT_URL: z.string().default(''),
   QDRANT_API_KEY: z.string().default(''),
-  QDRANT_COLLECTION: z.string().default('hamtech_ai_messages'),
+  QDRANT_COLLECTION: z.string().default('hamtech_ai_memories'),
   /** Titan v2 default 1024. */
   AI_EMBEDDING_DIMENSION: z.coerce.number().default(1024),
   BEDROCK_EMBEDDING_MODEL_ID: z.string().default('amazon.titan-embed-text-v2:0'),
   /** Optional second Bedrock model for tool `invoke_secondary_model`. */
   BEDROCK_SECONDARY_MODEL_ID: z.string().optional(),
+  /** Optional key for encrypting AI admin secrets stored in DynamoDB. */
+  AI_CONFIG_ENCRYPTION_KEY: z.string().optional(),
 
   S3_BUCKET_NAME: z.string().default('zalogram-media'),
   S3_REGION: z.string().default('us-east-1'),

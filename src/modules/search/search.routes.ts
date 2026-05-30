@@ -19,6 +19,7 @@ const q = validateQuery(searchQuerySchema);
 router.get('/users/by-contact', q, searchController.searchUsersByContact);
 router.get('/users', q, searchController.searchUsers);
 router.get('/groups', q, searchController.searchGroups);
+router.get('/communities', q, searchController.searchCommunities);
 router.get('/posts', q, searchController.searchPosts);
 router.get('/messages', q, searchController.searchMessages);
 router.get('/all', q, searchController.searchAll);

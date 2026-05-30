@@ -66,6 +66,16 @@ export const searchController = {
     }
   },
 
+  searchCommunities: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const options = parseSearchOptions(req);
+      const results = await searchService.searchCommunities(options);
+      sendSuccess(res, results);
+    } catch (error) {
+      next(error);
+    }
+  },
+
   searchPosts: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const options = parseSearchOptions(req);

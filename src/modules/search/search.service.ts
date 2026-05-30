@@ -8,6 +8,7 @@ import type {
   ISearchUserResult,
   ISearchPostResult,
   ISearchGroupResult,
+  ISearchCommunityResult,
   ISearchMessageResult,
   ISearchAllResult,
   ISearchAllChatResult,
@@ -28,6 +29,17 @@ function textMatchesQuery(text: string, query: string): boolean {
   if (haystack.includes(needle)) return true;
   const terms = needle.split(/\s+/).filter(Boolean);
   return terms.length > 0 && terms.every((term) => haystack.includes(term));
+}
+
+function isCommunitySource(source: ISearchGroupResult): boolean {
+  return Boolean(source.communityId || source.slug);
+}
+
+function resolveCommunityCategoryFilter(options: ISearchOptions): string | undefined {
+  const fromCategories = options.categories?.[0]?.trim();
+  if (fromCategories) return fromCategories;
+  const fromFilters = options.filters?.category;
+  return typeof fromFilters === 'string' && fromFilters.trim() ? fromFilters.trim() : undefined;
 }
 
 export const searchService = {
@@ -498,6 +510,171 @@ export const searchService = {
           console.error('Search groups fallback error:', fallbackError);
         }
       }
+      return { items: [], total: 0, page, pageSize, hasMore: false };
+    }
+  },
+
+  searchCommunities: async (
+    options: ISearchOptions,
+  ): Promise<ISearchResult<ISearchCommunityResult>> => {
+    const page = options.page || 1;
+    const pageSize = options.pageSize || 20;
+    const from = (page - 1) * pageSize;
+    const categoryFilter = resolveCommunityCategoryFilter(options);
+    const isWildcardQuery = !options.query.trim() || options.query.trim() === '*';
+
+    try {
+      const filters: Array<Record<string, unknown>> = [
+        { term: { isActive: true } },
+        { term: { status: 'active' } },
+        {
+          bool: {
+            should: [{ exists: { field: 'communityId' } }, { exists: { field: 'slug' } }],
+            minimum_should_match: 1,
+          },
+        },
+      ];
+      if (categoryFilter) {
+        filters.push({ term: { category: categoryFilter } });
+      }
+
+      const result = await esClient.search({
+        index: 'groups',
+        from,
+        size: pageSize,
+        query: isWildcardQuery
+          ? {
+              bool: {
+                must: [{ match_all: {} }],
+                filter: filters,
+              },
+            }
+          : {
+              bool: {
+                should: [
+                  {
+                    match: {
+                      name: {
+                        query: options.query,
+                        fuzziness: 'AUTO',
+                        operator: 'or',
+                      },
+                    },
+                  },
+                  {
+                    match: {
+                      description: {
+                        query: options.query,
+                        fuzziness: 'AUTO',
+                        operator: 'or',
+                      },
+                    },
+                  },
+                  {
+                    match_phrase_prefix: {
+                      name: options.query,
+                    },
+                  },
+                ],
+                minimum_should_match: 1,
+                filter: filters,
+              },
+            },
+        _source: [
+          'groupId',
+          'communityId',
+          'name',
+          'description',
+          'slug',
+          'avatar',
+          'coverUrl',
+          'category',
+          'memberCount',
+          'type',
+        ],
+        track_total_hits: true,
+      });
+
+      const privateGroupIds = options.userId
+        ? Array.from(
+            new Set(
+              result.hits.hits
+                .map((hit) => hit._source as ISearchGroupResult)
+                .filter((source) => isCommunitySource(source) && source.type === 'private')
+                .map((source) => source.groupId),
+            ),
+          )
+        : [];
+
+      const joinedPrivateCommunityIds = new Set<string>();
+      if (options.userId && privateGroupIds.length > 0) {
+        try {
+          const memberItems = await communityRepository.batchGetMembers(
+            privateGroupIds,
+            options.userId,
+          );
+          for (const m of memberItems) {
+            if (m.status === 'active') {
+              joinedPrivateCommunityIds.add(m.groupId);
+            }
+          }
+        } catch (err) {
+          console.error('Error batch getting community memberships in searchCommunities:', err);
+        }
+      }
+
+      let items: ISearchCommunityResult[] = result.hits.hits
+        .map((hit): ISearchCommunityResult | null => {
+          const source = hit._source as ISearchGroupResult;
+          if (!isCommunitySource(source)) return null;
+
+          if (source.type === 'private') {
+            if (!options.userId || !joinedPrivateCommunityIds.has(source.groupId)) {
+              return null;
+            }
+          }
+
+          return {
+            groupId: source.groupId,
+            communityId: source.communityId ?? source.groupId,
+            name: source.name,
+            description: source.description ?? null,
+            slug: source.slug,
+            avatar: source.avatar ?? null,
+            coverUrl: source.coverUrl ?? null,
+            category: source.category,
+            memberCount: source.memberCount ?? 0,
+            type: source.type,
+          };
+        })
+        .filter((item): item is ISearchCommunityResult => item !== null);
+
+      const directMatches = isWildcardQuery
+        ? []
+        : items.filter(
+            (item) =>
+              textMatchesQuery(item.name, options.query) ||
+              textMatchesQuery(item.description ?? '', options.query) ||
+              textMatchesQuery(item.slug ?? '', options.query),
+          );
+      if (directMatches.length > 0) {
+        items = directMatches;
+      }
+
+      const rawTotal =
+        typeof result.hits.total === 'number' ? result.hits.total : result.hits.total?.value || 0;
+      const total = directMatches.length > 0 ? items.length : Math.max(rawTotal, items.length);
+      const hasMore = from + pageSize < total;
+
+      return {
+        items,
+        total,
+        page,
+        pageSize,
+        hasMore,
+      };
+    } catch (error) {
+      console.error('Search communities error:', error);
       return { items: [], total: 0, page, pageSize, hasMore: false };
     }
   },
