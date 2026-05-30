@@ -304,9 +304,15 @@ export async function runAiAssistantPipeline(
       throwIfAborted(signal);
       // Tạo prompt để LLM tóm tắt kết quả.
       const followPrompt = [
+        pending.assistantReply
+          ? `Nội dung assistant đã nói trước khi user xác nhận:\n${pending.assistantReply}`
+          : '',
         `Kết quả công cụ:\n${exec.textForModel}`,
         'Tóm tắt gọn kết quả cho user bằng tiếng Việt. Nếu không có kết quả thì nói rõ.',
-      ].join('\n\n');
+        'Nếu nội dung trước xác nhận có phần từ chối an toàn hoặc trả lời phần khác không phụ thuộc tool, phải giữ lại trong câu trả lời cuối. Không bỏ qua phần từ chối đó.',
+      ]
+        .filter(Boolean)
+        .join('\n\n');
       onStage?.('model_finalize');
       // Gọi LLM để tóm tắt.
       const summarized = await generateText(followPrompt, {
@@ -413,6 +419,9 @@ export async function runAiAssistantPipeline(
   // Phân tích phản hồi JSON từ LLM.
   let parsed = parseJsonLoose(first.text);
   let reply = typeof parsed?.reply === 'string' ? parsed.reply.trim() : '';
+  if (parsed?.needsClarification && reply) {
+    return persistAssistantAndBuildResponse(reply, modelUsed, totalTokens);
+  }
   const toolCalls = Array.isArray(parsed?.toolCalls) ? parsed!.toolCalls! : [];
   const allActions: AiAssistantClientAction[] = [];
 
@@ -456,14 +465,18 @@ export async function runAiAssistantPipeline(
         threadId,
         pendingTool.toolName,
         pendingTool.toolArgs,
+        reply,
       );
       const confirmAction = getConfirmActionFromPending(pendingRecord);
-      return persistAssistantAndBuildResponse(
+      const confirmationReply = [
+        reply,
         `${confirmAction.payload.question} Bấm "${confirmAction.payload.confirmText}" hoặc "${confirmAction.payload.cancelText}".`,
-        modelUsed,
-        totalTokens,
-        [confirmAction],
-      );
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+      return persistAssistantAndBuildResponse(confirmationReply, modelUsed, totalTokens, [
+        confirmAction,
+      ]);
     }
 
     onStage?.('tool_execution');
