@@ -3,14 +3,14 @@ import { logger } from '@/shared/utils/logger.js';
 import {
   isAiAssistantCancellation,
   runAiAssistantPipeline,
-  type AiAssistantStage,
-} from './ai-assistant.pipeline.js';
-import { aiAssistantRepository } from './ai-assistant.repository.js';
+} from './pipeline/run-assistant.pipeline.js';
+import type { AiAssistantStage } from './pipeline/pipeline.constants.js';
+import { aiAssistantRepository } from './assistant.repository.js';
 import {
   aiAssistantMessageCancelSchema,
   aiAssistantMessageSendSchema,
   aiAssistantThreadJoinSchema,
-} from './ai-assistant.schema.js';
+} from './assistant.schema.js';
 
 const activeAiRequests = new Map<string, AbortController>();
 const cancelledAiRequests = new Set<string>();

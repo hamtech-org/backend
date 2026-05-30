@@ -1,7 +1,11 @@
 import { searchService } from '@/modules/search/search.service.js';
-import type { AiAssistantClientAction } from './ai.types.js';
-import { generateText } from './ai-generate-text.js';
-import { env } from '@/config/env.js';
+import type { AiAssistantClientAction } from '../../shared/types/assistant.types.js';
+import { generateText } from '../../shared/llm/generate-text.js';
+import {
+  isBedrockTextGenerationModelId,
+  resolveSecondaryModelId,
+} from '../../shared/llm/bedrock-models.js';
+import { KNOWN_TOOL_NAMES } from './tool-registry.js';
 
 export type AiToolCall = {
   name: string;
@@ -99,8 +103,14 @@ export async function executeAiToolCalls(
             payload: { source: 'search_users', query: q, users: r.items.slice(0, 8) },
           });
         }
+        console.log('search_users result', r.items);
         parts.push(
-          `[search_users query="${q}"]\n${JSON.stringify(r.items, null, 2).slice(0, 4000)}`,
+          [
+            `[search_users query="${q}" total=${r.items.length}]`,
+            r.items.length > 0
+              ? JSON.stringify(r.items, null, 2).slice(0, 4000)
+              : 'Không tìm thấy người dùng nào cho query này.',
+          ].join('\n'),
         );
         continue;
       }
@@ -120,7 +130,12 @@ export async function executeAiToolCalls(
           });
         }
         parts.push(
-          `[search_users_contacts query="${q}"]\n${JSON.stringify(r.items, null, 2).slice(0, 4000)}`,
+          [
+            `[search_users_contacts query="${q}" total=${r.items.length}]`,
+            r.items.length > 0
+              ? JSON.stringify(r.items, null, 2).slice(0, 4000)
+              : 'Không tìm thấy liên hệ/người dùng nào cho query này.',
+          ].join('\n'),
         );
         continue;
       }
@@ -141,6 +156,57 @@ export async function executeAiToolCalls(
         }
         parts.push(
           `[search_groups query="${q}"]\n${JSON.stringify(r.items, null, 2).slice(0, 4000)}`,
+        );
+        continue;
+      }
+
+      if (name === 'search_communities') {
+        const q = safeQuery(args.query) || '*';
+        const category =
+          typeof args.category === 'string' && args.category.trim()
+            ? args.category.trim()
+            : undefined;
+        const searchOnce = async (query: string, withCategory: boolean) =>
+          searchService.searchCommunities({
+            query,
+            page: 1,
+            pageSize: 8,
+            userId,
+            ...(withCategory && category ? { categories: [category] } : {}),
+          });
+
+        let r = await searchOnce(q, true);
+        if (r.items.length === 0 && q !== '*') {
+          r = await searchOnce('*', true);
+        }
+        if (r.items.length === 0 && category) {
+          r = await searchOnce('*', false);
+        }
+        const communities = r.items.slice(0, 8).map((item, index) => ({
+          resultKey: `C${index + 1}`,
+          groupId: item.groupId,
+          communityId: item.communityId,
+          name: item.name,
+          description: item.description ? truncateForTool(item.description, 300) : null,
+          category: item.category ?? null,
+          memberCount: item.memberCount,
+          type: item.type,
+          slug: item.slug ?? null,
+          avatar: item.avatar ?? null,
+        }));
+        if (communities.length > 0) {
+          clientActions.push({
+            type: 'show_community_results',
+            payload: { source: 'search_communities', query: q, communities },
+          });
+        }
+        const modelItems = communities.map(({ avatar: _avatar, ...rest }) => rest);
+        parts.push(
+          [
+            `[search_communities query="${q}"${category ? ` category="${category}"` : ''}]`,
+            'Dùng resultKey khi tham chiếu kết quả; groupId/communityId chỉ dùng nội bộ, không nhắc UUID cho user.',
+            JSON.stringify(modelItems, null, 2).slice(0, 5000),
+          ].join('\n'),
         );
         continue;
       }
@@ -167,12 +233,19 @@ export async function executeAiToolCalls(
 
       if (name === 'invoke_secondary_model') {
         const prompt = safeQuery(args.prompt) || safeQuery(args.message);
-        const modelId =
-          typeof args.modelId === 'string' && args.modelId.trim()
-            ? args.modelId.trim()
-            : env.BEDROCK_SECONDARY_MODEL_ID?.trim();
+        const requestedModelId =
+          typeof args.modelId === 'string' && args.modelId.trim() ? args.modelId.trim() : undefined;
+        if (requestedModelId && !isBedrockTextGenerationModelId(requestedModelId)) {
+          parts.push(
+            `[invoke_secondary_model] modelId "${requestedModelId}" không hỗ trợ chat (chỉ dùng model Converse, không dùng embedding).`,
+          );
+          continue;
+        }
+        const modelId = resolveSecondaryModelId(requestedModelId);
         if (!modelId) {
-          parts.push('[invoke_secondary_model] Không cấu hình BEDROCK_SECONDARY_MODEL_ID.');
+          parts.push(
+            '[invoke_secondary_model] BEDROCK_SECONDARY_MODEL_ID chưa cấu hình hoặc đang trỏ model embedding — dùng model chat (vd. amazon.nova-lite-v1:0).',
+          );
           continue;
         }
         const { text } = await generateText(prompt, {
@@ -184,7 +257,11 @@ export async function executeAiToolCalls(
         continue;
       }
 
-      parts.push(`[unknown_tool name=${name}]`);
+      if (!KNOWN_TOOL_NAMES.has(name)) {
+        parts.push(`[unknown_tool name=${name}]`);
+      } else {
+        parts.push(`[unhandled_executor_tool name=${name}]`);
+      }
     } catch (e) {
       if (options.signal?.aborted) {
         throw e;
