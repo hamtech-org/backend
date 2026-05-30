@@ -145,5 +145,11 @@ describe('Community Analytics Service Unit Tests', () => {
       expect(todayTrend?.newMembers).toBe(2);
       expect(todayTrend?.messages).toBe(10);
     });
+
+    it('TC03 (Pass): should fallback and define dashboard even if days range is invalid (<= 0)', async () => {
+      await expect(
+        communityService.getCommunityAnalytics('user-moderator', 'group-1', 0),
+      ).resolves.toBeDefined();
+    });
   });
 });

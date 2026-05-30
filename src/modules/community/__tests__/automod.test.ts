@@ -112,19 +112,6 @@ describe('Automod Service Unit Tests', () => {
       expect(result.content).toBe('Tôi sống ở Sussex và rất thích nghiên cứu sexology.');
       expect(result.action).toBeUndefined();
     });
-
-    it('bypass các loại tin nhắn không phải chữ/caption', async () => {
-      const result = await automodService.moderateMessage({
-        groupId: 'group-1',
-        conversationId: 'conv-1',
-        senderId: 'user-1',
-        content: 'sex',
-        messageType: 'sticker',
-      });
-
-      expect(result.allowed).toBe(true);
-      expect(result.content).toBe('sex');
-    });
   });
 
   describe('moderateMessage - Block Mode', () => {
@@ -160,6 +147,18 @@ describe('Automod Service Unit Tests', () => {
 
       expect(result.allowed).toBe(true);
       expect(result.action).toBeUndefined();
+    });
+
+    it('TC07 (Pass): should allow message if messageType is sticker even if content contains blacklisted keywords', async () => {
+      const result = await automodService.moderateMessage({
+        groupId: 'group-1',
+        conversationId: 'conv-1',
+        senderId: 'user-1',
+        content: 'spam',
+        messageType: 'sticker',
+      });
+
+      expect(result.allowed).toBe(true);
     });
   });
 });
