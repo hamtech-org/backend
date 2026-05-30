@@ -54,6 +54,17 @@ export type AiUsageLog = {
   error?: string;
 };
 
+export type AiUsageRange = 'day' | 'week' | 'month';
+export type AiUsageInterval = 'hour' | 'day' | 'week' | 'month';
+
+export type AiUsageTimelinePoint = {
+  t: string;
+  requests: number;
+  tokens: number;
+  errors: number;
+  averageLatencyMs: number;
+};
+
 export type AiUsageSummary = {
   totalRequests: number;
   successRequests: number;
@@ -61,6 +72,13 @@ export type AiUsageSummary = {
   totalTokens: number;
   averageLatencyMs: number;
   byProvider: Record<string, number>;
+  timeline: AiUsageTimelinePoint[];
+  meta: {
+    range: AiUsageRange;
+    interval: AiUsageInterval;
+    from: string;
+    to: string;
+  };
   recent: AiUsageLog[];
 };
 

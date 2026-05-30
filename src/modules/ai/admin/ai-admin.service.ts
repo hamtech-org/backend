@@ -7,8 +7,11 @@ import type {
   AiAdminConfig,
   AiAdminConfigPatch,
   AiConfigAudit,
+  AiUsageInterval,
   AiUsageLog,
+  AiUsageRange,
   AiUsageSummary,
+  AiUsageTimelinePoint,
 } from './ai-admin.types.js';
 
 type RuntimeAiConfig = AiTextConfig & {
@@ -25,6 +28,13 @@ type RuntimeAiConfig = AiTextConfig & {
 let cachedConfig: RuntimeAiConfig | null = null;
 
 const DEFAULT_BEDROCK_TEXT_MODEL_ID = 'amazon.nova-pro-v1:0';
+
+const DAY_MS = 86_400_000;
+
+type UsageSummaryParams = {
+  range?: AiUsageRange;
+  interval?: AiUsageInterval;
+};
 
 function isTextGenerationModelId(modelId: string | undefined): boolean {
   const id = modelId?.trim().toLowerCase();
@@ -165,6 +175,88 @@ function sanitizePatch(patch: AiAdminConfigPatch): AiAdminConfigPatch {
   };
 }
 
+function dateKey(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function startOfUtcDay(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function startOfUtcWeek(date: Date): Date {
+  const day = date.getUTCDay() || 7;
+  return new Date(startOfUtcDay(date).getTime() - (day - 1) * DAY_MS);
+}
+
+function startOfUtcMonth(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+}
+
+function datesBetween(from: Date, to: Date): string[] {
+  const dates: string[] = [];
+  for (let t = startOfUtcDay(from).getTime(); t <= to.getTime(); t += DAY_MS) {
+    dates.push(dateKey(new Date(t)));
+  }
+  return dates;
+}
+
+function resolveUsageWindow(params: UsageSummaryParams) {
+  const now = new Date();
+  const range = params.range ?? 'day';
+  const defaultInterval: AiUsageInterval =
+    range === 'day' ? 'hour' : range === 'week' ? 'day' : 'day';
+  const interval = params.interval ?? defaultInterval;
+  const to = now;
+  const from =
+    range === 'day'
+      ? startOfUtcDay(now)
+      : range === 'week'
+        ? new Date(startOfUtcDay(now).getTime() - 6 * DAY_MS)
+        : new Date(startOfUtcDay(now).getTime() - 29 * DAY_MS);
+  return { range, interval, from, to };
+}
+
+function bucketKey(date: Date, interval: AiUsageInterval): string {
+  if (interval === 'hour') {
+    return new Date(
+      Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), date.getUTCHours()),
+    ).toISOString();
+  }
+  if (interval === 'week') return startOfUtcWeek(date).toISOString();
+  if (interval === 'month') return startOfUtcMonth(date).toISOString();
+  return startOfUtcDay(date).toISOString();
+}
+
+function buildTimeline(rows: AiUsageLog[], interval: AiUsageInterval): AiUsageTimelinePoint[] {
+  const buckets = new Map<
+    string,
+    { requests: number; tokens: number; errors: number; totalLatencyMs: number }
+  >();
+  for (const row of rows) {
+    const key = bucketKey(new Date(row.createdAt), interval);
+    const current = buckets.get(key) ?? {
+      requests: 0,
+      tokens: 0,
+      errors: 0,
+      totalLatencyMs: 0,
+    };
+    current.requests += 1;
+    current.tokens += row.tokensUsed || 0;
+    current.errors += row.success ? 0 : 1;
+    current.totalLatencyMs += row.latencyMs || 0;
+    buckets.set(key, current);
+  }
+  return [...buckets.entries()]
+    .sort(([a], [b]) => new Date(a).getTime() - new Date(b).getTime())
+    .map(([t, value]) => ({
+      t,
+      requests: value.requests,
+      tokens: value.tokens,
+      errors: value.errors,
+      averageLatencyMs: value.requests ? Math.round(value.totalLatencyMs / value.requests) : 0,
+    }));
+}
+
 export async function getEffectiveAiRuntimeConfig(): Promise<RuntimeAiConfig> {
   const stored = await aiAdminRepository.getConfig().catch(() => null);
   const cfg = publicConfig(stored);
@@ -238,11 +330,14 @@ export const aiAdminService = {
     await aiAdminRepository.appendUsage(log).catch(() => undefined);
   },
 
-  getUsageSummary: async (): Promise<AiUsageSummary> => {
-    const recent = await aiAdminRepository.listUsageByDate(
-      new Date().toISOString().slice(0, 10),
-      100,
-    );
+  getUsageSummary: async (params: UsageSummaryParams = {}): Promise<AiUsageSummary> => {
+    const { range, interval, from, to } = resolveUsageWindow(params);
+    const recent = (
+      await aiAdminRepository.listUsageByDateRange(datesBetween(from, to), 200)
+    ).filter((row) => {
+      const createdAt = new Date(row.createdAt).getTime();
+      return createdAt >= from.getTime() && createdAt <= to.getTime();
+    });
     const totalRequests = recent.length;
     const successRequests = recent.filter((x) => x.success).length;
     const totalTokens = recent.reduce((sum, x) => sum + (x.tokensUsed || 0), 0);
@@ -260,6 +355,13 @@ export const aiAdminService = {
       totalTokens,
       averageLatencyMs,
       byProvider,
+      timeline: buildTimeline(recent, interval),
+      meta: {
+        range,
+        interval,
+        from: from.toISOString(),
+        to: to.toISOString(),
+      },
       recent: recent.slice(0, 20),
     };
   },
