@@ -69,6 +69,15 @@ export const aiAdminRepository = {
     return (res.Items ?? []) as AiUsageLog[];
   },
 
+  listUsageByDateRange: async (dates: string[], limitPerDate = 200): Promise<AiUsageLog[]> => {
+    const batches = await Promise.all(
+      dates.map((date) => aiAdminRepository.listUsageByDate(date, limitPerDate)),
+    );
+    return batches
+      .flat()
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  },
+
   appendAudit: async (audit: Omit<AiConfigAudit, 'auditId' | 'createdAt'>): Promise<void> => {
     const createdAt = new Date().toISOString();
     const auditId = randomUUID();
