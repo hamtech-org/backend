@@ -17,10 +17,15 @@ export function isBedrockTextGenerationModelId(modelId: string): boolean {
 }
 
 export function resolveSecondaryModelId(override?: string): string | undefined {
+  const liveEnv = process.env.BEDROCK_SECONDARY_MODEL_ID?.trim();
+  const parsedEnv = env.BEDROCK_SECONDARY_MODEL_ID?.trim();
+  const processEnvChanged = liveEnv !== parsedEnv;
   const candidate =
     (override?.trim() ||
+      (processEnvChanged ? liveEnv : undefined) ||
       getCachedAiRuntimeConfig().bedrockSecondaryModelId?.trim() ||
-      env.BEDROCK_SECONDARY_MODEL_ID?.trim()) ??
+      liveEnv ||
+      parsedEnv) ??
     '';
   if (!candidate) return undefined;
   return isTextGenerationModelId(candidate) ? candidate : undefined;
@@ -34,9 +39,14 @@ let warnedMisconfiguredSecondary = false;
 
 export function warnIfSecondaryModelMisconfigured(): void {
   if (warnedMisconfiguredSecondary) return;
+  const liveEnv = process.env.BEDROCK_SECONDARY_MODEL_ID?.trim();
+  const parsedEnv = env.BEDROCK_SECONDARY_MODEL_ID?.trim();
+  const processEnvChanged = liveEnv !== parsedEnv;
   const raw =
+    (processEnvChanged ? liveEnv : undefined) ||
     getCachedAiRuntimeConfig().bedrockSecondaryModelId?.trim() ||
-    env.BEDROCK_SECONDARY_MODEL_ID?.trim();
+    liveEnv ||
+    parsedEnv;
   if (!raw || isTextGenerationModelId(raw)) return;
   warnedMisconfiguredSecondary = true;
   logger.warn(

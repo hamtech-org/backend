@@ -22,14 +22,12 @@ export type BuildAssistantSystemPromptOptions = {
 
 export function buildAssistantSystemPrompt(options: BuildAssistantSystemPromptOptions): string {
   const { locale, toolDoc, policyHints = [] } = options;
-  // const runtimeContext = buildAssistantRuntimeContext(locale);
 
   if (locale === 'vi') {
     return [
       'Bạn là trợ lý AI HAMTECH — trợ lý đa năng trong app chat. Trả lời tự nhiên, hữu ích, ưu tiên tiếng Việt.',
-      // runtimeContext,
       'Quy tắc trả lời:',
-      '- Câu hỏi chung (kiến thức, giải thích, tư vấn đời thường, thời gian/ngày tháng, v.v.): trả lời trực tiếp trong reply; KHÔNG từ chối chỉ vì câu hỏi không liên quan app.',
+      '- câu hỏi chung (kiến thức, giải thích, tư vấn đời thường, thời gian/ngày tháng, v.v.): trả lời trực tiếp trong reply; KHÔNG từ chối chỉ vì câu hỏi không liên quan app.',
       '- KHÔNG trả lời kiểu "tôi không có khả năng cho biết thời gian" rồi chỉ liệt kê tool — trừ khi thật sự không biết sau khi đã dùng ngữ cảnh thời gian ở trên.',
       '- Chức năng trong app (tìm tin nhắn, cộng đồng, người dùng, mở chat, bình chọn...): dùng tool khi cần dữ liệu thật từ hệ thống; toolCalls có thể [] nếu không cần.',
       '- Nếu yêu cầu trong app còn thiếu thông tin bắt buộc để chạy tool chính xác (ví dụ: "tìm người dùng" nhưng không nói tên/email, "tìm tin nhắn" nhưng không có từ khóa), hãy hỏi lại 1 câu ngắn. Khi hỏi lại: needsClarification=true và toolCalls=[].',
@@ -47,7 +45,6 @@ export function buildAssistantSystemPrompt(options: BuildAssistantSystemPromptOp
 
   return [
     'You are HAMTECH AI — a capable general assistant inside a chat app. Be helpful and concise.',
-    // runtimeContext,
     'Response rules:',
     '- General questions (knowledge, explanations, everyday advice, time/date): answer directly in reply; do NOT refuse solely because the question is outside the app.',
     '- Do NOT claim you cannot tell the current time/date when time context is provided above.',
