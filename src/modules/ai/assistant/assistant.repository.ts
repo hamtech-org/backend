@@ -29,6 +29,7 @@ export type AiAssistantPendingTool = {
   threadId: string;
   toolName: string;
   toolArgs: Record<string, unknown>;
+  assistantReply?: string;
   requestedAt: string;
 };
 
@@ -184,6 +185,7 @@ export const aiAssistantRepository = {
       threadId?: string;
       toolName?: string;
       toolArgs?: Record<string, unknown>;
+      assistantReply?: string;
       requestedAt?: string;
     } | null;
     if (!row?.pendingId || !row.threadId || !row.toolName || !row.requestedAt) return null;
@@ -192,6 +194,9 @@ export const aiAssistantRepository = {
       threadId: row.threadId,
       toolName: row.toolName,
       toolArgs: row.toolArgs ?? {},
+      ...(typeof row.assistantReply === 'string' && row.assistantReply.trim()
+        ? { assistantReply: row.assistantReply.trim() }
+        : {}),
       requestedAt: row.requestedAt,
     };
   },
@@ -200,14 +205,17 @@ export const aiAssistantRepository = {
     threadId: string,
     toolName: string,
     toolArgs: Record<string, unknown>,
+    assistantReply?: string,
   ): Promise<AiAssistantPendingTool> => {
     const pendingId = uuidv4();
     const requestedAt = new Date().toISOString();
+    const trimmedAssistantReply = assistantReply?.trim();
     const item: AiAssistantPendingTool = {
       pendingId,
       threadId,
       toolName,
       toolArgs,
+      ...(trimmedAssistantReply ? { assistantReply: trimmedAssistantReply } : {}),
       requestedAt,
     };
     await dynamoClient.send(

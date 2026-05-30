@@ -4,6 +4,7 @@ import { MAX_HISTORY_MESSAGE_CHARS, MAX_HISTORY_TRANSCRIPT_CHARS } from './pipel
 
 export type LlmJsonShape = {
   reply?: string;
+  needsClarification?: boolean;
   toolCalls?: AiToolCall[];
   messageResultIds?: string[];
   messageResultKeys?: string[];
