@@ -25,6 +25,7 @@ export const sendMessageSchema = z
     mediaId: z.string().uuid().optional(),
     replyTo: z.string().uuid().optional(),
     duration: z.number().nonnegative().optional(),
+    mentions: z.array(z.string()).max(500).optional().default([]),
   })
   .refine(
     (data) => {

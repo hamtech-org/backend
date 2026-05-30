@@ -25,7 +25,10 @@ import {
   isConversationNotificationPushMuted,
 } from '../shared/chat.helpers.js';
 import { createAndBroadcastSystemMessage } from '../shared/system-message.factory.js';
-import { emitConversationCreatedToUser } from '../shared/chat.broadcast.js';
+import {
+  emitConversationCreatedToUser,
+  emitConversationDeletedForMe,
+} from '../shared/chat.broadcast.js';
 import {
   buildGroupCreatedContent,
   buildGroupMemberJoinedContent,
@@ -62,19 +65,55 @@ export const conversationService = {
     for (const conv of conversations) {
       const lm = conv.lastMessage;
       if (!lm?.messageId) continue;
+
+      const clearedMs = conv.clearedAtMs ?? (conv.clearedAt ? Date.parse(conv.clearedAt) : 0);
+      const lmTime = lm.createdAt ? Date.parse(lm.createdAt) : 0;
+
       const hidden = hiddenByConv.get(conv.conversationId);
-      if (!hidden?.has(lm.messageId)) continue;
-      const resolved = await resolveLastVisibleLastMessageSnapshot(
-        conv.conversationId,
-        hidden,
-        conversationRepository.getMessages,
-      );
-      if (resolved) conv.lastMessage = resolved;
-      else delete conv.lastMessage;
+
+      if (hidden?.has(lm.messageId)) {
+        // Last message is hidden, find the next visible one
+        const resolved = await resolveLastVisibleLastMessageSnapshot(
+          conv.conversationId,
+          hidden,
+          conversationRepository.getMessages,
+          conv.clearedUntilSK,
+        );
+        if (resolved) {
+          const resolvedTime = resolved.createdAt ? Date.parse(resolved.createdAt) : 0;
+          if (clearedMs > 0 && resolvedTime <= clearedMs) {
+            delete conv.lastMessage;
+          } else {
+            conv.lastMessage = resolved;
+          }
+        } else {
+          delete conv.lastMessage;
+        }
+      } else if (clearedMs > 0 && lmTime <= clearedMs) {
+        // Last message is cleared/deleted
+        delete conv.lastMessage;
+      }
     }
 
+    // Lọc các cuộc trò chuyện theo clearedAt
+    const activeConversations = conversations.filter((c) => {
+      if (c.clearedAt) {
+        const clearedMs = c.clearedAtMs ?? Date.parse(c.clearedAt);
+        const lastMsgAtMs = c.lastMessageAt ? Date.parse(c.lastMessageAt) : 0;
+        const revealedMs = c.revealedAtMs ?? 0;
+
+        const hasNewMessage = lastMsgAtMs > clearedMs;
+        const wasRevealedAfterClear = revealedMs >= clearedMs;
+
+        if (!hasNewMessage && !wasRevealedAfterClear) {
+          return false;
+        }
+      }
+      return true;
+    });
+
     /** Dữ liệu cũ có thể > giới hạn; giữ tối đa MAX theo hoạt động gần nhất, ghi DB và chỉnh bản trả về. */
-    const pinnedRows = conversations.filter((c) => c.isPinnedToTop);
+    const pinnedRows = activeConversations.filter((c) => c.isPinnedToTop);
     if (pinnedRows.length > MAX_PINNED_CHATS_TO_TOP) {
       const sorted = [...pinnedRows].sort((a, b) => {
         const ta = a.lastMessageAt ?? a.updatedAt ?? '';
@@ -93,17 +132,17 @@ export const conversationService = {
           }),
         ),
       );
-      for (const c of conversations) {
+      for (const c of activeConversations) {
         if (c.isPinnedToTop && !keepIds.has(c.conversationId)) c.isPinnedToTop = false;
       }
     }
 
-    const directConversations = conversations.filter(
+    const directConversations = activeConversations.filter(
       (conversation) => conversation.type === 'direct',
     );
 
     if (directConversations.length === 0) {
-      return filterDisbandedGroupsFromList(conversations);
+      return filterDisbandedGroupsFromList(activeConversations);
     }
 
     const membersPerConversation = await Promise.all(
@@ -135,7 +174,7 @@ export const conversationService = {
       (conversation as IConversation & { otherUserId?: string }).otherUserId = otherMember.userId;
     });
 
-    const filtered = filterDisbandedGroupsFromList(conversations);
+    const filtered = filterDisbandedGroupsFromList(activeConversations);
     for (const c of filtered) {
       if (c.type === 'group') {
         c.avatar = normalizeGroupConversationAvatarStored(c.avatar, c.conversationId);
@@ -161,7 +200,22 @@ export const conversationService = {
         throw new ForbiddenError('Khong the tao hoi thoai vi mot trong hai ben da chan nhau');
       }
       const existing = await conversationRepository.findDirectConversation(creatorId, otherId);
-      if (existing) return existing;
+      if (existing) {
+        // Tự động hiển thị lại cuộc hội thoại cho người bấm nhắn tin (creatorId)
+        await conversationService.revealConversationForUser(existing.conversationId, creatorId);
+        // Lấy lại thông tin hội thoại mới nhất sau khi reveal để trả về đầy đủ status (revealedAtMs, v.v.)
+        const updated = await conversationService.getConversationById(
+          existing.conversationId,
+          creatorId,
+        );
+        // Đẩy hội thoại mới/unhide vào sidebar của creatorId qua socket realtime
+        try {
+          await emitConversationCreatedToUser(creatorId, updated);
+        } catch {
+          /* best-effort */
+        }
+        return updated;
+      }
     }
 
     const now = new Date().toISOString();
@@ -288,12 +342,54 @@ export const conversationService = {
       );
     }
 
+    const lm = conversation.lastMessage;
+    if (lm?.messageId) {
+      const hidden = await messageUserHideRepository.queryHiddenMessageIdsForConversation(
+        userId,
+        conversationId,
+      );
+      const clearedMs = me.clearedAtMs ?? (me.clearedAt ? Date.parse(me.clearedAt) : 0);
+      const lmTime = lm.createdAt ? Date.parse(lm.createdAt) : 0;
+
+      if (hidden.has(lm.messageId)) {
+        const resolved = await resolveLastVisibleLastMessageSnapshot(
+          conversationId,
+          hidden,
+          conversationRepository.getMessages,
+          me.clearedUntilSK,
+        );
+        if (resolved) {
+          const resolvedTime = resolved.createdAt ? Date.parse(resolved.createdAt) : 0;
+          if (clearedMs > 0 && resolvedTime <= clearedMs) {
+            delete conversation.lastMessage;
+          } else {
+            conversation.lastMessage = resolved;
+          }
+        } else {
+          delete conversation.lastMessage;
+        }
+      } else if (clearedMs > 0 && lmTime <= clearedMs) {
+        delete conversation.lastMessage;
+      }
+    }
+
+    const lastMsgAtMs = conversation.lastMessageAt ? Date.parse(conversation.lastMessageAt) : 0;
+    const listAtMs = Math.max(lastMsgAtMs, me.conversationListAtMs || 0);
+    const listAt = listAtMs > 0 ? new Date(listAtMs).toISOString() : conversation.lastMessageAt;
+
     return {
       ...conversation,
       unreadCount: me.unreadCount ?? 0,
       isMuted: isConversationNotificationPushMuted(me),
       isPinnedToTop: !!me.isPinnedToTop,
       notificationsMutedUntil: me.notificationsMutedUntil ?? undefined,
+      clearedAt: me.clearedAt,
+      clearedAtMs: me.clearedAtMs,
+      clearedUntilSK: me.clearedUntilSK,
+      revealedAt: me.revealedAt,
+      revealedAtMs: me.revealedAtMs,
+      conversationListAt: listAt,
+      conversationListAtMs: listAtMs,
     };
   },
 
@@ -604,6 +700,66 @@ export const conversationService = {
 
     const buffer = await baseBg.composite(composites).png().toBuffer();
     return { buffer, isFallback: N < 2 };
+  },
+
+  clearConversationHistoryForUser: async (
+    userId: string,
+    conversationId: string,
+  ): Promise<{
+    conversationId: string;
+    type: string;
+    clearedAt: string;
+    clearedAtMs: number;
+    hiddenFromList: boolean;
+  }> => {
+    const conversation = await conversationRepository.getConversationById(conversationId);
+    if (!conversation) throw new NotFoundError('Hội thoại');
+
+    const member = await conversationRepository.getMember(conversationId, userId);
+    if (!member) throw new ForbiddenError('Bạn không phải thành viên của hội thoại này');
+
+    // Lấy tin nhắn mới nhất trong cuộc trò chuyện (giới hạn 1 tin) để xác định clearedUntilSK
+    const recentMessages = await conversationRepository.listRecentMessages(conversationId, {
+      limit: 1,
+    });
+    const latestMessage = recentMessages[0] || null;
+
+    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+    const clearedUntilSK = latestMessage?.SK ?? null;
+
+    await conversationRepository.updateMemberPreferences(conversationId, userId, {
+      clearedAt: nowIso,
+      clearedAtMs: nowMs,
+      clearedUntilSK,
+    });
+
+    // Cập nhật lastReadAt để reset unreadCount
+    await conversationRepository.resetMemberUnreadCount(conversationId, userId);
+
+    const shouldHideFromList = true;
+
+    await emitConversationDeletedForMe(userId, {
+      conversationId,
+      type: conversation.type,
+      clearedAt: nowIso,
+      clearedAtMs: nowMs,
+      shouldHideFromList,
+    });
+
+    return {
+      conversationId,
+      type: conversation.type,
+      clearedAt: nowIso,
+      clearedAtMs: nowMs,
+      hiddenFromList: shouldHideFromList,
+    };
+  },
+
+  revealConversationForUser: async (conversationId: string, userId: string): Promise<void> => {
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    await conversationRepository.revealConversationForUser(conversationId, userId, nowIso, nowMs);
   },
 };
 

@@ -83,10 +83,11 @@ export interface INotificationEvent {
   skipPush?: boolean;
 }
 
-/** Kafka batch: một sự kiện cho nhiều người nhận (vd. tin nhắn mới). */
 export interface INotificationKafkaMessage {
   type: NotificationType;
   recipientIds: string[];
+  taggedRecipientIds?: string[];
+  mentionType?: 'user' | 'all' | null;
   title: string;
   body: string;
   data: INotificationRouteData & Record<string, unknown>;

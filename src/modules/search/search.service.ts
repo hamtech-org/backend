@@ -52,11 +52,29 @@ export const searchService = {
     const from = (page - 1) * pageSize;
 
     try {
-      const convs = await conversationRepository.getConversations(_userId);
-      const conversationIds = convs.map((c) => c.conversationId);
-      if (conversationIds.length === 0) {
+      const { conversationService } = await import('../chat/conversation/conversation.service.js');
+      const convs = await conversationService.getConversations(_userId);
+      if (convs.length === 0) {
         return { items: [], total: 0, page, pageSize, hasMore: false };
       }
+
+      const chatFilters = convs.map((c) => {
+        const mustClauses: any[] = [{ term: { conversationId: c.conversationId } }];
+        if (c.clearedAt) {
+          mustClauses.push({
+            range: {
+              createdAt: {
+                gt: c.clearedAt,
+              },
+            },
+          });
+        }
+        return {
+          bool: {
+            must: mustClauses,
+          },
+        };
+      });
 
       const result = await esClient.search({
         index: 'messages',
@@ -66,8 +84,9 @@ export const searchService = {
           bool: {
             must: [
               {
-                terms: {
-                  conversationId: conversationIds, // Only messages in conversations user belongs to
+                bool: {
+                  should: chatFilters,
+                  minimum_should_match: 1,
                 },
               },
             ],

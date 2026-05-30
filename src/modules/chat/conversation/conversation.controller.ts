@@ -91,4 +91,16 @@ export const conversationController = {
       next(error);
     }
   },
+
+  deleteConversation: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await conversationService.clearConversationHistoryForUser(
+        req.user!.userId,
+        req.params.conversationId,
+      );
+      sendSuccess(res, result, 'Đã xóa lịch sử trò chuyện');
+    } catch (error) {
+      next(error);
+    }
+  },
 };
