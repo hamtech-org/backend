@@ -166,6 +166,7 @@ export interface IMessage extends TimestampFields {
     autoModerated: boolean;
     action: 'censor' | 'block';
   };
+  mentions?: string[];
 }
 
 /** Cursor-based paginated response for message loading (oldest → newest). */
@@ -203,6 +204,7 @@ export interface ISendMessageDto {
   mediaId?: string;
   replyTo?: string;
   duration?: number;
+  mentions?: string[];
 }
 
 export interface IReactMessageDto {

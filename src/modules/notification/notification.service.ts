@@ -3,6 +3,7 @@ import { getIO } from '@/socket/index.js';
 import { logger } from '@/shared/utils/logger.js';
 import { notificationRepository } from './notification.repository.js';
 import { sendExpoPushToUser } from './notification.push.js';
+import { stripMentionMarkdown } from '@/shared/utils/mentionHelper.js';
 import type {
   INotification,
   INotificationEvent,
@@ -55,12 +56,13 @@ export const notificationService = {
   /** Tạo bản ghi + socket + push (một người nhận). */
   dispatch: async (event: INotificationEvent): Promise<INotification> => {
     const now = new Date().toISOString();
+    const cleanBody = stripMentionMarkdown(event.body);
     const notification: INotification = {
       notificationId: uuidv4(),
       userId: event.userId,
       type: event.type,
       title: event.title,
-      body: event.body,
+      body: cleanBody,
       data: event.data,
       isRead: false,
       createdAt: now,
@@ -72,27 +74,49 @@ export const notificationService = {
     emitNotificationSocket(event.userId, saved, unreadCount);
 
     if (!event.skipPush) {
-      await sendExpoPushToUser(event.userId, event.title, event.body, event.data);
+      await sendExpoPushToUser(event.userId, event.title, cleanBody, event.data);
     }
 
     return saved;
   },
 
-  /** Kafka consumer / batch message handler. */
   processKafkaMessage: async (raw: Record<string, unknown>): Promise<void> => {
     if (raw.type === 'message' && Array.isArray(raw.recipientIds)) {
       const batch = raw as unknown as INotificationKafkaMessage;
       await Promise.all(
-        batch.recipientIds.map((userId) =>
-          notificationService.dispatch({
+        batch.recipientIds.map((userId) => {
+          const customTitle = batch.title;
+          let customBody = batch.body;
+
+          // Kiểm tra xem user này có nằm trong danh sách được nhắc tên không
+          const isTagged = batch.taggedRecipientIds?.includes(userId);
+          if (isTagged) {
+            const senderName = String(
+              batch.data.senderName || batch.data.actorName || 'Thành viên',
+            ).trim();
+            // Cắt bớt phần preview tin nhắn
+            const preview = String(batch.data.messagePreview || batch.body).trim();
+            if (batch.mentionType === 'all') {
+              customBody = `${senderName} đã nhắc đến cả nhóm: ${preview}`;
+            } else if (batch.mentionType === 'user') {
+              customBody = `${senderName} đã nhắc đến bạn: ${preview}`;
+            }
+          }
+
+          return notificationService.dispatch({
             type: 'message',
             userId,
-            title: batch.title,
-            body: batch.body,
-            data: batch.data,
+            title: customTitle,
+            body: customBody,
+            data: {
+              ...batch.data,
+              // Bổ sung thông tin nhắc tên vào metadata để client nhận biết
+              isTagged: isTagged ? 'true' : 'false',
+              mentionType: isTagged ? (batch.mentionType ?? undefined) : undefined,
+            },
             skipPush: batch.skipPush,
-          }),
-        ),
+          });
+        }),
       );
       return;
     }
@@ -111,6 +135,7 @@ export const notificationService = {
 
       const title = String(payload.senderName ?? 'Tin nhắn mới');
       const body = String(payload.messagePreview ?? 'Bạn có tin nhắn mới');
+      const cleanBody = stripMentionMarkdown(body);
       const conversationId = String(payload.conversationId ?? '');
 
       await Promise.all(
@@ -119,7 +144,7 @@ export const notificationService = {
             type: 'message',
             userId,
             title,
-            body,
+            body: cleanBody,
             data: {
               route: 'chat',
               id: conversationId,
@@ -131,14 +156,14 @@ export const notificationService = {
               senderId: payload.senderId,
               senderName: payload.senderName,
               messageId: payload.messageId,
-              messagePreview: body,
+              messagePreview: cleanBody,
               extra: {
                 messageId: payload.messageId,
                 senderId: payload.senderId,
                 senderName: payload.senderName,
                 actorId: payload.senderId,
                 actorName: payload.senderName,
-                messagePreview: body,
+                messagePreview: cleanBody,
               },
             },
           }),
@@ -158,7 +183,12 @@ export const notificationService = {
   },
 
   sendPushNotification: async (event: INotificationEvent): Promise<void> => {
-    await sendExpoPushToUser(event.userId, event.title, event.body, event.data);
+    await sendExpoPushToUser(
+      event.userId,
+      event.title,
+      stripMentionMarkdown(event.body),
+      event.data,
+    );
   },
 
   sendEmailNotification: async (
