@@ -89,7 +89,7 @@ function attachPublicMessageStatus(
   } = msg as IMessage & {
     outboundStatus?: MessageStatus;
     status?: MessageStatus;
-    readBy?: { userId: string; displayName?: string | null }[];
+    readBy?: { userId: string; displayName?: string | null; avatar?: string | null }[];
   };
   const isOwn = msg.senderId === viewerUserId;
   const base = {
@@ -113,7 +113,7 @@ async function attachReadReceipts(
 ): Promise<IMessage[]> {
   const members = await conversationRepository.getConversationMembers(conversationId);
   const msgTimes = messages
-    .filter((m) => m.senderId === viewerUserId && !m.isRecalled && !m.isDeleted)
+    .filter((m) => !m.isRecalled && !m.isDeleted)
     .map((m) => new Date(m.createdAt).getTime());
   if (msgTimes.length === 0) return messages;
 
@@ -132,17 +132,22 @@ async function attachReadReceipts(
   const userMap = new Map(users.map((u) => [u.userId, u]));
 
   return messages.map((msg) => {
-    if (msg.senderId !== viewerUserId || msg.isRecalled || msg.isDeleted) return msg;
+    if (msg.isRecalled || msg.isDeleted) return msg;
     const readBy = members
       .filter(
         (m) =>
           m.userId !== msg.senderId &&
+          m.userId !== viewerUserId &&
           !!m.lastReadAt &&
           new Date(m.lastReadAt).getTime() >= new Date(msg.createdAt).getTime(),
       )
       .map((m) => {
         const u = userMap.get(m.userId);
-        return { userId: m.userId, displayName: u?.displayName?.trim() ?? null };
+        return {
+          userId: m.userId,
+          displayName: u?.displayName?.trim() ?? null,
+          avatar: u?.avatar ?? null,
+        };
       });
     if (readBy.length === 0) return msg;
     return { ...msg, readBy };
