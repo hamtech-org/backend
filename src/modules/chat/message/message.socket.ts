@@ -124,18 +124,37 @@ export const registerChatHandlers = (io: Server, socket: Socket): void => {
     }
   });
 
-  socket.on('message:typing', async (conversationId: string) => {
-    let displayName: string | null = null;
-    try {
-      const user = await userRepository.findById(userId);
-      displayName = user?.displayName ?? null;
-    } catch (error) {
-      logger.debug('Socket message:typing lookup user lỗi:', error);
+  socket.on('message:typing', (conversationId: string) => {
+    const cid = String(conversationId ?? '').trim();
+    if (!cid) return;
+
+    // Guard bảo mật: Chỉ cho phép phát trạng thái gõ nếu user thực sự tham gia room của hội thoại đó
+    if (!socket.rooms.has(`conv:${cid}`)) {
+      return;
     }
-    socket.to(`conv:${conversationId}`).emit('message:typing_indicator', {
+
+    const displayName = (socket.data.displayName as string) || null;
+    socket.to(`conv:${cid}`).emit('message:typing_indicator', {
       userId,
-      conversationId,
+      conversationId: cid,
       displayName,
+      isTyping: true,
+    });
+  });
+
+  socket.on('message:typing_stop', (conversationId: string) => {
+    const cid = String(conversationId ?? '').trim();
+    if (!cid) return;
+
+    // Guard bảo mật in-memory
+    if (!socket.rooms.has(`conv:${cid}`)) {
+      return;
+    }
+
+    socket.to(`conv:${cid}`).emit('message:typing_indicator', {
+      userId,
+      conversationId: cid,
+      isTyping: false,
     });
   });
 
