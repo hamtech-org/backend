@@ -30,6 +30,7 @@ import {
   resolveMessageHistoryMinCreatedAtMs,
   filterMessagesByJoinHistoryCutoff,
 } from '../shared/chat.helpers.js';
+import { formatCallMessagePreview } from '../shared/call-message-preview.js';
 import { formatGroupJoinLinkListPreview } from '../shared/group-join-link-message.js';
 import { stripMentionMarkdown } from '@/shared/utils/mentionHelper.js';
 
@@ -677,17 +678,19 @@ export const messageService = {
     const joinLinkPreview =
       message.type === 'text' ? formatGroupJoinLinkListPreview(cleanedContent) : null;
     const lastPreviewContent =
-      cleanedContent !== ''
-        ? (joinLinkPreview ?? cleanedContent)
-        : message.type === 'image'
-          ? '[Ảnh]'
-          : message.type === 'video'
-            ? '[Video]'
-            : message.type === 'voice'
-              ? '[Tin nhắn thoại]'
-              : message.type === 'file'
-                ? message.mediaOriginalName?.trim() || '[File]'
-                : message.content;
+      message.type === 'call'
+        ? formatCallMessagePreview(message.content)
+        : cleanedContent !== ''
+          ? (joinLinkPreview ?? cleanedContent)
+          : message.type === 'image'
+            ? '[Ảnh]'
+            : message.type === 'video'
+              ? '[Video]'
+              : message.type === 'voice'
+                ? '[Tin nhắn thoại]'
+                : message.type === 'file'
+                  ? message.mediaOriginalName?.trim() || '[File]'
+                  : message.content;
 
     // Cập nhật lastMessage trên conversation
     await conversationRepository.updateConversationLastMessage(

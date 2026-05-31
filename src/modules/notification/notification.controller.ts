@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { notificationService } from './notification.service.js';
 import { deviceTokenRepository } from './device-token.repository.js';
 import { sendSuccess } from '@/shared/utils/response.js';
-import type { PushPlatform } from './notification.types.js';
+import type { PushPlatform, PushProvider } from './notification.types.js';
 
 export const notificationController = {
   list: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -45,8 +45,16 @@ export const notificationController = {
 
   registerDeviceToken: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { token, platform } = req.body as { token: string; platform: PushPlatform };
-      await deviceTokenRepository.upsert(req.user!.userId, token, platform);
+      const { token, platform, provider, deviceId } = req.body as {
+        token: string;
+        platform: PushPlatform;
+        provider: PushProvider;
+        deviceId?: string;
+      };
+      await deviceTokenRepository.upsert(req.user!.userId, token, platform, {
+        provider,
+        deviceId: deviceId ?? null,
+      });
       sendSuccess(res, null, 'Đăng ký thiết bị thành công');
     } catch (error) {
       next(error);

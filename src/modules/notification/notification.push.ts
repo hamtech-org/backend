@@ -1,7 +1,8 @@
 import { env } from '@/config/env.js';
 import { logger } from '@/shared/utils/logger.js';
 import { deviceTokenRepository } from './device-token.repository.js';
-import type { INotificationRouteData } from './notification.types.js';
+import { isFcmPushConfigured, sendFcmDataOnlyToTokens } from './fcm.push.js';
+import type { IDevicePushToken, INotificationRouteData } from './notification.types.js';
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 
@@ -18,6 +19,9 @@ interface ExpoPushMessage {
 
 function pushChannelId(data: INotificationRouteData & Record<string, unknown>): string {
   const route = String(data?.route ?? '');
+  const kind = String(data?.notificationKind ?? '');
+  const entityType = String(data?.entityType ?? '');
+  if (kind === 'chat_call_missed' || entityType === 'call_missed') return 'messages';
   if (route === 'call') return 'calls';
   if (route === 'chat') return 'messages';
   return 'social';
@@ -30,12 +34,22 @@ function enrichPushData(
     ...data,
     notificationKind:
       data.notificationKind ??
-      (data.route === 'chat'
-        ? 'chat_message'
-        : data.route === 'call'
-          ? 'chat_call_direct'
-          : 'inbox_social'),
+      (data.entityType === 'call_missed' || data.callStatus === 'missed'
+        ? 'chat_call_missed'
+        : data.route === 'chat'
+          ? 'chat_message'
+          : data.route === 'call'
+            ? 'chat_call_direct'
+            : 'inbox_social'),
   };
+  if (data.entityType === 'call_missed' || data.callStatus === 'missed') {
+    const channelName = String(data.channelName ?? data.entityId ?? data.id ?? '').trim();
+    enriched.notificationKind = 'chat_call_missed';
+    enriched.categoryIdentifier = enriched.categoryIdentifier ?? 'hamtech_call_missed';
+    if (channelName) {
+      enriched.notificationId = enriched.notificationId ?? `call-${channelName}`;
+    }
+  }
   if (data.route === 'chat') {
     const conversationId = String(data.id ?? data.entityId ?? '').trim();
     if (conversationId) {
@@ -49,12 +63,50 @@ function enrichPushData(
     enriched.notificationKind = isGroup ? 'chat_call_group' : 'chat_call_direct';
     enriched.categoryIdentifier =
       enriched.categoryIdentifier ?? (isGroup ? 'hamtech_call_group' : 'hamtech_call_direct');
+    enriched.callScope = isGroup ? 'group' : 'direct';
+    enriched.callStatus = enriched.callStatus ?? 'incoming';
+    enriched.callType = enriched.callType ?? 'audio';
+    enriched.callerName = enriched.callerName ?? enriched.actorName ?? enriched.senderName;
     const channelName = String(data.channelName ?? data.entityId ?? data.id ?? '').trim();
     if (channelName) {
+      enriched.channelName = enriched.channelName ?? channelName;
       enriched.notificationId = enriched.notificationId ?? `call-${channelName}`;
     }
   }
   return enriched;
+}
+
+function isCallLifecyclePush(data: INotificationRouteData & Record<string, unknown>): boolean {
+  return data.route === 'call' || data.entityType === 'call_missed' || data.callStatus === 'missed';
+}
+
+export function selectPushTargetsForNotification(
+  tokens: IDevicePushToken[],
+  data: INotificationRouteData & Record<string, unknown>,
+  canSendFcm: boolean,
+): { expoTokens: string[]; fcmTokens: string[] } {
+  const isCall = isCallLifecyclePush(data);
+  const fcmTokens =
+    isCall && canSendFcm
+      ? tokens.filter((t) => t.platform === 'android' && t.provider === 'fcm').map((t) => t.token)
+      : [];
+  const fcmDeviceIds = new Set(
+    isCall && canSendFcm
+      ? tokens
+          .filter((t) => t.platform === 'android' && t.provider === 'fcm' && t.deviceId)
+          .map((t) => t.deviceId as string)
+      : [],
+  );
+  const expoTokens = tokens
+    .filter((t) => {
+      if (t.provider === 'fcm') return false;
+      if (!t.token.startsWith('ExponentPushToken') && !t.token.startsWith('ExpoPushToken')) {
+        return false;
+      }
+      return !(isCall && canSendFcm && t.deviceId && fcmDeviceIds.has(t.deviceId));
+    })
+    .map((t) => t.token);
+  return { expoTokens, fcmTokens };
 }
 
 function normalizeBackendAvatarUrl(url: unknown): string | undefined {
@@ -96,12 +148,17 @@ export async function sendExpoPushToUser(
 ): Promise<void> {
   try {
     const tokens = await deviceTokenRepository.listByUserId(userId);
-    const expoTokens = tokens
-      .map((t) => t.token)
-      .filter((t) => t.startsWith('ExponentPushToken') || t.startsWith('ExpoPushToken'));
+    const enrichedData = enrichPushData(data);
+    const isCallPush = isCallLifecyclePush(enrichedData);
+    const canSendFcm = isCallPush && isFcmPushConfigured();
+    const { expoTokens, fcmTokens } = selectPushTargetsForNotification(
+      tokens,
+      enrichedData,
+      canSendFcm,
+    );
 
-    if (expoTokens.length === 0) {
-      logger.info(`[PushAvatar] No expo push tokens found for user ${userId}`);
+    if (expoTokens.length === 0 && fcmTokens.length === 0) {
+      logger.info(`[PushAvatar] No push tokens found for user ${userId}`);
       return;
     }
 
@@ -129,7 +186,6 @@ export async function sendExpoPushToUser(
     const normalizedAvatar = normalizeBackendAvatarUrl(rawAvatar);
     logger.info(`[PushAvatar] rawAvatar: ${rawAvatar}, normalizedAvatar: ${normalizedAvatar}`);
 
-    const enrichedData = enrichPushData(data);
     if (normalizedAvatar) {
       enrichedData.callerAvatar = enrichedData.callerAvatar || normalizedAvatar;
       enrichedData.actorAvatar = enrichedData.actorAvatar || normalizedAvatar;
@@ -146,16 +202,33 @@ export async function sendExpoPushToUser(
         ? enrichedData.categoryIdentifier
         : undefined;
     const pushSound = channelId === 'calls' ? 'amthanhnhan' : 'default';
-    const messages: ExpoPushMessage[] = expoTokens.map((to) => ({
-      to,
-      title,
-      body,
-      data: enrichedData,
-      sound: pushSound,
-      channelId,
-      ...(categoryId ? { categoryId } : {}),
-      ...(normalizedAvatar ? { image: normalizedAvatar } : {}),
-    }));
+    const isCall =
+      enrichedData.route === 'call' || enrichedData.notificationKind === 'chat_call_missed';
+    if (isCall) {
+      enrichedData.pushTitle = title;
+      enrichedData.pushBody = body;
+    }
+
+    if (fcmTokens.length > 0) {
+      logger.info(`[FCM] Sending incoming call data push to ${fcmTokens.length} token(s)`);
+      await sendFcmDataOnlyToTokens(fcmTokens, enrichedData);
+    }
+
+    if (expoTokens.length === 0) return;
+
+    const messages: ExpoPushMessage[] = expoTokens.map((to) => {
+      const msg: ExpoPushMessage = {
+        to,
+        data: enrichedData,
+        sound: pushSound,
+        channelId,
+        title,
+        body,
+        ...(categoryId ? { categoryId } : {}),
+        ...(normalizedAvatar ? { image: normalizedAvatar } : {}),
+      };
+      return msg;
+    });
 
     const chunks: ExpoPushMessage[][] = [];
     for (let i = 0; i < messages.length; i += 100) {

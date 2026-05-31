@@ -95,11 +95,14 @@ export interface INotificationKafkaMessage {
 }
 
 export type PushPlatform = 'ios' | 'android' | 'web';
+export type PushProvider = 'expo' | 'fcm';
 
 export interface IDevicePushToken {
   userId: string;
   token: string;
   platform: PushPlatform;
+  provider: PushProvider;
+  deviceId: string | null;
   createdAt: string;
   updatedAt: string;
 }

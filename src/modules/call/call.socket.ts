@@ -34,35 +34,54 @@ const buildGroupChannelName = (conversationId: string): string => {
 };
 
 /** Kênh grp_* → host, phiên (sessionId), mốc thời gian để log duration khi client gửi 0. */
-const groupCallMeta = new Map<
+export const groupCallMeta = new Map<
   string,
   { hostId: string; conversationId: string; sessionId: string; startedAt: number }
 >();
 
 /** userId → channelName — đang trong RTC (1-1 đã accept hoặc nhóm đã join). */
-const userActiveRtcChannel = new Map<string, string>();
+export const userActiveRtcChannel = new Map<string, string>();
 
-const bindDirectCallPair = (callerId: string, calleeId: string, channelName: string): void => {
+/** Bản đồ phiên cuộc gọi đang kích hoạt (direct & group) để phục vụ REST API fallback */
+export const activeCalls = new Map<
+  string,
+  {
+    sessionId: string;
+    channelName: string;
+    callerId: string;
+    calleeId?: string; // Chỉ cuộc gọi 1-1
+    conversationId: string;
+    type: string;
+    scope: 'direct' | 'group';
+    createdAt: number;
+  }
+>();
+
+export const bindDirectCallPair = (
+  callerId: string,
+  calleeId: string,
+  channelName: string,
+): void => {
   userActiveRtcChannel.set(callerId, channelName);
   userActiveRtcChannel.set(calleeId, channelName);
 };
 
-const bindUserRtcChannel = (uid: string, channelName: string): void => {
+export const bindUserRtcChannel = (uid: string, channelName: string): void => {
   userActiveRtcChannel.set(uid, channelName);
 };
 
-const unbindUserRtc = (uid: string): void => {
+export const unbindUserRtc = (uid: string): void => {
   userActiveRtcChannel.delete(uid);
 };
 
-const unbindAllUsersOnChannel = (channelName: string): void => {
+export const unbindAllUsersOnChannel = (channelName: string): void => {
   for (const [uid, ch] of [...userActiveRtcChannel.entries()]) {
     if (ch === channelName) userActiveRtcChannel.delete(uid);
   }
 };
 
 /** Chỉ `user:*` — tránh trùng socket vừa ở `conv:` vừa ở `user:`. */
-const emitToMemberUsers = (
+export const emitToMemberUsers = (
   io: Server,
   memberUserIds: string[],
   event: string,
@@ -74,10 +93,15 @@ const emitToMemberUsers = (
 };
 
 /** Đồng bộ đa thiết bị: mọi socket user:{calleeId} tắt chuông khi một máy accept/reject. */
-const emitCalleeIncomingDismissed = (
+export const emitCalleeIncomingDismissed = (
   io: Server,
   calleeId: string,
-  payload: { channelName: string; conversationId: string; reason: 'accepted' | 'rejected' },
+  payload: {
+    channelName: string;
+    conversationId: string;
+    reason: 'accepted' | 'rejected';
+    sessionId?: string;
+  },
 ): void => {
   io.to(`user:${calleeId}`).emit('call:incoming-dismissed', payload);
 };
@@ -110,6 +134,16 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
           startedAt,
         });
 
+        activeCalls.set(sessionId, {
+          sessionId,
+          channelName,
+          callerId: userId,
+          conversationId: data.conversationId,
+          type: data.type,
+          scope: 'group',
+          createdAt: startedAt,
+        });
+
         const incomingPayload = {
           callerId: userId,
           callerName: socket.data.displayName ?? userId,
@@ -138,6 +172,8 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
               data: {
                 route: 'call',
                 id: channelName,
+                notificationKind: 'chat_call_group',
+                categoryIdentifier: 'hamtech_call_group',
                 entityType: 'call',
                 entityId: channelName,
                 deepLink: `/call?channel=${channelName}&type=${data.type}&conversationId=${data.conversationId}&scope=group&hostId=${userId}&sessionId=${sessionId}`,
@@ -222,6 +258,18 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
     }
 
     const channelName = buildChannelName(userId, data.calleeId);
+    const sessionId = crypto.randomUUID();
+
+    activeCalls.set(sessionId, {
+      sessionId,
+      channelName,
+      callerId: userId,
+      calleeId: data.calleeId,
+      conversationId: data.conversationId,
+      type: data.type,
+      scope: 'direct',
+      createdAt: Date.now(),
+    });
 
     io.to(`user:${data.calleeId}`).emit('call:incoming', {
       callerId: userId,
@@ -231,6 +279,8 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
       channelName,
       conversationId: data.conversationId,
       scope: 'direct',
+      hostId: userId,
+      sessionId,
     });
 
     // Gửi Push Notification cuộc gọi 1-1 cho người nhận ngầm/chạy nền
@@ -244,9 +294,11 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
         data: {
           route: 'call',
           id: channelName,
+          notificationKind: 'chat_call_direct',
+          categoryIdentifier: 'hamtech_call_direct',
           entityType: 'call',
           entityId: channelName,
-          deepLink: `/call?channel=${channelName}&type=${data.type}&conversationId=${data.conversationId}&scope=direct&callerId=${userId}`,
+          deepLink: `/call?channel=${channelName}&type=${data.type}&conversationId=${data.conversationId}&scope=direct&callerId=${userId}&sessionId=${sessionId}`,
           conversationId: data.conversationId,
           callScope: 'direct',
           channelName,
@@ -256,6 +308,7 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
           callerName: socket.data.displayName ?? userId,
           callerAvatar: socket.data.avatar ?? null,
           hostId: userId,
+          sessionId,
         },
       })
       .catch((err) => {
@@ -266,6 +319,8 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
       channelName,
       conversationId: data.conversationId,
       scope: 'direct',
+      hostId: userId,
+      sessionId,
     });
     logger.info(
       `Call: ${userId} -> ${data.calleeId} (${data.type}) channel=${channelName} callerAvatar=${socket.data.avatar}`,
@@ -281,11 +336,13 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
       channelName: data.channelName,
       conversationId: data.conversationId,
       type: data.type,
+      sessionId: data.sessionId,
     });
     emitCalleeIncomingDismissed(io, userId, {
       channelName: data.channelName,
       conversationId: data.conversationId,
       reason: 'accepted',
+      sessionId: data.sessionId,
     });
     logger.info(`Call accepted: ${userId} on channel=${data.channelName}`);
   });
@@ -296,11 +353,13 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
         declinedBy: userId,
         channelName: data.channelName,
         conversationId: data.conversationId,
+        sessionId: data.sessionId,
       });
       emitCalleeIncomingDismissed(io, userId, {
         channelName: data.channelName,
         conversationId: data.conversationId,
         reason: 'rejected',
+        sessionId: data.sessionId,
       });
       logger.info(`Call group member declined: ${userId} channel=${data.channelName}`);
       return;
@@ -310,11 +369,13 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
       calleeId: userId,
       channelName: data.channelName,
       conversationId: data.conversationId,
+      sessionId: data.sessionId,
     });
     emitCalleeIncomingDismissed(io, userId, {
       channelName: data.channelName,
       conversationId: data.conversationId,
       reason: 'rejected',
+      sessionId: data.sessionId,
     });
     logger.info(`Call rejected: ${userId} on channel=${data.channelName}`);
 
@@ -345,6 +406,7 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
       userId,
       channelName: data.channelName,
       conversationId: data.conversationId,
+      sessionId: data.sessionId,
     });
     logger.info(`Call ended by ${userId} on channel=${data.channelName}`);
 
@@ -381,6 +443,8 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
           data: {
             route: 'chat',
             id: data.conversationId,
+            notificationKind: 'chat_call_missed',
+            categoryIdentifier: 'hamtech_call_missed',
             entityType: 'call_missed',
             entityId: data.channelName,
             conversationId: data.conversationId,
@@ -391,6 +455,7 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
             callerId: userId,
             callerName: socket.data.displayName ?? userId,
             callerAvatar: socket.data.avatar ?? null,
+            sessionId: data.sessionId,
           },
         });
       } catch (err) {
@@ -409,6 +474,7 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
       userId,
       channelName: data.channelName,
       conversationId: data.conversationId,
+      sessionId: data.sessionId,
     });
 
     try {
@@ -435,6 +501,8 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
         data: {
           route: 'chat',
           id: data.conversationId,
+          notificationKind: 'chat_call_missed',
+          categoryIdentifier: 'hamtech_call_missed',
           entityType: 'call_missed',
           entityId: data.channelName,
           conversationId: data.conversationId,
@@ -445,6 +513,7 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
           callerId: userId,
           callerName: socket.data.displayName ?? userId,
           callerAvatar: socket.data.avatar ?? null,
+          sessionId: data.sessionId,
         },
       });
     } catch (err) {
@@ -504,6 +573,8 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
             data: {
               route: 'chat',
               id: data.conversationId,
+              notificationKind: 'chat_call_missed',
+              categoryIdentifier: 'hamtech_call_missed',
               entityType: 'call_missed',
               entityId: data.channelName,
               conversationId: data.conversationId,
@@ -516,6 +587,7 @@ export const registerCallHandlers = (io: Server, socket: Socket): void => {
               callerAvatar: socket.data.avatar ?? null,
               conversationName: conv.name?.trim() || 'Cuộc gọi nhóm',
               conversationAvatar: conv.avatar || null,
+              sessionId,
             },
           })
           .catch((err) => {

@@ -2,7 +2,7 @@ import { DeleteCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { createHash } from 'node:crypto';
 import { dynamoClient } from '@/config/database.js';
 import { env } from '@/config/env.js';
-import type { IDevicePushToken, PushPlatform } from './notification.types.js';
+import type { IDevicePushToken, PushPlatform, PushProvider } from './notification.types.js';
 
 const TABLE_NAME = `${env.DYNAMODB_TABLE_PREFIX}Users`;
 
@@ -16,12 +16,17 @@ export const deviceTokenRepository = {
     userId: string,
     token: string,
     platform: PushPlatform,
+    options?: { provider?: PushProvider; deviceId?: string | null },
   ): Promise<IDevicePushToken> => {
     const now = new Date().toISOString();
+    const provider = options?.provider ?? 'expo';
+    const deviceId = options?.deviceId?.trim() || null;
     const record: IDevicePushToken = {
       userId,
       token,
       platform,
+      provider,
+      deviceId,
       createdAt: now,
       updatedAt: now,
     };
