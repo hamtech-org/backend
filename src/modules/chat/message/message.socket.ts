@@ -150,6 +150,12 @@ export const registerChatHandlers = (io: Server, socket: Socket): void => {
 
       await messageService.markAsRead(conversationId, userId, messageId);
 
+      // Phát cho chính người đọc (để đồng bộ đa thiết bị của họ)
+      io.to(`user:${userId}`).emit('conversation:read', {
+        conversationId,
+        messageId,
+      });
+
       const members = await conversationRepository.getConversationMembers(conversationId);
       const membersExceptSelf = members.filter((m) => m.userId !== userId);
       const conv = await conversationRepository.getConversationById(conversationId);

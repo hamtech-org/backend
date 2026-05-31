@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { messageService } from './message.service.js';
+import { conversationRepository } from '../conversation/conversation.repository.js';
 import { groupService } from '../group/group.service.js';
 import { sendSuccess, sendCreated } from '@/shared/utils/response.js';
 import { getIO } from '@/socket/index.js';
@@ -227,7 +228,50 @@ export const messageController = {
   markAsRead: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { messageId } = req.body as { messageId: string };
-      await messageService.markAsRead(req.params.conversationId, req.user!.userId, messageId);
+      const conversationId = req.params.conversationId;
+      const userId = req.user!.userId;
+
+      await messageService.markAsRead(conversationId, userId, messageId);
+
+      // Phát sự kiện socket đồng bộ real-time
+      try {
+        const io = getIO();
+
+        // Phát cho chính người đọc (để đồng bộ đa thiết bị của họ)
+        io.to(`user:${userId}`).emit('conversation:read', {
+          conversationId,
+          messageId,
+        });
+        const [members, conv] = await Promise.all([
+          conversationRepository.getConversationMembers(conversationId),
+          conversationRepository.getConversationById(conversationId),
+        ]);
+
+        if (members && conv) {
+          const membersExceptSelf = members.filter((m) => m.userId !== userId);
+
+          if (conv.type === 'direct') {
+            membersExceptSelf.forEach((member) => {
+              io.to(`user:${member.userId}`).emit('message:status', {
+                conversationId,
+                messageId,
+                status: 'read',
+              });
+            });
+          }
+
+          membersExceptSelf.forEach((member) => {
+            io.to(`user:${member.userId}`).emit('message:read_ack', {
+              conversationId,
+              messageId,
+              readBy: userId,
+            });
+          });
+        }
+      } catch (socketError) {
+        console.error('[markAsRead socket broadcast error]', socketError);
+      }
+
       sendSuccess(res, null, 'Đã đánh dấu đã đọc');
     } catch (error) {
       console.error('[markAsRead]', error);
