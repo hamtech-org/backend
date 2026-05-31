@@ -4,6 +4,7 @@ import { conversationRepository } from '../conversation/conversation.repository.
 import { groupService } from '../group/group.service.js';
 import { sendSuccess, sendCreated } from '@/shared/utils/response.js';
 import { getIO } from '@/socket/index.js';
+import { userRepository } from '@/modules/user/user.repository.js';
 import {
   broadcastMessageNew,
   emitEventsToConversationAndMembers,
@@ -260,11 +261,18 @@ export const messageController = {
             });
           }
 
+          const readerUser = await userRepository.findById(userId);
+          const readByPayload = {
+            userId,
+            displayName: readerUser?.displayName?.trim() ?? null,
+            avatar: readerUser?.avatar ?? null,
+          };
+
           membersExceptSelf.forEach((member) => {
             io.to(`user:${member.userId}`).emit('message:read_ack', {
               conversationId,
               messageId,
-              readBy: userId,
+              readBy: readByPayload,
             });
           });
         }

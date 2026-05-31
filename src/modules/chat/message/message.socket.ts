@@ -189,11 +189,18 @@ export const registerChatHandlers = (io: Server, socket: Socket): void => {
         });
       }
 
+      const readerUser = await userRepository.findById(userId);
+      const readByPayload = {
+        userId,
+        displayName: readerUser?.displayName?.trim() ?? null,
+        avatar: readerUser?.avatar ?? null,
+      };
+
       membersExceptSelf.forEach((member) => {
         io.to(`user:${member.userId}`).emit('message:read_ack', {
           conversationId,
           messageId,
-          readBy: userId,
+          readBy: readByPayload,
         });
       });
     } catch (error) {
