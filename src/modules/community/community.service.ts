@@ -1391,9 +1391,13 @@ export const communityService = {
     groupId: string,
     data: { reason: string; details?: string },
   ): Promise<void> => {
-    await requireActiveCommunity(groupId);
+    const community = await requireActiveCommunity(groupId);
     if (!data.reason) {
       throw new ValidationError('Lý do báo cáo không được để trống');
+    }
+
+    if (community.ownerId === actorId) {
+      throw new ValidationError('Bạn không thể tự báo cáo chính mình');
     }
 
     const reportId = uuidv4();
@@ -1817,6 +1821,10 @@ export const communityService = {
       contentPreview = {
         text: group.description || undefined,
       };
+    }
+
+    if (targetAuthorId === actorId) {
+      throw new ValidationError('Bạn không thể tự báo cáo chính mình');
     }
 
     const reportId = uuidv4();
