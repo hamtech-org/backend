@@ -27,6 +27,8 @@ import {
   emitNewDeviceLogin,
 } from '@/socket/sessionRevoke.notify.js';
 import { notificationService } from '@/modules/notification/notification.service.js';
+import { deviceTokenRepository } from '@/modules/notification/device-token.repository.js';
+
 import type { ForceLogoutReason } from '@/socket/sessionRevoke.notify.js';
 import type { JwtAccessPayload, JwtRefreshPayload } from '@/shared/types/auth.types.js';
 import type {
@@ -545,8 +547,12 @@ export const authService = {
   /**
    * Đăng xuất (xóa session hiện tại)
    */
-  logout: async (userId: string, sessionId: string): Promise<void> => {
+  logout: async (userId: string, sessionId: string, deviceToken?: string): Promise<void> => {
     await authRepository.deleteSession(sessionId, userId);
+    if (deviceToken) {
+      await deviceTokenRepository.remove(userId, deviceToken);
+      logger.info(`Removed device token on logout: ${userId}, token: ${deviceToken}`);
+    }
     emitForceLogout(sessionId, { reason: 'logout' });
     emitAuthSessionsChanged(userId);
     logger.info(`User logged out: ${userId}, session: ${sessionId}`);
@@ -607,6 +613,14 @@ export const authService = {
    * Đăng xuất tất cả thiết bị
    */
   logoutAll: async (userId: string): Promise<void> => {
+    try {
+      const tokens = await deviceTokenRepository.listByUserId(userId);
+      await Promise.all(tokens.map((t) => deviceTokenRepository.remove(userId, t.token)));
+      logger.info(`Removed all device tokens for user ${userId} on logoutAll`);
+    } catch (error) {
+      logger.error(`Error removing device tokens in logoutAll for user ${userId}:`, error);
+    }
+
     await emitForceLogoutForAllUserSessions(userId, 'logout_all');
     await authRepository.deleteAllUserSessions(userId);
     emitAuthSessionsChanged(userId);

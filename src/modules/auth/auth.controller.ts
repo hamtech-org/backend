@@ -66,7 +66,8 @@ export const authController = {
 
   logout: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      await authService.logout(req.user!.userId, req.user!.sessionId);
+      const { deviceToken } = req.body as { deviceToken?: string };
+      await authService.logout(req.user!.userId, req.user!.sessionId, deviceToken);
       sendSuccess(res, null, 'Đăng xuất thành công');
     } catch (error) {
       next(error);

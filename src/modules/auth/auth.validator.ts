@@ -29,18 +29,12 @@ export const forgotPasswordSchema = z.object({
 export const resetPasswordSchema = z.object({
   email: z.string().email('Email không hợp lệ'),
   token: z.string().min(1, 'OTP không được để trống'),
-  newPassword: z
-    .string()
-    .min(8, 'Mật khẩu tối thiểu 8 ký tự')
-    .regex(passwordRegex, passwordMsg),
+  newPassword: z.string().min(8, 'Mật khẩu tối thiểu 8 ký tự').regex(passwordRegex, passwordMsg),
 });
 
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1, 'Mật khẩu hiện tại không được để trống'),
-  newPassword: z
-    .string()
-    .min(8, 'Mật khẩu tối thiểu 8 ký tự')
-    .regex(passwordRegex, passwordMsg),
+  newPassword: z.string().min(8, 'Mật khẩu tối thiểu 8 ký tự').regex(passwordRegex, passwordMsg),
 });
 
 export const faceLoginSchema = z.object({
@@ -61,4 +55,8 @@ export const verifyEmailSchema = z.object({
 export const verifyLoginOtpSchema = z.object({
   email: z.string().email('Email không hợp lệ'),
   otp: z.string().length(6, 'OTP phải có 6 chữ số').regex(/^\d+$/, 'OTP chỉ được chứa chữ số'),
+});
+
+export const logoutSchema = z.object({
+  deviceToken: z.string().optional(),
 });
