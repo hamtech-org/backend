@@ -1,22 +1,24 @@
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { authRepository } from '@/modules/auth/auth.repository.js';
-import { conversationRepository } from '@/modules/chat/conversation/conversation.repository.js';
-import { conversationService } from '@/modules/chat/conversation/conversation.service.js';
-import { mergeGroupSettings } from '@/modules/chat/group/group.service.js';
-import type { IConversation } from '@/modules/chat/shared/chat.types.js';
-import { createAndBroadcastSystemMessage } from '@/modules/chat/shared/system-message.factory.js';
+import { communityRepository, padMs } from '@/modules/community/community.repository.js';
+import type {
+  CommunityCategory,
+  CommunityJoinPolicy,
+  CommunityType,
+  ICommunity,
+  ICommunityMember,
+} from '@/modules/community/community.types.js';
 import { newsfeedRepository } from '@/modules/newsfeed/newsfeed.repository.js';
 import { newsfeedService } from '@/modules/newsfeed/newsfeed.service.js';
+import { communityService } from '@/modules/community/community.service.js';
 import type { IPost, ModerationStatus } from '@/modules/newsfeed/newsfeed.types.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import type { IUser } from '@/modules/user/user.types.js';
 import { ConflictError, ForbiddenError, NotFoundError } from '@/shared/utils/errors.js';
-import { getIO } from '@/socket/index.js';
 import { adminCrudRepository } from './admin.crud.repository.js';
 import {
   fromAdminPostStatus,
-  resolveGroupStatus,
   toAdminPostStatus,
   writeModerationLog,
 } from './admin.crud.helpers.js';
@@ -29,15 +31,11 @@ import type {
   CreateAdminGroupDto,
   CreateAdminPostDto,
   CreateAdminUserDto,
+  AdminGroupStatus,
   UpdateAdminGroupDto,
   UpdateAdminPostDto,
   UpdateAdminUserDto,
 } from './admin.crud.types.js';
-
-const sysMsgDeps = {
-  createMessage: conversationRepository.createMessage,
-  updateConversationLastMessage: conversationRepository.updateConversationLastMessage,
-};
 
 function mapUserToListItem(user: IUser): AdminUserListItem {
   return {
@@ -66,19 +64,19 @@ function matchesUserQuery(user: IUser, query?: string, role?: string): boolean {
   );
 }
 
-function mapGroupToListItem(conv: IConversation, ownerDisplayName?: string): AdminGroupListItem {
+function mapGroupToListItem(community: ICommunity, ownerDisplayName?: string): AdminGroupListItem {
   return {
-    groupId: conv.conversationId,
-    name: conv.name ?? 'Nhóm',
-    description: conv.description,
-    avatar: conv.avatar,
-    ownerId: conv.leaderId ?? conv.creatorId,
+    groupId: community.groupId,
+    name: community.name,
+    description: community.description ?? undefined,
+    avatar: community.avatar ?? undefined,
+    ownerId: community.ownerId,
     ownerDisplayName,
-    memberCount: conv.memberCount ?? 0,
-    status: resolveGroupStatus(conv),
-    createdAt: conv.createdAt,
-    updatedAt: conv.updatedAt,
-    isDeleted: conv.isDeleted === true,
+    memberCount: community.memberCount ?? 0,
+    status: community.status,
+    createdAt: community.createdAt,
+    updatedAt: community.updatedAt,
+    isDeleted: !community.isActive || community.status === 'archived',
   };
 }
 
@@ -107,6 +105,49 @@ function assertNotSelf(adminId: string, targetUserId: string, action: string): v
   if (adminId === targetUserId) {
     throw new ForbiddenError(`Admin không thể ${action} chính mình`);
   }
+}
+
+function isAdminGroupStatus(status: string): status is AdminGroupStatus {
+  return status === 'active' || status === 'archived';
+}
+
+function normalizeSlug(input: string): string {
+  const normalized = input
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 100);
+  return normalized || `community-${Date.now()}`;
+}
+
+function isConditionalFailure(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'name' in error &&
+    String((error as { name?: string }).name) === 'TransactionCanceledException'
+  );
+}
+
+function buildCommunityOwnerMember(
+  groupId: string,
+  ownerId: string,
+  joinedAt: string,
+  joinedAtMs: number,
+): ICommunityMember {
+  return {
+    groupId,
+    communityId: groupId,
+    userId: ownerId,
+    role: 'owner',
+    status: 'active',
+    joinedAt,
+    joinedAtMs,
+    GSI1PK: `USER#${ownerId}`,
+    GSI1SK: `JOINED#${padMs(joinedAtMs)}#${groupId}`,
+  };
 }
 
 export const adminCrudService = {
@@ -224,59 +265,91 @@ export const adminCrudService = {
 
   listGroups: async (query: AdminListQuery): Promise<AdminListResult<AdminGroupListItem>> => {
     const limit = query.limit ?? 20;
-    const { items, nextCursor } = await adminCrudRepository.scanGroupMetas(limit, query.cursor);
+    const { items, nextCursor } = await adminCrudRepository.scanCommunityMetas(limit, query.cursor);
 
     let filtered = items;
-    if (query.status) {
-      filtered = filtered.filter((g) => resolveGroupStatus(g) === query.status);
+    if (query.status && isAdminGroupStatus(query.status)) {
+      filtered = filtered.filter((g) => g.status === query.status);
     }
     if (query.query?.trim()) {
       const q = query.query.trim().toLowerCase();
       filtered = filtered.filter(
         (g) =>
-          (g.name ?? '').toLowerCase().includes(q) ||
-          g.conversationId.toLowerCase().includes(q) ||
+          g.name.toLowerCase().includes(q) ||
+          g.groupId.toLowerCase().includes(q) ||
+          g.slug.toLowerCase().includes(q) ||
           (g.description ?? '').toLowerCase().includes(q),
       );
     }
 
-    const ownerIds = [...new Set(filtered.map((g) => g.leaderId ?? g.creatorId))];
+    const ownerIds = [...new Set(filtered.map((g) => g.ownerId))];
     const owners = await userRepository.findByIds(ownerIds);
     const ownerMap = new Map(owners.map((o) => [o.userId, o.displayName]));
 
     return {
-      items: filtered.map((g) => mapGroupToListItem(g, ownerMap.get(g.leaderId ?? g.creatorId))),
+      items: filtered.map((g) => mapGroupToListItem(g, ownerMap.get(g.ownerId))),
       nextCursor,
     };
   },
 
   getGroup: async (groupId: string): Promise<AdminGroupListItem> => {
-    const conv = await conversationRepository.getConversationById(groupId);
-    if (!conv || conv.type !== 'group') throw new NotFoundError('Nhóm');
-    const ownerId = conv.leaderId ?? conv.creatorId;
-    const [owner] = await userRepository.findByIds([ownerId]);
-    return mapGroupToListItem(conv, owner?.displayName);
+    const community = await adminCrudRepository.getCommunityMeta(groupId);
+    if (!community) throw new NotFoundError('Cộng đồng');
+    const [owner] = await userRepository.findByIds([community.ownerId]);
+    return mapGroupToListItem(community, owner?.displayName);
   },
 
   createGroup: async (adminId: string, data: CreateAdminGroupDto): Promise<AdminGroupListItem> => {
     const owner = await userRepository.findById(data.ownerId);
-    if (!owner || owner.isDeleted) throw new NotFoundError('Chủ nhóm');
+    if (!owner || owner.isDeleted) throw new NotFoundError('Chủ sở hữu');
 
-    const extraMembers = (data.memberIds ?? []).filter((id) => id !== data.ownerId);
-    const conv = await conversationService.createConversation(data.ownerId, {
-      type: 'group',
-      name: data.name,
-      memberIds: extraMembers,
-    });
+    const now = new Date();
+    const createdAt = now.toISOString();
+    const createdAtMs = now.getTime();
+    const groupId = uuidv4();
+    const category: CommunityCategory = data.category ?? 'general';
+    const type: CommunityType = data.type ?? 'public';
+    const joinPolicy: CommunityJoinPolicy =
+      data.joinPolicy ?? (type === 'private' ? 'approval' : 'open');
+    const community: ICommunity = {
+      groupId,
+      communityId: groupId,
+      name: data.name.trim(),
+      slug: normalizeSlug(data.slug ?? data.name),
+      description: data.description?.trim() || null,
+      avatar: null,
+      coverUrl: null,
+      category,
+      type,
+      joinPolicy,
+      creatorId: data.ownerId,
+      ownerId: data.ownerId,
+      memberCount: 1,
+      postCount: 0,
+      popularityScore: 0,
+      isApprovalRequired: joinPolicy === 'approval',
+      isPostApprovalRequired: false,
+      conversationId: null,
+      chatEnabled: true,
+      isActive: true,
+      status: 'active',
+      createdAt,
+      createdAtMs,
+      updatedAt: createdAt,
+    };
 
-    if (data.description) {
-      await conversationRepository.updateConversation(conv.conversationId, {
-        description: data.description,
-      });
+    try {
+      await communityRepository.createCommunity(
+        community,
+        buildCommunityOwnerMember(groupId, data.ownerId, createdAt, createdAtMs),
+      );
+    } catch (error) {
+      if (isConditionalFailure(error)) throw new ConflictError('Slug cộng đồng đã tồn tại');
+      throw error;
     }
 
-    await writeModerationLog(adminId, 'group', conv.conversationId, 'approve', 'Admin tạo nhóm');
-    return adminCrudService.getGroup(conv.conversationId);
+    await writeModerationLog(adminId, 'group', groupId, 'approve', 'Admin tạo cộng đồng');
+    return mapGroupToListItem(community, owner.displayName);
   },
 
   updateGroup: async (
@@ -284,68 +357,41 @@ export const adminCrudService = {
     groupId: string,
     data: UpdateAdminGroupDto,
   ): Promise<AdminGroupListItem> => {
-    const conv = await conversationRepository.getConversationById(groupId);
-    if (!conv || conv.type !== 'group') throw new NotFoundError('Nhóm');
+    const community = await adminCrudRepository.getCommunityMeta(groupId);
+    if (!community) throw new NotFoundError('Cộng đồng');
 
-    const updates: Partial<IConversation> = {};
-    if (data.name !== undefined) updates.name = data.name;
-    if (data.description !== undefined) updates.description = data.description;
+    const updates: Parameters<typeof adminCrudRepository.updateCommunityFields>[1] = {};
+    if (data.name !== undefined) updates.name = data.name.trim();
+    if (data.description !== undefined) updates.description = data.description.trim() || null;
     if (data.avatar !== undefined) updates.avatar = data.avatar;
 
-    if (data.status !== undefined) {
-      const gs = mergeGroupSettings(conv.groupSettings);
-      gs.adminStatus = data.status;
-      updates.groupSettings = gs;
-      updates.groupStatus = data.status;
+    if (data.status === 'archived') {
+      if (Object.keys(updates).length > 0) {
+        await adminCrudRepository.updateCommunityFields(groupId, updates);
+      }
+      await communityService.archiveCommunity(adminId, groupId, true);
+    } else {
+      const removeFields: Array<'deletedAt' | 'deletedBy'> = [];
+      if (data.status === 'active') {
+        updates.status = 'active';
+        updates.isActive = true;
+        removeFields.push('deletedAt', 'deletedBy');
+      }
+      if (Object.keys(updates).length > 0 || removeFields.length > 0) {
+        await adminCrudRepository.updateCommunityFields(groupId, updates, removeFields);
+      }
     }
 
-    if (Object.keys(updates).length > 0) {
-      await conversationRepository.updateConversation(groupId, updates);
-    }
-
-    await writeModerationLog(adminId, 'group', groupId, 'approve', 'Admin cập nhật nhóm');
+    await writeModerationLog(adminId, 'group', groupId, 'approve', 'Admin cập nhật cộng đồng');
     return adminCrudService.getGroup(groupId);
   },
 
   deleteGroup: async (adminId: string, groupId: string): Promise<void> => {
-    const conversation = await conversationRepository.getConversationById(groupId);
-    if (!conversation || conversation.type !== 'group') throw new NotFoundError('Nhóm');
+    const community = await adminCrudRepository.getCommunityMeta(groupId);
+    if (!community) throw new NotFoundError('Cộng đồng');
 
-    const members = await conversationRepository.getConversationMembers(groupId);
-
-    try {
-      await createAndBroadcastSystemMessage(
-        {
-          conversationId: groupId,
-          senderId: adminId,
-          content: 'Nhóm đã được giải tán bởi quản trị viên',
-        },
-        sysMsgDeps,
-      );
-    } catch {
-      /* best-effort */
-    }
-
-    await conversationRepository.updateConversation(groupId, {
-      name: `[ĐÃ GIẢI TÁN] ${conversation.name ?? 'Nhóm'}`,
-      isDeleted: true,
-      memberCount: 0,
-    });
-
-    await Promise.all(members.map((m) => conversationRepository.removeMember(groupId, m.userId)));
-
-    try {
-      const io = getIO();
-      const payload = { conversationId: groupId, groupId };
-      io.to(`conv:${groupId}`).emit('group:disbanded', payload);
-      for (const m of members) {
-        io.to(`user:${m.userId}`).emit('group:disbanded', payload);
-      }
-    } catch {
-      /* ignore socket */
-    }
-
-    await writeModerationLog(adminId, 'group', groupId, 'delete', 'Admin giải tán nhóm');
+    await communityService.archiveCommunity(adminId, groupId, true);
+    await writeModerationLog(adminId, 'group', groupId, 'delete', 'Admin lưu trữ cộng đồng');
   },
 
   listPosts: async (query: AdminListQuery): Promise<AdminListResult<AdminPostListItem>> => {

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { COMMUNITY_CATEGORIES } from '@/modules/community/community.types.js';
 
 const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])/;
 const passwordMsg = 'Mật khẩu phải có chữ hoa, chữ thường, số và ký tự đặc biệt';
@@ -36,9 +37,13 @@ export const updateAdminUserRoleSchema = z.object({
 
 export const createAdminGroupSchema = z.object({
   name: z.string().min(1).max(100),
+  slug: z.string().min(2).max(120).optional(),
   description: z.string().max(500).optional(),
   ownerId: z.string().min(1),
   memberIds: z.array(z.string().min(1)).optional(),
+  category: z.enum(COMMUNITY_CATEGORIES).optional(),
+  type: z.enum(['public', 'private']).optional(),
+  joinPolicy: z.enum(['open', 'approval']).optional(),
 });
 
 export const updateAdminGroupSchema = z
@@ -46,7 +51,7 @@ export const updateAdminGroupSchema = z
     name: z.string().min(1).max(100).optional(),
     description: z.string().max(500).optional(),
     avatar: z.string().url().optional(),
-    status: z.enum(['active', 'locked', 'archived']).optional(),
+    status: z.enum(['active', 'archived']).optional(),
   })
   .refine((d) => Object.keys(d).length > 0, { message: 'Cần ít nhất một trường cập nhật' });
 

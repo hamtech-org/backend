@@ -98,7 +98,7 @@ export const adminController = {
   createGroup: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const group = await adminService.createGroup(req.user!.userId, req.body);
-      sendSuccess(res, group, 'Tạo nhóm thành công', 201);
+      sendSuccess(res, group, 'Tạo cộng đồng thành công', 201);
     } catch (error) {
       next(error);
     }
@@ -107,7 +107,7 @@ export const adminController = {
   updateGroup: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const group = await adminService.updateGroup(req.user!.userId, req.params.groupId, req.body);
-      sendSuccess(res, group, 'Cập nhật nhóm thành công');
+      sendSuccess(res, group, 'Cập nhật cộng đồng thành công');
     } catch (error) {
       next(error);
     }
@@ -116,7 +116,7 @@ export const adminController = {
   deleteGroup: async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       await adminService.deleteGroup(req.user!.userId, req.params.groupId);
-      sendSuccess(res, null, 'Xóa nhóm thành công');
+      sendSuccess(res, null, 'Lưu trữ cộng đồng thành công');
     } catch (error) {
       next(error);
     }

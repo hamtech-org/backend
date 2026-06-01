@@ -105,6 +105,20 @@ export const newsfeedRepository = {
     );
   },
 
+  batchGetPosts: async (postIds: string[]): Promise<IPost[]> => {
+    if (postIds.length === 0) return [];
+    const result = await dynamoClient.send(
+      new BatchGetCommand({
+        RequestItems: {
+          [POSTS_TABLE]: {
+            Keys: postIds.map((postId) => ({ PK: `POST#${postId}`, SK: 'META' })),
+          },
+        },
+      }),
+    );
+    return (result.Responses?.[POSTS_TABLE] as IPost[]) ?? [];
+  },
+
   getCommentsByPostId: async (
     postId: string,
     limit: number = 5,

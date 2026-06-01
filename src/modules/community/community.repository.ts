@@ -457,13 +457,14 @@ export const communityRepository = {
         TableName: GROUPS_TABLE,
         Key: { PK: `GROUP#${groupId}`, SK: 'META' },
         UpdateExpression:
-          'SET isActive = :inactive, #status = :archived, deletedAt = :now, deletedBy = :by, updatedAt = :now',
+          'SET isActive = :inactive, #status = :archived, deletedAt = :now, deletedBy = :by, updatedAt = :now, chatEnabled = :chatEnabled',
         ExpressionAttributeNames: { '#status': 'status' },
         ExpressionAttributeValues: {
           ':inactive': false,
           ':archived': 'archived',
           ':now': new Date().toISOString(),
           ':by': actorId,
+          ':chatEnabled': false,
         },
       }),
     );
