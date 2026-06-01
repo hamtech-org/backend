@@ -1,6 +1,7 @@
 import { createSign } from 'node:crypto';
 import { env } from '@/config/env.js';
 import { logger } from '@/shared/utils/logger.js';
+import { deviceTokenRepository } from './device-token.repository.js';
 
 const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -122,6 +123,7 @@ export function buildFcmDataOnlyMessage(
 export async function sendFcmDataOnlyToTokens(
   tokens: string[],
   data: Record<string, unknown>,
+  userId?: string,
 ): Promise<void> {
   const uniqueTokens = [...new Set(tokens.map((t) => t.trim()).filter(Boolean))];
   if (uniqueTokens.length === 0) return;
@@ -148,6 +150,17 @@ export async function sendFcmDataOnlyToTokens(
       if (!res.ok) {
         const body = await res.text();
         logger.warn(`[FCM] Send failed: ${res.status} ${body}`);
+        if (userId && (res.status === 404 || body.includes('UNREGISTERED'))) {
+          logger.info(
+            `[FCM] Token unregistered or not found, removing from DB. User: ${userId}, token: ${token}`,
+          );
+          await deviceTokenRepository.remove(userId, token).catch((e) => {
+            logger.error(
+              `[FCM] Failed to auto-remove unregistered token ${token} for user ${userId}:`,
+              e,
+            );
+          });
+        }
       }
     }),
   );

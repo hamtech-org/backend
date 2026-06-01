@@ -14,6 +14,7 @@ import {
   enableFaceLoginSchema,
   verifyEmailSchema,
   verifyLoginOtpSchema,
+  logoutSchema,
 } from './auth.validator.js';
 
 const router = Router();
@@ -46,7 +47,7 @@ router.post(
 router.delete('/face-login/disable', authenticate, authController.disableFaceLogin);
 
 // ── Protected routes (cần access token) ──
-router.post('/logout', authenticate, authController.logout);
+router.post('/logout', authenticate, validate(logoutSchema), authController.logout);
 router.post('/logout-all', authenticate, authController.logoutAll);
 router.get('/sessions', authenticate, authController.listSessions);
 router.delete('/sessions/:sessionId', authenticate, authController.revokeSession);

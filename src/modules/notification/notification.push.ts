@@ -211,7 +211,7 @@ export async function sendExpoPushToUser(
 
     if (fcmTokens.length > 0) {
       logger.info(`[FCM] Sending incoming call data push to ${fcmTokens.length} token(s)`);
-      await sendFcmDataOnlyToTokens(fcmTokens, enrichedData);
+      await sendFcmDataOnlyToTokens(fcmTokens, enrichedData, userId);
     }
 
     if (expoTokens.length === 0) return;
