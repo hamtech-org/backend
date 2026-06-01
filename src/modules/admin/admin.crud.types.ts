@@ -1,13 +1,19 @@
 import type { UserRole } from '@/shared/types/user.types.js';
-import type { GroupAdminStatus } from '@/modules/chat/shared/chat.types.js';
+import type {
+  CommunityCategory,
+  CommunityJoinPolicy,
+  CommunityStatus,
+  CommunityType,
+} from '@/modules/community/community.types.js';
 import type { PostVisibility } from '@/modules/newsfeed/newsfeed.types.js';
 
 export type AdminPostDisplayStatus = 'visible' | 'hidden' | 'flagged';
+export type AdminGroupStatus = CommunityStatus;
 
 export interface AdminListQuery {
   query?: string;
   role?: UserRole;
-  status?: GroupAdminStatus | AdminPostDisplayStatus;
+  status?: AdminGroupStatus | AdminPostDisplayStatus;
   limit?: number;
   cursor?: string;
 }
@@ -33,7 +39,7 @@ export interface AdminGroupListItem {
   ownerId: string;
   ownerDisplayName?: string;
   memberCount: number;
-  status: GroupAdminStatus;
+  status: AdminGroupStatus;
   createdAt: string;
   updatedAt: string;
   isDeleted: boolean;
@@ -75,16 +81,20 @@ export interface UpdateAdminUserDto {
 
 export interface CreateAdminGroupDto {
   name: string;
+  slug?: string;
   description?: string;
   ownerId: string;
   memberIds?: string[];
+  category?: CommunityCategory;
+  type?: CommunityType;
+  joinPolicy?: CommunityJoinPolicy;
 }
 
 export interface UpdateAdminGroupDto {
   name?: string;
   description?: string;
   avatar?: string;
-  status?: GroupAdminStatus;
+  status?: AdminGroupStatus;
 }
 
 export interface CreateAdminPostDto {

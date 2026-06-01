@@ -2,6 +2,7 @@ import { esClient } from '@/config/elasticsearch.js';
 import { userRepository } from '@/modules/user/user.repository.js';
 import { conversationRepository } from '@/modules/chat/conversation/conversation.repository.js';
 import { communityRepository } from '@/modules/community/community.repository.js';
+import { newsfeedRepository } from '@/modules/newsfeed/newsfeed.repository.js';
 import type {
   ISearchResult,
   ISearchOptions,
@@ -725,7 +726,7 @@ export const searchService = {
         track_total_hits: true,
       });
 
-      const items: ISearchPostResult[] = result.hits.hits.map((hit) => {
+      const rawItems: ISearchPostResult[] = result.hits.hits.map((hit) => {
         const source = hit._source as ISearchPostResult;
         return {
           postId: source.postId,
@@ -736,13 +737,40 @@ export const searchService = {
         };
       });
 
+      const postIds = rawItems.map((item) => item.postId);
+      const posts = await newsfeedRepository.batchGetPosts(postIds);
+      const postMap = new Map(posts.map((p) => [p.postId, p]));
+
+      const groupIds = Array.from(
+        new Set(posts.map((p) => p.groupId || p.communityId).filter((id): id is string => !!id)),
+      );
+
+      const activeGroupIds = new Set<string>();
+      if (groupIds.length > 0) {
+        const communities = await communityRepository.batchGetCommunities(groupIds);
+        for (const c of communities) {
+          if (c.isActive && c.status === 'active') {
+            activeGroupIds.add(c.groupId);
+          }
+        }
+      }
+
+      const items = rawItems.filter((item) => {
+        const post = postMap.get(item.postId);
+        if (!post) return false;
+        const gId = post.groupId || post.communityId;
+        if (!gId) return true;
+        return activeGroupIds.has(gId);
+      });
+
       const total =
         typeof result.hits.total === 'number' ? result.hits.total : result.hits.total?.value || 0;
+      const filteredTotal = Math.min(total, items.length);
       const hasMore = from + pageSize < total;
 
       return {
         items,
-        total,
+        total: filteredTotal,
         page,
         pageSize,
         hasMore,

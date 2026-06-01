@@ -1,14 +1,14 @@
-import { ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { dynamoClient } from '@/config/database.js';
 import { env } from '@/config/env.js';
 import type { IUser } from '@/modules/user/user.types.js';
-import type { IConversation } from '@/modules/chat/shared/chat.types.js';
+import type { ICommunity } from '@/modules/community/community.types.js';
 import type { IPost } from '@/modules/newsfeed/newsfeed.types.js';
 import type { UserRole } from '@/shared/types/user.types.js';
 import { decodeAdminCursor, encodeAdminCursor } from './admin.crud.helpers.js';
 
 const USERS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Users`;
-const CONVERSATIONS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Conversations`;
+const GROUPS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Groups`;
 const POSTS_TABLE = `${env.DYNAMODB_TABLE_PREFIX}Posts`;
 
 const DEFAULT_PAGE = 20;
@@ -79,17 +79,95 @@ export const adminCrudRepository = {
     );
   },
 
-  scanGroupMetas: async (limit: number, cursor?: string) => {
-    return scanUntilPage<IConversation>(
+  scanCommunityMetas: async (limit: number, cursor?: string) => {
+    return scanUntilPage<ICommunity>(
       {
-        TableName: CONVERSATIONS_TABLE,
-        FilterExpression: 'SK = :sk AND #type = :group',
-        ExpressionAttributeNames: { '#type': 'type' },
-        ExpressionAttributeValues: { ':sk': 'META', ':group': 'group' },
+        TableName: GROUPS_TABLE,
+        FilterExpression: 'SK = :sk',
+        ExpressionAttributeValues: { ':sk': 'META' },
       },
       limit,
       cursor,
       () => true,
+    );
+  },
+
+  getCommunityMeta: async (groupId: string): Promise<ICommunity | null> => {
+    const result = await dynamoClient.send(
+      new GetCommand({
+        TableName: GROUPS_TABLE,
+        Key: { PK: `GROUP#${groupId}`, SK: 'META' },
+      }),
+    );
+    return (result.Item as ICommunity | undefined) ?? null;
+  },
+
+  updateCommunityFields: async (
+    groupId: string,
+    fields: Partial<
+      Pick<
+        ICommunity,
+        'name' | 'description' | 'avatar' | 'status' | 'isActive' | 'deletedAt' | 'deletedBy'
+      >
+    >,
+    removeFields: Array<'deletedAt' | 'deletedBy'> = [],
+  ): Promise<void> => {
+    const entries = Object.entries({
+      ...fields,
+      updatedAt: new Date().toISOString(),
+    }).filter(([, value]) => value !== undefined);
+
+    const names: Record<string, string> = {};
+    const values: Record<string, unknown> = {};
+    const setParts = entries.map(([key, value], index) => {
+      const nameKey = `#k${index}`;
+      const valueKey = `:v${index}`;
+      names[nameKey] = key;
+      values[valueKey] = value;
+      return `${nameKey} = ${valueKey}`;
+    });
+
+    const removeParts = removeFields.map((field, index) => {
+      const nameKey = `#r${index}`;
+      names[nameKey] = field;
+      return nameKey;
+    });
+
+    const updateParts: string[] = [];
+    if (setParts.length > 0) updateParts.push(`SET ${setParts.join(', ')}`);
+    if (removeParts.length > 0) updateParts.push(`REMOVE ${removeParts.join(', ')}`);
+    if (updateParts.length === 0) return;
+
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: GROUPS_TABLE,
+        Key: { PK: `GROUP#${groupId}`, SK: 'META' },
+        UpdateExpression: updateParts.join(' '),
+        ExpressionAttributeNames: names,
+        ExpressionAttributeValues: values,
+        ConditionExpression: 'attribute_exists(PK) AND attribute_exists(SK)',
+      }),
+    );
+  },
+
+  archiveCommunityAsAdmin: async (groupId: string, adminId: string): Promise<void> => {
+    const now = new Date().toISOString();
+    await dynamoClient.send(
+      new UpdateCommand({
+        TableName: GROUPS_TABLE,
+        Key: { PK: `GROUP#${groupId}`, SK: 'META' },
+        UpdateExpression:
+          'SET isActive = :inactive, #status = :archived, deletedAt = :now, deletedBy = :by, updatedAt = :now, chatEnabled = :chatEnabled',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: {
+          ':inactive': false,
+          ':archived': 'archived',
+          ':now': now,
+          ':by': adminId,
+          ':chatEnabled': false,
+        },
+        ConditionExpression: 'attribute_exists(PK) AND attribute_exists(SK)',
+      }),
     );
   },
 

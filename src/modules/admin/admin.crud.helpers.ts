@@ -1,6 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { ModerationStatus } from '@/modules/newsfeed/newsfeed.types.js';
-import type { GroupAdminStatus } from '@/modules/chat/shared/chat.types.js';
 import type { AdminPostDisplayStatus } from './admin.crud.types.js';
 import { adminRepository } from './admin.repository.js';
 import type { ModerationAction, ModerationTarget } from './admin.types.js';
@@ -17,13 +16,6 @@ export function decodeAdminCursor(cursor?: string): Record<string, unknown> | un
   } catch {
     return undefined;
   }
-}
-
-export function resolveGroupStatus(conv: {
-  groupStatus?: GroupAdminStatus;
-  groupSettings?: { adminStatus?: GroupAdminStatus };
-}): GroupAdminStatus {
-  return conv.groupStatus ?? conv.groupSettings?.adminStatus ?? 'active';
 }
 
 export function toAdminPostStatus(moderationStatus: ModerationStatus): AdminPostDisplayStatus {

@@ -278,6 +278,24 @@ export const newsfeedService = {
     );
   },
 
+  filterActiveCommunityPosts: async (posts: IPost[]): Promise<IPost[]> => {
+    const groupIds = Array.from(
+      new Set(posts.map((p) => p.groupId || p.communityId).filter((id): id is string => !!id)),
+    );
+    if (groupIds.length === 0) return posts;
+
+    const communities = await communityRepository.batchGetCommunities(groupIds);
+    const activeCommunityIds = new Set(
+      communities.filter((c) => c.isActive && c.status === 'active').map((c) => c.groupId),
+    );
+
+    return posts.filter((p) => {
+      const gId = p.groupId || p.communityId;
+      if (!gId) return true;
+      return activeCommunityIds.has(gId);
+    });
+  },
+
   getFeed: async (viewerUserId: string, limit?: number, cursor?: string): Promise<IFeedPage> => {
     const pageSize = Math.max(1, Math.min(limit ?? 20, 50));
     const friendIds = await userRepository.getFriendIds(viewerUserId, 100);
@@ -318,17 +336,20 @@ export const newsfeedService = {
         }
         return false;
       })
-      .sort(comparePostsDesc)
-      .filter((post) => {
-        if (!decodedCursor) return true;
-        const postCreatedAt = new Date(post.createdAt).getTime();
-        const cursorCreatedAt = new Date(decodedCursor.createdAt).getTime();
-        if (postCreatedAt < cursorCreatedAt) return true;
-        if (postCreatedAt > cursorCreatedAt) return false;
-        return post.postId.localeCompare(decodedCursor.postId) < 0;
-      });
+      .sort(comparePostsDesc);
 
-    const pageSlice = visible.slice(0, pageSize + 1);
+    const activeVisible = await newsfeedService.filterActiveCommunityPosts(visible);
+
+    const cursorFiltered = activeVisible.filter((post) => {
+      if (!decodedCursor) return true;
+      const postCreatedAt = new Date(post.createdAt).getTime();
+      const cursorCreatedAt = new Date(decodedCursor.createdAt).getTime();
+      if (postCreatedAt < cursorCreatedAt) return true;
+      if (postCreatedAt > cursorCreatedAt) return false;
+      return post.postId.localeCompare(decodedCursor.postId) < 0;
+    });
+
+    const pageSlice = cursorFiltered.slice(0, pageSize + 1);
     const hasMore = pageSlice.length > pageSize;
     const currentItems = hasMore ? pageSlice.slice(0, pageSize) : pageSlice;
     const enrichedAuthors = await newsfeedService.attachAuthorInfo(currentItems);
@@ -372,7 +393,9 @@ export const newsfeedService = {
       return true;
     });
 
-    const enrichedAuthors = await newsfeedService.attachAuthorInfo(visible);
+    const activeVisible = await newsfeedService.filterActiveCommunityPosts(visible);
+
+    const enrichedAuthors = await newsfeedService.attachAuthorInfo(activeVisible);
     const enrichedReactions = await newsfeedService.attachCurrentUserReaction(
       enrichedAuthors,
       viewerUserId,
@@ -515,6 +538,9 @@ export const newsfeedService = {
   getPostById: async (postId: string, viewerUserId: string): Promise<IPost | null> => {
     const post = await newsfeedRepository.getPostById(postId);
     if (!post) return null;
+
+    const active = await newsfeedService.filterActiveCommunityPosts([post]);
+    if (active.length === 0) return null;
 
     const enrich = async (p: IPost): Promise<IPost> => {
       const [withAuthor] = await newsfeedService.attachAuthorInfo([p]);
@@ -1493,7 +1519,7 @@ export const newsfeedService = {
   },
 
   sharePost: async (originalPostId: string, userId: string, dto: ISharePostDto): Promise<IPost> => {
-    const original = await newsfeedRepository.getPostById(originalPostId);
+    const original = await newsfeedService.getPostById(originalPostId, userId);
     if (!original) throw new NotFoundError('Bài viết');
 
     // Chỉ chia sẻ bài public hoặc friends (không chia sẻ private)

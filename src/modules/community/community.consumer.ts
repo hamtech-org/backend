@@ -132,55 +132,24 @@ export const startCommunityConsumer = async (): Promise<void> => {
               break;
             }
 
-            // Lấy danh sách thành viên trước khi xóa
-            const membersBefore =
-              await conversationRepository.getConversationMembers(conversationId);
-            const conversation = await conversationRepository.getConversationById(conversationId);
-            const convName = conversation?.name || 'Nhóm';
-
-            // 1. Cập nhật bản ghi META trong database
+            // 1. Cập nhật bản ghi META trong database để đóng băng chat (chatEnabled = false)
             await conversationRepository.updateConversation(conversationId, {
-              name: `[ĐÃ GIẢI TÁN] ${convName}`,
-              isDeleted: true,
-              memberCount: 0,
-            } as any);
-
-            // 2. Xóa các bản ghi MEMBER# của tất cả thành viên trong DB
-            await Promise.all(
-              membersBefore.map((m) =>
-                conversationRepository.removeMember(conversationId, m.userId),
-              ),
-            );
+              chatEnabled: false,
+            });
 
             logger.info(
-              `Conversation ${conversationId} disbanded, renamed, and all member records deleted due to community archive.`,
+              `Conversation ${conversationId} chat feature disabled due to community archive.`,
             );
 
-            // 3. Phát các sự kiện WebSocket tới room chung và room cá nhân của từng thành viên
+            // 2. Phát sự kiện WebSocket group:updated tới room chung để cập nhật UI
             try {
               const io = getIO();
-              const disbandedPayload = {
+              io.to(`conv:${conversationId}`).emit('group:updated', {
                 conversationId,
-                groupId: conversationId,
-                reason: 'community_archived',
-              };
-              const deletedPayload = { groupId: conversationId, conversationId };
-
-              io.to(`conv:${conversationId}`).emit('conversation:disbanded', disbandedPayload);
-              io.to(`conv:${conversationId}`).emit('group:disbanded', disbandedPayload);
-              io.to(`conv:${conversationId}`).emit('group:deleted', deletedPayload);
-
-              for (const m of membersBefore) {
-                io.to(`user:${m.userId}`).emit('conversation:disbanded', disbandedPayload);
-                io.to(`user:${m.userId}`).emit('group:disbanded', disbandedPayload);
-                io.to(`user:${m.userId}`).emit('group:deleted', deletedPayload);
-              }
-
-              logger.info(
-                `Disbanded & deleted notifications emitted via WebSockets to conversation room ${conversationId} and all members.`,
-              );
+                chatEnabled: false,
+              });
             } catch (socketErr) {
-              logger.error(`Failed to emit disbandment events via socket:`, socketErr);
+              logger.error(`Failed to emit group:updated socket event:`, socketErr);
             }
             break;
           }

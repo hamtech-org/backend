@@ -714,17 +714,29 @@ export const communityService = {
     }
   },
 
-  archiveCommunity: async (actorId: string, groupId: string): Promise<void> => {
-    const community = await requireActiveCommunity(groupId);
-    if (community.ownerId !== actorId) {
-      throw new ForbiddenError('Chỉ owner mới được archive cộng đồng');
+  archiveCommunity: async (actorId: string, groupId: string, isAdmin = false): Promise<void> => {
+    let community: ICommunity;
+    if (isAdmin) {
+      const existing = await communityRepository.getCommunityById(groupId);
+      if (!existing) throw new NotFoundError('Cộng đồng');
+      community = existing;
+    } else {
+      community = await requireActiveCommunity(groupId);
+      if (community.ownerId !== actorId) {
+        throw new ForbiddenError('Chỉ owner mới được archive cộng đồng');
+      }
     }
     await communityRepository.archiveCommunity(groupId, actorId);
     await emitCommunityIndexEvent({
       action: 'update',
       indexName: 'groups',
       documentId: groupId,
-      document: { ...toSearchDocument(community), isActive: false, status: 'archived' },
+      document: {
+        ...toSearchDocument(community),
+        isActive: false,
+        status: 'archived',
+        chatEnabled: false,
+      },
     });
 
     try {
