@@ -8,6 +8,59 @@ import { conversationRepository } from '@/modules/chat/conversation/conversation
 import type { IMessage } from '@/modules/chat/shared/chat.types.js';
 import { generateText } from '../shared/llm/generate-text.js';
 
+const stripAiDecorations = (text: string): string =>
+  text
+    .trim()
+    .split(/\r?\n/)
+    .map((line) =>
+      line
+        .replace(/^\s*[•●◦▪▫*-]\s*/, '')
+        .replace(/^\s*```(?:json)?\s*$/i, '```')
+        .trimEnd(),
+    )
+    .join('\n')
+    .trim();
+
+const extractJsonObjectText = (text: string): string | null => {
+  const cleaned = stripAiDecorations(text);
+  const fenced = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = stripAiDecorations(fenced?.[1] ?? cleaned);
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  return candidate.slice(start, end + 1);
+};
+
+const normalizeSuggestionLines = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+  if (typeof value !== 'string') return [];
+  return stripAiDecorations(value)
+    .split(/\r?\n/)
+    .map((line) =>
+      line
+        .replace(/^\s*[•●◦▪▫*-]\s*/, '')
+        .replace(/^\s*\d+[).]\s*/, '')
+        .trim(),
+    )
+    .filter((line) => line.length > 0 && line !== '{' && line !== '}');
+};
+
+const parseSuggestionsAiOutput = (text: string): string[] => {
+  const jsonText = extractJsonObjectText(text);
+  if (jsonText) {
+    try {
+      const parsed = JSON.parse(jsonText) as { suggestions?: unknown };
+      const suggestions = normalizeSuggestionLines(parsed.suggestions);
+      if (suggestions.length > 0) return suggestions;
+    } catch {
+      // Fall through to line parser below.
+    }
+  }
+  return normalizeSuggestionLines(text);
+};
+
 export const suggestService = {
   suggestContent: async (request: IAiSuggestRequest): Promise<IAiSuggestResponse> => {
     const topics = (request.topics ?? []).map((t) => t.trim()).filter(Boolean);
@@ -42,7 +95,7 @@ export const suggestService = {
             `Topics: ${topics.length ? topics.join(', ') : '(không có)'}`,
             `Style: ${toneByType[request.type]}`,
             '',
-            `Trả về đúng JSON theo schema: {"suggestions": string[]}`,
+            `Trả về đúng JSON thô theo schema: {"suggestions": string[]}. Không bọc markdown, không dùng \`\`\`json, không thêm bullet/ký tự trước JSON.`,
           ].join('\n')
         : [
             `Original sentence:`,
@@ -58,7 +111,7 @@ export const suggestService = {
             `Topics: ${topics.length ? topics.join(', ') : '(none)'}`,
             `Style: ${toneByType[request.type]}`,
             '',
-            `Return strictly JSON with schema: {"suggestions": string[]}`,
+            `Return raw JSON only with schema: {"suggestions": string[]}. Do not wrap in markdown, do not use \`\`\`json, and do not add bullets before JSON.`,
           ].join('\n');
 
     const { text, model, tokensUsed } = await generateText(prompt, {
@@ -68,18 +121,7 @@ export const suggestService = {
           : 'You rewrite sentences (paraphrase). Keep the same meaning, follow topics/type, do not add new facts. Output only valid JSON.',
     });
 
-    let suggestions: string[] = [];
-    try {
-      const parsed = JSON.parse(text) as { suggestions?: unknown };
-      if (Array.isArray(parsed.suggestions)) {
-        suggestions = parsed.suggestions.map((s) => String(s).trim()).filter(Boolean);
-      }
-    } catch {
-      suggestions = text
-        .split('\n')
-        .map((s) => s.replace(/^\s*[-*•\d.]+\s*/, '').trim())
-        .filter(Boolean);
-    }
+    let suggestions = parseSuggestionsAiOutput(text);
 
     if (suggestions.length > 5) suggestions = suggestions.slice(0, 5);
 
@@ -135,7 +177,7 @@ export const suggestService = {
       `Transcript:`,
       transcript,
       ``,
-      `Trả về đúng JSON theo schema: {"suggestions": string[]}`,
+      `Trả về đúng JSON thô theo schema: {"suggestions": string[]}. Không bọc markdown, không dùng \`\`\`json, không thêm bullet/ký tự trước JSON.`,
     ].join('\n');
 
     const { text, model, tokensUsed } = await generateText(prompt, {
@@ -143,18 +185,7 @@ export const suggestService = {
         'Bạn là trợ lý soạn tin nhắn kiểu bạn bè. Luôn ưu tiên trả lời đúng trọng tâm ANCHOR. Không bịa chi tiết mới. Chỉ trả JSON hợp lệ theo schema {"suggestions": string[]}.',
     });
 
-    let suggestions: string[] = [];
-    try {
-      const parsed = JSON.parse(text) as { suggestions?: unknown };
-      if (Array.isArray(parsed.suggestions)) {
-        suggestions = parsed.suggestions.map((s) => String(s).trim()).filter(Boolean);
-      }
-    } catch {
-      suggestions = text
-        .split('\n')
-        .map((s) => s.replace(/^\s*[-*•\d.]+\s*/, '').trim())
-        .filter(Boolean);
-    }
+    let suggestions = parseSuggestionsAiOutput(text);
 
     if (suggestions.length > count) suggestions = suggestions.slice(0, count);
 
