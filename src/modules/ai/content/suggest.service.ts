@@ -47,6 +47,91 @@ const normalizeSuggestionLines = (value: unknown): string[] => {
     .filter((line) => line.length > 0 && line !== '{' && line !== '}');
 };
 
+const extractSuggestionArrayText = (text: string): string | null => {
+  const match = /"suggestions"\s*:\s*\[/i.exec(text);
+  if (!match) return null;
+
+  const start = text.indexOf('[', match.index);
+  if (start < 0) return null;
+
+  let inString = false;
+  let escaped = false;
+  let depth = 0;
+
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = inString;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (char === '[') depth += 1;
+    if (char === ']') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, index + 1);
+    }
+  }
+
+  return text.slice(start);
+};
+
+const extractCompletedJsonStrings = (arrayText: string): string[] => {
+  const suggestions: string[] = [];
+  let token = '';
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < arrayText.length; index += 1) {
+    const char = arrayText[index];
+
+    if (!inString) {
+      if (char === '"') {
+        inString = true;
+        token = '"';
+      }
+      continue;
+    }
+
+    token += char;
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = false;
+      try {
+        const parsed = JSON.parse(token) as unknown;
+        if (typeof parsed === 'string') suggestions.push(parsed);
+      } catch {
+        // Ignore malformed string fragments and keep scanning for complete strings.
+      }
+    }
+  }
+
+  return suggestions;
+};
+
+const extractCompletedSuggestions = (text: string): string[] => {
+  const arrayText = extractSuggestionArrayText(text);
+  if (!arrayText) return [];
+  return normalizeSuggestionLines(extractCompletedJsonStrings(arrayText));
+};
+
 const parseSuggestionsAiOutput = (text: string): string[] => {
   const jsonText = extractJsonObjectText(text);
   if (jsonText) {
@@ -58,6 +143,12 @@ const parseSuggestionsAiOutput = (text: string): string[] => {
       // Fall through to line parser below.
     }
   }
+
+  const completedSuggestions = extractCompletedSuggestions(text);
+  if (completedSuggestions.length > 0) return completedSuggestions;
+
+  if (/"suggestions"\s*:/i.test(text)) return [];
+
   return normalizeSuggestionLines(text);
 };
 

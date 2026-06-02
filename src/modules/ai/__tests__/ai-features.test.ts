@@ -72,6 +72,32 @@ describe('AI Service - Text Paraphrase and Suggestions Unit Tests', () => {
     expect(result.suggestions).toEqual(['Chào bạn nha', 'Bạn khỏe không?', 'Đi ăn cơm chưa?']);
   });
 
+  it('TC05 (Pass): suggestContent should ignore truncated JSON string fragments', async () => {
+    (generateText as jest.Mock).mockResolvedValue({
+      text: [
+        '{"suggestions": ["Go sleep now please.",',
+        '"Please go to sleep now.",',
+        '"You should sleep right away.",',
+        '"Go sleep now please It did not clear all.',
+      ].join(' '),
+      model: 'gemini-2.0-flash',
+      tokensUsed: 90,
+    });
+
+    const result = await aiService.suggestContent({
+      context: 'Go sleep now',
+      type: 'reply',
+      language: 'en',
+      topics: [],
+    });
+
+    expect(result.suggestions).toEqual([
+      'Go sleep now please.',
+      'Please go to sleep now.',
+      'You should sleep right away.',
+    ]);
+  });
+
   it('TC03 (Pass): suggestContent should propagate generateText errors correctly', async () => {
     (generateText as jest.Mock).mockRejectedValue(new Error('AWS Bedrock Client Timeout'));
 
