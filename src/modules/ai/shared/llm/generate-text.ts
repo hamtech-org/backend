@@ -32,6 +32,7 @@ type ResolvedAiGenerateTextOptions = {
   bedrockSecretAccessKey?: string;
   openAiApiKey?: string;
   openAiBaseUrl: string;
+  geminiApiKey?: string;
   systemPrompt?: string;
   signal?: AbortSignal;
 };
@@ -89,7 +90,7 @@ const bedrockTextAdapter: TextGenerationAdapter = {
 const openAiTextAdapter: TextGenerationAdapter = {
   async generate(prompt, options) {
     if (!options.openAiApiKey) {
-      throw new Error('OPENAI_API_KEY chua cau hinh cho AI_TEXT_PROVIDER=openai');
+      throw new Error('AI của bạn đang bị lỗi :(( Mã lỗi 001');
     }
 
     const messages = [
@@ -135,9 +136,80 @@ const openAiTextAdapter: TextGenerationAdapter = {
   },
 };
 
+const geminiTextAdapter: TextGenerationAdapter = {
+  async generate(prompt, options) {
+    if (!options.geminiApiKey) {
+      throw new Error('AI của bạn đang bị lỗi :(( Mã lỗi 002');
+    }
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+        options.modelId,
+      )}:generateContent?key=${encodeURIComponent(options.geminiApiKey)}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ...(options.systemPrompt
+            ? {
+                systemInstruction: {
+                  parts: [{ text: options.systemPrompt }],
+                },
+              }
+            : {}),
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: prompt }],
+            },
+          ],
+          generationConfig: {
+            maxOutputTokens: options.maxTokens,
+            temperature: options.temperature,
+            topP: options.topP,
+          },
+        }),
+        signal: options.signal,
+      },
+    );
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(
+        `Gemini generateText loi ${response.status}: ${detail || response.statusText}`,
+      );
+    }
+
+    const json = (await response.json()) as {
+      candidates?: Array<{
+        content?: { parts?: Array<{ text?: string }> };
+      }>;
+      usageMetadata?: { totalTokenCount?: number };
+      modelVersion?: string;
+    };
+    const text =
+      json.candidates?.[0]?.content?.parts
+        ?.map((part) => part.text ?? '')
+        .filter(Boolean)
+        .join('')
+        .trim() ?? '';
+
+    return {
+      text,
+      model: json.modelVersion || options.modelId,
+      ...(typeof json.usageMetadata?.totalTokenCount === 'number'
+        ? { tokensUsed: json.usageMetadata.totalTokenCount }
+        : {}),
+    };
+  },
+};
+
 const TEXT_GENERATION_ADAPTERS: Record<AiTextProvider, TextGenerationAdapter> = {
   bedrock: bedrockTextAdapter,
   openai: openAiTextAdapter,
+  gemini: geminiTextAdapter,
 };
 
 export async function generateText(
@@ -173,6 +245,7 @@ export async function generateText(
       bedrockSecretAccessKey: config.bedrockSecretAccessKey,
       openAiApiKey: config.openAiApiKey,
       openAiBaseUrl: config.openAiBaseUrl,
+      geminiApiKey: config.geminiApiKey,
       systemPrompt: options.systemPrompt,
       signal: options.signal,
     });
