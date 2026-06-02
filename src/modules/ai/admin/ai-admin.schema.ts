@@ -9,7 +9,7 @@ const bedrockTextModelId = z
   });
 
 export const updateAiAdminConfigSchema = z.object({
-  provider: z.enum(['bedrock', 'openai']).optional(),
+  provider: z.enum(['bedrock', 'openai', 'gemini']).optional(),
   maxTokens: z.coerce.number().int().min(1).max(8192).optional(),
   temperature: z.coerce.number().min(0).max(2).optional(),
   topP: z.coerce.number().min(0).max(1).optional(),
@@ -27,6 +27,8 @@ export const updateAiAdminConfigSchema = z.object({
   openAiModelId: z.string().trim().min(1).optional(),
   openAiBaseUrl: z.string().trim().min(1).optional(),
   openAiApiKey: z.string().trim().optional(),
+  geminiModelId: z.string().trim().min(1).optional(),
+  geminiApiKey: z.string().trim().optional(),
   bedrockEmbeddingModelId: z.string().trim().min(1).optional(),
   embeddingDimension: z.coerce.number().int().min(1).max(4096).optional(),
   qdrantUrl: z.string().trim().optional(),
