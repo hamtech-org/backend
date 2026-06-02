@@ -11,6 +11,7 @@ export type StoredAiAdminConfig = AiAdminConfig & {
   encryptedBedrockAccessKeyId?: string;
   encryptedBedrockSecretAccessKey?: string;
   encryptedOpenAiApiKey?: string;
+  encryptedGeminiApiKey?: string;
   encryptedQdrantApiKey?: string;
 };
 

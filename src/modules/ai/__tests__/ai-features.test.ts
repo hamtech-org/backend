@@ -49,6 +49,29 @@ describe('AI Service - Text Paraphrase and Suggestions Unit Tests', () => {
     expect(result.suggestions[0]).toBe('Suggestion A');
   });
 
+  it('TC04 (Pass): suggestContent should parse fenced JSON with bullet decoration', async () => {
+    (generateText as jest.Mock).mockResolvedValue({
+      text: [
+        '• ```json',
+        '• {',
+        '• "suggestions": ["Chào bạn nha", "Bạn khỏe không?", "Đi ăn cơm chưa?"]',
+        '• }',
+        '• ```',
+      ].join('\n'),
+      model: 'gemini-2.0-flash',
+      tokensUsed: 90,
+    });
+
+    const result = await aiService.suggestContent({
+      context: 'Chào bạn',
+      type: 'reply',
+      language: 'vi',
+      topics: [],
+    });
+
+    expect(result.suggestions).toEqual(['Chào bạn nha', 'Bạn khỏe không?', 'Đi ăn cơm chưa?']);
+  });
+
   it('TC03 (Pass): suggestContent should propagate generateText errors correctly', async () => {
     (generateText as jest.Mock).mockRejectedValue(new Error('AWS Bedrock Client Timeout'));
 
