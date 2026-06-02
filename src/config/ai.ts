@@ -1,6 +1,6 @@
 import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
 
-export type AiTextProvider = 'bedrock' | 'openai';
+export type AiTextProvider = 'bedrock' | 'openai' | 'gemini';
 
 export type AiTextConfig = {
   provider: AiTextProvider;
@@ -13,6 +13,7 @@ export type AiTextConfig = {
   bedrockSecretAccessKey?: string;
   openAiApiKey?: string;
   openAiBaseUrl: string;
+  geminiApiKey?: string;
 };
 
 export type BedrockAiConfig = AiTextConfig;
@@ -30,18 +31,24 @@ const DEFAULT_AI_CONFIG: AiTextConfig = {
 const DEFAULT_MODEL_BY_PROVIDER: Record<AiTextProvider, string> = {
   bedrock: 'amazon.nova-pro-v1:0',
   openai: 'gpt-4o-mini',
+  gemini: 'gemini-2.5-flash',
 };
 
 function readProvider(): AiTextProvider {
   const raw = (process.env.AI_TEXT_PROVIDER || process.env.AI_PROVIDER || '').trim().toLowerCase();
-  return raw === 'openai' ? 'openai' : 'bedrock';
+  if (raw === 'openai' || raw === 'gemini') return raw;
+  return 'bedrock';
 }
 
 export function getAiTextConfig(overrides: Partial<AiTextConfig> = {}): AiTextConfig {
   const provider = overrides.provider ?? readProvider();
   const envRegion = process.env.BEDROCK_REGION || process.env.AWS_REGION;
   const envModelId =
-    provider === 'openai' ? process.env.OPENAI_MODEL_ID : process.env.BEDROCK_MODEL_ID;
+    provider === 'openai'
+      ? process.env.OPENAI_MODEL_ID
+      : provider === 'gemini'
+        ? process.env.GEMINI_MODEL_ID
+        : process.env.BEDROCK_MODEL_ID;
   const envMaxTokens = process.env.AI_MAX_TOKENS ? Number(process.env.AI_MAX_TOKENS) : undefined;
   const envTemperature = process.env.AI_TEMPERATURE
     ? Number(process.env.AI_TEMPERATURE)
@@ -65,6 +72,7 @@ export function getAiTextConfig(overrides: Partial<AiTextConfig> = {}): AiTextCo
       : {}),
     ...(process.env.OPENAI_API_KEY ? { openAiApiKey: process.env.OPENAI_API_KEY } : {}),
     ...(process.env.OPENAI_BASE_URL ? { openAiBaseUrl: process.env.OPENAI_BASE_URL } : {}),
+    ...(process.env.GEMINI_API_KEY ? { geminiApiKey: process.env.GEMINI_API_KEY } : {}),
     ...overrides,
   };
 }

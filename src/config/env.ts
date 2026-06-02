@@ -54,6 +54,8 @@ const envSchema = z.object({
   BEDROCK_SECONDARY_MODEL_ID: z.string().optional(),
   /** Optional key for encrypting AI admin secrets stored in DynamoDB. */
   AI_CONFIG_ENCRYPTION_KEY: z.string().optional(),
+  GEMINI_API_KEY: z.string().default(''),
+  GEMINI_MODEL_ID: z.string().default('gemini-2.5-flash'),
 
   S3_BUCKET_NAME: z.string().default('zalogram-media'),
   S3_REGION: z.string().default('us-east-1'),
