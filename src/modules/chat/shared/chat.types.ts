@@ -125,6 +125,19 @@ export interface IReplyToDetails {
   mediaType?: string | null;
 }
 
+export interface IMessageMediaItem {
+  mediaId: string;
+  type: 'image' | 'video';
+  mimeType: string;
+  url: string;
+  thumbnailUrl?: string | null;
+  size?: number | null;
+  originalName?: string | null;
+  width?: number | null;
+  height?: number | null;
+  durationMs?: number | null;
+}
+
 export interface IMessage extends TimestampFields {
   PK?: string;
   SK?: string;
@@ -142,6 +155,7 @@ export interface IMessage extends TimestampFields {
   mediaSize: number | null;
   mediaOriginalName: string | null;
   thumbnailUrl: string | null;
+  medias?: IMessageMediaItem[] | null; // Cập nhật mảng medias cho album
   replyTo: string | null;
   replyToDetails?: IReplyToDetails | null;
   forwardFrom: string | null;
@@ -167,6 +181,7 @@ export interface IMessage extends TimestampFields {
     action: 'censor' | 'block';
   };
   mentions?: string[];
+  clientTempId?: string | null;
 }
 
 /** Cursor-based paginated response for message loading (oldest → newest). */
@@ -202,6 +217,10 @@ export interface ISendMessageDto {
   content: string;
   mediaUrl?: string;
   mediaId?: string;
+  mediaIds?: string[]; // Cho gửi album
+  sourceMessageId?: string; // Dùng khi forward
+  sourceConversationId?: string; // ID cuộc trò chuyện gốc khi forward để tìm O(1)
+  clientTempId?: string; // Dùng để map optimistic message, tránh trùng lặp
   replyTo?: string;
   duration?: number;
   mentions?: string[];

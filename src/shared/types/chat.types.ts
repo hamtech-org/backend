@@ -9,7 +9,8 @@ export type MessageType =
   | 'poll'
   | 'schedule'
   | 'call'
-  | 'voice';
+  | 'voice'
+  | 'album';
 export type MessageStatus = 'sent' | 'delivered' | 'read';
 export type ConversationType = 'direct' | 'group';
 export type MemberRole = 'owner' | 'admin' | 'member';

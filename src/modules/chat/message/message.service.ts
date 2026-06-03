@@ -7,6 +7,7 @@ import type {
   IMessage,
   IMessagePage,
   ISendMessageDto,
+  IMessageMediaItem,
 } from '../shared/chat.types.js';
 import type { MessageStatus } from '@/shared/types/chat.types.js';
 import { AppError, NotFoundError, ForbiddenError, ValidationError } from '@/shared/utils/errors.js';
@@ -16,7 +17,11 @@ import { kafkaProducer } from '@/shared/kafka/producer.js';
 import { KAFKA_TOPICS } from '@/shared/constants/kafkaTopics.js';
 import { logger } from '@/shared/utils/logger.js';
 import { userRepository } from '@/modules/user/user.repository.js';
-import { mediaService } from '@/modules/media/media.service.js';
+import {
+  mediaService,
+  buildMediaDownloadUrl,
+  buildMediaThumbnailUrl,
+} from '@/modules/media/media.service.js';
 import { groupService } from '../group/group.service.js';
 import { automodService } from '@/modules/community/automod.service.js';
 import { groupRecapSessionService } from '../recap/recap-session.service.js';
@@ -155,16 +160,53 @@ async function attachReadReceipts(
 }
 
 async function refreshMediaDeliveryForMessage(message: IMessage): Promise<IMessage> {
-  if (!message.mediaUrl) return message;
-  const resolved = await mediaService.resolveMediaFromAppDownloadUrl(message.mediaUrl);
-  if (!resolved) return message;
+  const hasMedias = message.medias && message.medias.length > 0;
+  if (!message.mediaUrl && !hasMedias) return message;
+
+  let updatedSingle = {};
+  if (message.mediaUrl) {
+    const resolved = await mediaService.resolveMediaFromAppDownloadUrl(message.mediaUrl);
+    if (resolved) {
+      updatedSingle = {
+        mediaUrl: resolved.mediaUrl,
+        mediaType: resolved.mediaType,
+        mediaSize: resolved.mediaSize,
+        mediaOriginalName: resolved.originalName,
+        thumbnailUrl: resolved.thumbnailUrl,
+      };
+    }
+  }
+
+  let updatedMedias = message.medias;
+  if (hasMedias) {
+    updatedMedias = await Promise.all(
+      message.medias!.map(async (item) => {
+        const resolved = await mediaService.resolveMediaFromAppDownloadUrl(item.url);
+        if (resolved) {
+          let thumbUrl = item.thumbnailUrl;
+          if (item.thumbnailUrl) {
+            const resolvedThumb = await mediaService.resolveMediaFromAppDownloadUrl(
+              item.thumbnailUrl,
+            );
+            if (resolvedThumb) {
+              thumbUrl = resolvedThumb.mediaUrl;
+            }
+          }
+          return {
+            ...item,
+            url: resolved.mediaUrl,
+            thumbnailUrl: thumbUrl,
+          };
+        }
+        return item;
+      }),
+    );
+  }
+
   return {
     ...message,
-    mediaUrl: resolved.mediaUrl,
-    mediaType: resolved.mediaType,
-    mediaSize: resolved.mediaSize,
-    mediaOriginalName: resolved.originalName,
-    thumbnailUrl: resolved.thumbnailUrl,
+    ...updatedSingle,
+    medias: updatedMedias,
   };
 }
 
@@ -598,24 +640,83 @@ export const messageService = {
     let mediaSize: number | null = null;
     let mediaOriginalName: string | null = null;
     let thumbnailUrl: string | null = null;
+    let albumMedias: IMessageMediaItem[] | null = null;
+    let forwardFrom: string | null = null;
+    let finalType = data.type;
 
-    if (data.mediaId) {
-      const resolved = await mediaService.getMediaForMessageAttach(data.mediaId, senderId);
-      mediaUrl = resolved.mediaUrl;
-      mediaType = resolved.mediaType;
-      mediaSize = resolved.mediaSize;
-      mediaOriginalName = resolved.originalName;
-      thumbnailUrl = resolved.thumbnailUrl;
-    } else if (data.mediaUrl) {
-      const forwarded = await mediaService.resolveMediaFromAppDownloadUrl(data.mediaUrl);
-      if (forwarded) {
-        mediaUrl = forwarded.mediaUrl;
-        mediaType = forwarded.mediaType;
-        mediaSize = forwarded.mediaSize;
-        mediaOriginalName = forwarded.originalName;
-        thumbnailUrl = forwarded.thumbnailUrl;
-      } else {
-        mediaUrl = data.mediaUrl;
+    if (data.sourceMessageId) {
+      if (!data.sourceConversationId) {
+        throw new ValidationError('Khi forward tin nhắn cần cung cấp sourceConversationId');
+      }
+      const isMemberOfSource = await conversationRepository.getMember(
+        data.sourceConversationId,
+        senderId,
+      );
+      if (!isMemberOfSource) {
+        throw new ForbiddenError('Bạn không có quyền truy cập tin nhắn gốc');
+      }
+      const sourceMessage = await conversationRepository.findMessageByMessageIdWithoutLimit(
+        data.sourceConversationId,
+        data.sourceMessageId,
+      );
+      if (!sourceMessage) {
+        throw new NotFoundError('Không tìm thấy tin nhắn gốc để forward');
+      }
+
+      finalType = sourceMessage.type;
+      mediaUrl = sourceMessage.mediaUrl;
+      mediaType = sourceMessage.mediaType;
+      mediaSize = sourceMessage.mediaSize;
+      mediaOriginalName = sourceMessage.mediaOriginalName;
+      thumbnailUrl = sourceMessage.thumbnailUrl;
+      albumMedias = sourceMessage.medias ? JSON.parse(JSON.stringify(sourceMessage.medias)) : null;
+      forwardFrom = data.sourceMessageId;
+    } else if (data.type === 'album') {
+      if (!data.mediaIds || data.mediaIds.length < 2) {
+        throw new ValidationError('Tin nhắn album cần danh sách mediaIds từ 2 đến 10 ảnh/video');
+      }
+      albumMedias = await Promise.all(
+        data.mediaIds.map(async (mediaId) => {
+          const media = await mediaService.getMediaById(mediaId);
+          if (media.uploaderId !== senderId) {
+            throw new ForbiddenError('Không được dùng media của người khác');
+          }
+          if (media.type !== 'image' && media.type !== 'video') {
+            throw new ValidationError('Chỉ hỗ trợ ảnh và video trong album');
+          }
+          return {
+            mediaId: media.mediaId,
+            type: media.type,
+            mimeType: media.mimeType,
+            url: buildMediaDownloadUrl(media.mediaId),
+            thumbnailUrl: media.s3ThumbnailKey ? buildMediaThumbnailUrl(media.mediaId) : null,
+            size: media.size,
+            originalName: media.originalName,
+            width: media.width ?? null,
+            height: media.height ?? null,
+            durationMs: media.durationMs ?? null,
+          };
+        }),
+      );
+    } else {
+      if (data.mediaId) {
+        const resolved = await mediaService.getMediaForMessageAttach(data.mediaId, senderId);
+        mediaUrl = buildMediaDownloadUrl(data.mediaId);
+        mediaType = resolved.mediaType;
+        mediaSize = resolved.mediaSize;
+        mediaOriginalName = resolved.originalName;
+        thumbnailUrl = resolved.thumbnailUrl ? buildMediaThumbnailUrl(data.mediaId) : null;
+      } else if (data.mediaUrl) {
+        const forwarded = await mediaService.resolveMediaFromAppDownloadUrl(data.mediaUrl);
+        if (forwarded) {
+          mediaUrl = forwarded.mediaUrl;
+          mediaType = forwarded.mediaType;
+          mediaSize = forwarded.mediaSize;
+          mediaOriginalName = forwarded.originalName;
+          thumbnailUrl = forwarded.thumbnailUrl;
+        } else {
+          mediaUrl = data.mediaUrl;
+        }
       }
     }
 
@@ -623,7 +724,7 @@ export const messageService = {
       messageId,
       conversationId,
       senderId,
-      type: data.type,
+      type: finalType,
       content: data.content,
       encryptedContent: null,
       mediaUrl,
@@ -631,14 +732,16 @@ export const messageService = {
       mediaSize,
       mediaOriginalName,
       thumbnailUrl,
+      medias: albumMedias,
       replyTo: data.replyTo ?? null,
-      forwardFrom: null,
+      forwardFrom,
       isPinned: false,
       isEdited: false,
       isRecalled: false,
       isDeleted: false,
       reactions: {},
       duration: data.duration ?? null,
+      clientTempId: data.clientTempId ?? null,
       createdAt: now,
       updatedAt: now,
       mentions: validMentionIds,
@@ -687,15 +790,17 @@ export const messageService = {
         ? formatCallMessagePreview(message.content)
         : cleanedContent !== ''
           ? (joinLinkPreview ?? cleanedContent)
-          : message.type === 'image'
-            ? '[Ảnh]'
-            : message.type === 'video'
-              ? '[Video]'
-              : message.type === 'voice'
-                ? '[Tin nhắn thoại]'
-                : message.type === 'file'
-                  ? message.mediaOriginalName?.trim() || '[File]'
-                  : message.content;
+          : message.type === 'album'
+            ? '[Album]'
+            : message.type === 'image'
+              ? '[Ảnh]'
+              : message.type === 'video'
+                ? '[Video]'
+                : message.type === 'voice'
+                  ? '[Tin nhắn thoại]'
+                  : message.type === 'file'
+                    ? message.mediaOriginalName?.trim() || '[File]'
+                    : message.content;
 
     // Cập nhật lastMessage trên conversation
     await conversationRepository.updateConversationLastMessage(
@@ -704,7 +809,7 @@ export const messageService = {
         messageId,
         senderId,
         content: lastPreviewContent,
-        type: data.type,
+        type: message.type,
         createdAt: now,
         senderDisplayName,
       },
