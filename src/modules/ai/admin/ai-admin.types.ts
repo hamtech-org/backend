@@ -13,6 +13,8 @@ export type AiAdminConfig = {
   openAiModelId: string;
   openAiBaseUrl: string;
   openAiApiKeyConfigured: boolean;
+  geminiModelId: string;
+  geminiApiKeyConfigured: boolean;
   bedrockEmbeddingModelId: string;
   embeddingDimension: number;
   qdrantUrl: string;
@@ -28,6 +30,7 @@ export type AiAdminConfigPatch = Partial<
     | 'bedrockAccessKeyConfigured'
     | 'bedrockSecretKeyConfigured'
     | 'openAiApiKeyConfigured'
+    | 'geminiApiKeyConfigured'
     | 'qdrantApiKeyConfigured'
     | 'updatedAt'
     | 'updatedBy'
@@ -36,6 +39,7 @@ export type AiAdminConfigPatch = Partial<
   bedrockAccessKeyId?: string;
   bedrockSecretAccessKey?: string;
   openAiApiKey?: string;
+  geminiApiKey?: string;
   qdrantApiKey?: string;
 };
 

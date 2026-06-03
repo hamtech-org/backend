@@ -36,6 +36,85 @@ const renderGroupTranscript = (messages: IMessage[]): string =>
     })
     .join('\n');
 
+const stripAiDecorations = (text: string): string =>
+  text
+    .trim()
+    .split(/\r?\n/)
+    .map((line) =>
+      line
+        .replace(/^\s*[•●◦▪▫*-]\s*/, '')
+        .replace(/^\s*```(?:json)?\s*$/i, '```')
+        .trimEnd(),
+    )
+    .join('\n')
+    .trim();
+
+const extractJsonObjectText = (text: string): string | null => {
+  const cleaned = stripAiDecorations(text);
+  const fenced = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidate = stripAiDecorations(fenced?.[1] ?? cleaned);
+  const start = candidate.indexOf('{');
+  const end = candidate.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  return candidate.slice(start, end + 1);
+};
+
+const normalizeAiTextList = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean);
+  }
+  if (typeof value !== 'string') return [];
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*[•●◦▪▫*-]\s*/, '').trim())
+    .filter(Boolean);
+};
+
+const normalizeAiTextBlock = (value: unknown): string => {
+  if (Array.isArray(value)) {
+    return normalizeAiTextList(value)
+      .map((item) => `- ${item}`)
+      .join('\n');
+  }
+  if (typeof value !== 'string') return '';
+  return stripAiDecorations(value)
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+};
+
+const parseGroupSummaryAiOutput = (
+  text: string,
+): { summary: string; highlights: string[]; unreadSummary: string } => {
+  const jsonText = extractJsonObjectText(text);
+  if (!jsonText) {
+    return {
+      summary: normalizeAiTextBlock(text),
+      highlights: [],
+      unreadSummary: '',
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(jsonText) as {
+      summary?: unknown;
+      highlights?: unknown;
+      unreadSummary?: unknown;
+    };
+    return {
+      summary: normalizeAiTextBlock(parsed.summary),
+      highlights: normalizeAiTextList(parsed.highlights),
+      unreadSummary: normalizeAiTextBlock(parsed.unreadSummary),
+    };
+  } catch {
+    return {
+      summary: normalizeAiTextBlock(text),
+      highlights: [],
+      unreadSummary: '',
+    };
+  }
+};
+
 const EMPTY_UNREAD_SUMMARY_SENTINELS = new Set([
   'Không có tin nhắn chưa đọc phù hợp để tóm tắt.',
   'Có tin nhắn chưa đọc nhưng chưa có đủ nội dung văn bản để tóm tắt.',
@@ -185,6 +264,7 @@ export const groupSummaryService = {
         ? [`3) unreadSummary: 2-5 bullet ngắn, chỉ dựa trên phần tin nhắn chưa đọc.`]
         : []),
       `Yêu cầu: không bịa thêm thông tin; chỉ dựa trên transcript.`,
+      `Output bắt buộc là JSON thô, không bọc markdown, không dùng \`\`\`json, không thêm bullet/ký tự trước JSON.`,
       ``,
       `Transcript tổng hợp tin nhắn:`,
       transcript,
@@ -198,12 +278,12 @@ export const groupSummaryService = {
         `Transcript tin nhắn chưa đọc:`,
         unreadTranscript,
         ``,
-        `Trả về đúng JSON theo schema: {"summary": string, "highlights": string[], "unreadSummary": string}`,
+        `Trả về đúng JSON thô theo schema: {"summary": string, "highlights": string[], "unreadSummary": string}`,
       );
     } else {
       promptLines.push(
         ``,
-        `Trả về đúng JSON theo schema: {"summary": string, "highlights": string[]}`,
+        `Trả về đúng JSON thô theo schema: {"summary": string, "highlights": string[]}`,
       );
     }
     const prompt = promptLines.join('\n');
@@ -218,28 +298,17 @@ export const groupSummaryService = {
     let highlights: string[] = [];
     let unreadSummary = '';
     let totalTokensUsed = tokensUsed ?? 0;
-    try {
-      const parsed = JSON.parse(text) as {
-        summary?: unknown;
-        highlights?: unknown;
-        unreadSummary?: unknown;
-      };
-      summary = typeof parsed.summary === 'string' ? parsed.summary.trim() : '';
-      if (Array.isArray(parsed.highlights)) {
-        highlights = parsed.highlights.map((s) => String(s).trim()).filter(Boolean);
-      }
-      unreadSummary = typeof parsed.unreadSummary === 'string' ? parsed.unreadSummary.trim() : '';
-    } catch {
-      summary = text.trim();
-      highlights = [];
-    }
+    const parsedOutput = parseGroupSummaryAiOutput(text);
+    summary = parsedOutput.summary;
+    highlights = parsedOutput.highlights;
+    unreadSummary = parsedOutput.unreadSummary;
 
     if (
       shouldGenerateUnreadSummary &&
       isInvalidUnreadSummaryForTranscript(unreadSummary, unreadMessages)
     ) {
       const retry = await generateUnreadSummaryFromTranscript(unreadTranscript);
-      unreadSummary = retry.text.trim();
+      unreadSummary = normalizeAiTextBlock(retry.text);
       totalTokensUsed += retry.tokensUsed ?? 0;
     }
 

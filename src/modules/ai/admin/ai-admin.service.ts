@@ -23,6 +23,7 @@ type RuntimeAiConfig = AiTextConfig & {
   bedrockAccessKeyId?: string;
   bedrockSecretAccessKey?: string;
   bedrockSecondaryModelId?: string;
+  geminiApiKey?: string;
 };
 
 let cachedConfig: RuntimeAiConfig | null = null;
@@ -76,6 +77,8 @@ function envConfig(): AiAdminConfig {
     openAiModelId: process.env.OPENAI_MODEL_ID || 'gpt-4o-mini',
     openAiBaseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
     openAiApiKeyConfigured: Boolean(process.env.OPENAI_API_KEY),
+    geminiModelId: process.env.GEMINI_MODEL_ID || 'gemini-2.5-flash',
+    geminiApiKeyConfigured: Boolean(process.env.GEMINI_API_KEY),
     bedrockEmbeddingModelId: env.BEDROCK_EMBEDDING_MODEL_ID,
     embeddingDimension: env.AI_EMBEDDING_DIMENSION,
     qdrantUrl: env.QDRANT_URL,
@@ -90,10 +93,13 @@ function publicConfig(stored: StoredAiAdminConfig | null): AiAdminConfig {
     encryptedBedrockAccessKeyId,
     encryptedBedrockSecretAccessKey,
     encryptedOpenAiApiKey,
+    encryptedGeminiApiKey,
     encryptedQdrantApiKey,
     ...cfg
   } = stored;
+  const defaults = envConfig();
   return {
+    ...defaults,
     ...cfg,
     bedrockModelId: resolveBedrockTextModelId(cfg.bedrockModelId),
     ...(cfg.bedrockSecondaryModelId && isTextGenerationModelId(cfg.bedrockSecondaryModelId)
@@ -110,6 +116,7 @@ function publicConfig(stored: StoredAiAdminConfig | null): AiAdminConfig {
       process.env.AWS_SECRET_ACCESS_KEY,
     ),
     openAiApiKeyConfigured: Boolean(encryptedOpenAiApiKey || process.env.OPENAI_API_KEY),
+    geminiApiKeyConfigured: Boolean(encryptedGeminiApiKey || process.env.GEMINI_API_KEY),
     qdrantApiKeyConfigured: Boolean(encryptedQdrantApiKey || env.QDRANT_API_KEY),
   };
 }
@@ -121,7 +128,9 @@ function toRuntime(config: AiAdminConfig, stored?: StoredAiAdminConfig | null): 
     modelId:
       config.provider === 'openai'
         ? config.openAiModelId
-        : resolveBedrockTextModelId(config.bedrockModelId),
+        : config.provider === 'gemini'
+          ? config.geminiModelId
+          : resolveBedrockTextModelId(config.bedrockModelId),
     maxTokens: config.maxTokens,
     temperature: config.temperature,
     topP: config.topP,
@@ -135,6 +144,7 @@ function toRuntime(config: AiAdminConfig, stored?: StoredAiAdminConfig | null): 
       process.env.BEDROCK_SECRET_ACCESS_KEY ||
       process.env.AWS_SECRET_ACCESS_KEY,
     openAiApiKey: decryptSecret(stored?.encryptedOpenAiApiKey) || process.env.OPENAI_API_KEY,
+    geminiApiKey: decryptSecret(stored?.encryptedGeminiApiKey) || process.env.GEMINI_API_KEY,
     bedrockEmbeddingModelId: config.bedrockEmbeddingModelId,
     embeddingDimension: config.embeddingDimension,
     qdrantUrl: config.qdrantUrl,
@@ -162,7 +172,7 @@ function sanitizePatch(patch: AiAdminConfigPatch): AiAdminConfigPatch {
   assertBedrockTextModelId(patch.bedrockSecondaryModelId, 'BEDROCK_SECONDARY_MODEL_ID');
   return {
     ...patch,
-    ...(patch.provider === 'openai' || patch.provider === 'bedrock'
+    ...(patch.provider === 'openai' || patch.provider === 'bedrock' || patch.provider === 'gemini'
       ? { provider: patch.provider }
       : {}),
     ...(typeof patch.maxTokens === 'number'
@@ -287,11 +297,15 @@ export const aiAdminService = {
       ...before,
       ...clean,
       openAiApiKeyConfigured: before.openAiApiKeyConfigured || Boolean(clean.openAiApiKey),
+      geminiApiKeyConfigured: before.geminiApiKeyConfigured || Boolean(clean.geminiApiKey),
       qdrantApiKeyConfigured: before.qdrantApiKeyConfigured || Boolean(clean.qdrantApiKey),
       updatedAt: now,
       updatedBy: actorUserId,
       ...(currentStored?.encryptedOpenAiApiKey
         ? { encryptedOpenAiApiKey: currentStored.encryptedOpenAiApiKey }
+        : {}),
+      ...(currentStored?.encryptedGeminiApiKey
+        ? { encryptedGeminiApiKey: currentStored.encryptedGeminiApiKey }
         : {}),
       ...(currentStored?.encryptedBedrockAccessKeyId
         ? { encryptedBedrockAccessKeyId: currentStored.encryptedBedrockAccessKeyId }
@@ -309,11 +323,13 @@ export const aiAdminService = {
         ? { encryptedBedrockSecretAccessKey: encryptSecret(clean.bedrockSecretAccessKey) }
         : {}),
       ...(clean.openAiApiKey ? { encryptedOpenAiApiKey: encryptSecret(clean.openAiApiKey) } : {}),
+      ...(clean.geminiApiKey ? { encryptedGeminiApiKey: encryptSecret(clean.geminiApiKey) } : {}),
       ...(clean.qdrantApiKey ? { encryptedQdrantApiKey: encryptSecret(clean.qdrantApiKey) } : {}),
     };
     delete (next as { bedrockAccessKeyId?: string }).bedrockAccessKeyId;
     delete (next as { bedrockSecretAccessKey?: string }).bedrockSecretAccessKey;
     delete (next as { openAiApiKey?: string }).openAiApiKey;
+    delete (next as { geminiApiKey?: string }).geminiApiKey;
     delete (next as { qdrantApiKey?: string }).qdrantApiKey;
 
     const after = publicConfig(next);
