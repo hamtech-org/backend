@@ -1100,6 +1100,26 @@ export const conversationRepository = {
     return items.find((i) => i.messageId === messageId) ?? null;
   },
 
+  findMessageByMessageIdWithoutLimit: async (
+    conversationId: string,
+    messageId: string,
+  ): Promise<IMessage | null> => {
+    const result = await dynamoClient.send(
+      new QueryCommand({
+        TableName: MESSAGES_TABLE,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+        FilterExpression: 'messageId = :mid',
+        ExpressionAttributeValues: {
+          ':pk': `CONV#${conversationId}`,
+          ':sk': 'MSG#',
+          ':mid': messageId,
+        },
+      }),
+    );
+    const items = (result.Items as IMessage[] | undefined) ?? [];
+    return items.find((i) => i.messageId === messageId) ?? null;
+  },
+
   getMessageById: async (
     conversationId: string,
     messageId: string,
